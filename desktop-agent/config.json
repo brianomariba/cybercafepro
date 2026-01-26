@@ -1,0 +1,42 @@
+{
+    "agent": {
+        "id": null,
+        "name": "HawkNine Desktop Agent",
+        "version": "1.0.0"
+    },
+    "server": {
+        "baseUrl": "http://localhost:5000",
+        "endpoints": {
+            "sync": "/api/v1/agent/sync",
+            "session": "/api/v1/agent/session",
+            "auth": "/api/v1/agent/auth",
+            "register": "/api/v1/agent/register"
+        },
+        "heartbeatInterval": 10000,
+        "retryAttempts": 3,
+        "retryDelay": 5000
+    },
+    "monitoring": {
+        "captureScreenshots": true,
+        "screenshotQuality": 50,
+        "screenshotInterval": 30000,
+        "trackActiveWindow": true,
+        "trackPrintJobs": true,
+        "trackFiles": true,
+        "trackBrowserHistory": true,
+        "trackUsbDevices": true
+    },
+    "security": {
+        "allowShutdown": true,
+        "allowRestart": true,
+        "requireAuthForUnlock": true
+    },
+    "directories": {
+        "watchFolders": [
+            "Documents",
+            "Downloads",
+            "Desktop"
+        ],
+        "watchDepth": 2
+    }
+}

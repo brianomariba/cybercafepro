@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="HawkNine Cyber Services - Professional printing, scanning, typing, and computer services in Kenya. Upload documents online for quick processing.">
+    <meta name="keywords" content="cybercafe, printing, scanning, typing, document services, Kenya, Nairobi">
+    <meta name="author" content="HawkNine">
+
+    <title>HawkNine Cyber Services | Professional Document & Computer Services</title>
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/assets/favicon.png">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" id="navbar">
+        <div class="container">
+            <a href="#" class="logo">
+                <div class="logo-icon">
+                    <img src="/assets/logo.jpg" alt="HawkNine" class="logo-img">
+                </div>
+                <span>HawkNine</span>
+            </a>
+
+            <div class="nav-links" id="navLinks">
+                <a href="#services">Services</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#upload">Upload Document</a>
+                <a href="#contact">Contact</a>
+            </div>
+
+            <button class="nav-cta" onclick="scrollToSection('upload')">
+                <i data-lucide="upload-cloud"></i>
+                Upload Now
+            </button>
+
+            <button class="mobile-menu" id="mobileMenu" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-bg">
+            <div class="hero-gradient"></div>
+            <div class="hero-pattern"></div>
+        </div>
+
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <i data-lucide="shield-check"></i>
+                    <span>Trusted by 1000+ customers</span>
+                </div>
+
+                <h1>Professional Document & Computer Services</h1>
+
+                <p class="hero-subtitle">
+                    Fast, reliable, and affordable printing, scanning, typing, and computer services.
+                    Upload your documents online and pick them up ready.
+                </p>
+
+                <div class="hero-cta">
+                    <button class="btn btn-primary" onclick="scrollToSection('upload')">
+                        <i data-lucide="upload-cloud"></i>
+                        Upload Document
+                    </button>
+                    <button class="btn btn-secondary" onclick="scrollToSection('services')">
+                        <i data-lucide="grid-3x3"></i>
+                        View Services
+                    </button>
+                </div>
+
+                <div class="hero-stats">
+                    <div class="stat">
+                        <span class="stat-value">5000+</span>
+                        <span class="stat-label">Documents Processed</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">99%</span>
+                        <span class="stat-label">Satisfaction Rate</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">24hr</span>
+                        <span class="stat-label">Fast Turnaround</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hero-visual">
+                <div class="floating-card card-1">
+                    <i data-lucide="printer"></i>
+                    <span>Printing</span>
+                </div>
+                <div class="floating-card card-2">
+                    <i data-lucide="scan"></i>
+                    <span>Scanning</span>
+                </div>
+                <div class="floating-card card-3">
+                    <i data-lucide="file-text"></i>
+                    <span>Typing</span>
+                </div>
+                <div class="floating-card card-4">
+                    <i data-lucide="monitor"></i>
+                    <span>Computer</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Services Section -->
+    <section class="services" id="services">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Our Services</span>
+                <h2>Everything You Need, One Place</h2>
+                <p>Professional document and computer services at competitive prices</p>
+            </div>
+
+            <div class="services-grid" id="servicesGrid">
+                <!-- Services will be loaded dynamically -->
+                <div class="loading-placeholder">
+                    <div class="spinner"></div>
+                    <p>Loading services...</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Why Choose Us -->
+    <section class="features">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Why HawkNine</span>
+                <h2>Built for Trust & Quality</h2>
+                <p>We prioritize your documents like they're our own</p>
+            </div>
+
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="shield-check"></i>
+                    </div>
+                    <h3>Secure & Private</h3>
+                    <p>Your documents are handled with complete confidentiality. We delete files after processing.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="zap"></i>
+                    </div>
+                    <h3>Fast Turnaround</h3>
+                    <p>Most documents ready within 1-2 hours. Rush services available for urgent needs.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="badge-check"></i>
+                    </div>
+                    <h3>Quality Guaranteed</h3>
+                    <p>Professional equipment and experienced staff ensure top-notch results every time.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="wallet"></i>
+                    </div>
+                    <h3>Affordable Prices</h3>
+                    <p>Competitive rates with no hidden charges. Pay only for what you need.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="smartphone"></i>
+                    </div>
+                    <h3>M-Pesa Accepted</h3>
+                    <p>Pay conveniently via M-Pesa. Cash payments also welcome.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <i data-lucide="clock"></i>
+                    </div>
+                    <h3>Extended Hours</h3>
+                    <p>Open early to late, 7 days a week. We're here when you need us.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section class="pricing" id="pricing">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Transparent Pricing</span>
+                <h2>Simple, Clear Rates</h2>
+                <p>No hidden fees. What you see is what you pay.</p>
+            </div>
+
+            <div class="pricing-table" id="pricingTable">
+                <!-- Pricing will be loaded dynamically -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Upload Section -->
+    <section class="upload-section" id="upload">
+        <div class="container">
+            <div class="upload-container">
+                <div class="upload-info">
+                    <span class="section-tag">Upload Documents</span>
+                    <h2>Send Us Your Documents</h2>
+                    <p>Upload your files online and we'll prepare them for you. No need to visit until pickup!</p>
+
+                    <div class="upload-steps">
+                        <div class="step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>Upload Your File</h4>
+                                <p>Drag & drop or browse to upload</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>Select Service</h4>
+                                <p>Choose printing, typing, etc.</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>Add Instructions</h4>
+                                <p>Specify your requirements</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h4>Pick Up Ready</h4>
+                                <p>We'll notify when ready</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="upload-form-container">
+                    <form class="upload-form" id="uploadForm">
+                        <!-- Drop Zone -->
+                        <div class="drop-zone" id="dropZone">
+                            <div class="drop-zone-content">
+                                <i data-lucide="cloud-upload"></i>
+                                <h4>Drag & Drop Files Here</h4>
+                                <p>or click to browse</p>
+                                <span class="file-types">PDF, DOC, DOCX, JPG, PNG (Max 50MB)</span>
+                            </div>
+                            <input type="file" id="fileInput"
+                                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx,.ppt,.pptx,.txt" multiple hidden>
+                        </div>
+
+                        <!-- Selected Files -->
+                        <div class="selected-files" id="selectedFiles"></div>
+
+                        <!-- Service Selection -->
+                        <div class="form-group">
+                            <label>Service Required</label>
+                            <select id="serviceType" required>
+                                <option value="">Select a service...</option>
+                                <option value="printing-bw">Printing (Black & White)</option>
+                                <option value="printing-color">Printing (Color)</option>
+                                <option value="typing">Typing Services</option>
+                                <option value="scanning">Scanning</option>
+                                <option value="photocopy">Photocopying</option>
+                                <option value="binding">Binding</option>
+                                <option value="other">Other (Specify below)</option>
+                            </select>
+                        </div>
+
+                        <!-- Contact Info -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Your Name</label>
+                                <input type="text" id="customerName" placeholder="John Doe" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Phone Number</label>
+                                <input type="tel" id="customerPhone" placeholder="0712 345 678" required>
+                            </div>
+                        </div>
+
+                        <!-- Instructions -->
+                        <div class="form-group">
+                            <label>Special Instructions (Optional)</label>
+                            <textarea id="instructions" rows="3"
+                                placeholder="E.g., Print 5 copies, double-sided, bind with spiral..."></textarea>
+                        </div>
+
+                        <!-- Submit -->
+                        <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
+                            <i data-lucide="send"></i>
+                            Submit Request
+                        </button>
+
+                        <p class="form-note">
+                            <i data-lucide="info"></i>
+                            We'll call you to confirm details and pricing before processing.
+                        </p>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Testimonials -->
+    <section class="testimonials">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Customer Reviews</span>
+                <h2>What Our Customers Say</h2>
+            </div>
+
+            <div class="testimonials-grid">
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p>"Fast and reliable service! Uploaded my thesis at night and picked it up perfectly printed the
+                        next morning."</p>
+                    <div class="testimonial-author">
+                        <div class="author-avatar">JM</div>
+                        <div class="author-info">
+                            <span class="author-name">Jane Muthoni</span>
+                            <span class="author-role">University Student</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p>"The online upload feature is a game changer. I send my documents and just pick them up. No
+                        waiting!"</p>
+                    <div class="testimonial-author">
+                        <div class="author-avatar">PO</div>
+                        <div class="author-info">
+                            <span class="author-name">Peter Ochieng</span>
+                            <span class="author-role">Business Owner</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="testimonial-card">
+                    <div class="testimonial-stars">★★★★★</div>
+                    <p>"Very affordable and professional. They helped me create my CV and cover letter. Got the job!"
+                    </p>
+                    <div class="testimonial-author">
+                        <div class="author-avatar">GW</div>
+                        <div class="author-info">
+                            <span class="author-name">Grace Wanjiku</span>
+                            <span class="author-role">Job Seeker</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="contact" id="contact">
+        <div class="container">
+            <div class="contact-grid">
+                <div class="contact-info">
+                    <span class="section-tag">Get In Touch</span>
+                    <h2>Visit Us or Call</h2>
+                    <p>We're conveniently located and always ready to help with your document needs.</p>
+
+                    <div class="contact-details">
+                        <div class="contact-item">
+                            <div class="contact-icon">
+                                <i data-lucide="map-pin"></i>
+                            </div>
+                            <div class="contact-text">
+                                <h4>Location</h4>
+                                <p>123 Business Street<br>Westlands, Nairobi</p>
+                            </div>
+                        </div>
+
+                        <div class="contact-item">
+                            <div class="contact-icon">
+                                <i data-lucide="phone"></i>
+                            </div>
+                            <div class="contact-text">
+                                <h4>Phone</h4>
+                                <p>+254 712 345 678<br>+254 780 123 456</p>
+                            </div>
+                        </div>
+
+                        <div class="contact-item">
+                            <div class="contact-icon">
+                                <i data-lucide="clock"></i>
+                            </div>
+                            <div class="contact-text">
+                                <h4>Hours</h4>
+                                <p>Mon-Sat: 7AM - 10PM<br>Sunday: 9AM - 8PM</p>
+                            </div>
+                        </div>
+
+                        <div class="contact-item">
+                            <div class="contact-icon">
+                                <i data-lucide="mail"></i>
+                            </div>
+                            <div class="contact-text">
+                                <h4>Email</h4>
+                                <p>info@hawknine.co.ke</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="contact-map">
+                    <div class="map-placeholder">
+                        <i data-lucide="map"></i>
+                        <p>Map Location</p>
+                        <span>Click for directions</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <a href="#" class="logo">
+                        <div class="logo-icon">
+                            <img src="/assets/logo.jpg" alt="HawkNine" class="logo-img">
+                        </div>
+                        <span>HawkNine</span>
+                    </a>
+                    <p>Your trusted partner for all document and computer services in Nairobi.</p>
+                    <div class="social-links">
+                        <a href="#" aria-label="Facebook"><i data-lucide="facebook"></i></a>
+                        <a href="#" aria-label="Instagram"><i data-lucide="instagram"></i></a>
+                        <a href="#" aria-label="Twitter"><i data-lucide="twitter"></i></a>
+                        <a href="#" aria-label="WhatsApp"><i data-lucide="message-circle"></i></a>
+                    </div>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Quick Links</h4>
+                    <a href="#services">Services</a>
+                    <a href="#pricing">Pricing</a>
+                    <a href="#upload">Upload Document</a>
+                    <a href="#contact">Contact Us</a>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Services</h4>
+                    <a href="#">Printing</a>
+                    <a href="#">Scanning</a>
+                    <a href="#">Typing</a>
+                    <a href="#">Computer Usage</a>
+                </div>
+
+                <div class="footer-links">
+                    <h4>Support</h4>
+                    <a href="#">FAQs</a>
+                    <a href="#">Terms of Service</a>
+                    <a href="#">Privacy Policy</a>
+                    <a href="#">Track Order</a>
+                </div>
+            </div>
+
+            <div class="footer-bottom">
+                <p>&copy; 2024 HawkNine Cyber Services. All rights reserved.</p>
+                <div class="payment-methods">
+                    <span>Accepted:</span>
+                    <span class="payment-badge">M-Pesa</span>
+                    <span class="payment-badge">Cash</span>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Success Modal -->
+    <div class="modal" id="successModal">
+        <div class="modal-content">
+            <div class="modal-icon success">
+                <i data-lucide="check-circle"></i>
+            </div>
+            <h3>Request Submitted!</h3>
+            <p>Thank you! We've received your document request. We'll call you shortly to confirm details and pricing.
+            </p>
+            <p class="order-id">Order ID: <span id="orderId">-</span></p>
+            <button class="btn btn-primary" onclick="closeModal()">OK, Got It</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
