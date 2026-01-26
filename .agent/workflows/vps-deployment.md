@@ -138,11 +138,11 @@ cd ..
 - Upload `user-portal/dist/` folder to `/var/www/hawknine/user-portal/dist/`
 - Upload `landing/` folder to `/var/www/hawknine/landing/`
 
-### 3.2 Option B: Clone from Git (if using GitHub)
+### 3.2 Option B: Clone from Git (Recommended)
 
 ```bash
 cd /var/www/hawknine
-git clone https://github.com/YOUR_USERNAME/HawkNine.git .
+git clone https://github.com/brianomariba/cybercafepro.git .
 
 # Build frontend applications on server
 cd cybercafe-admin

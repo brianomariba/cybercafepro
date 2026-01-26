@@ -1,0 +1,471 @@
+import { useState, useEffect } from 'react';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Modal, message, Form, Switch, Popconfirm, Row, Col, Spin, Empty } from 'antd';
+import {
+    TeamOutlined,
+    UserOutlined,
+    PlusOutlined,
+    EditOutlined,
+    DeleteOutlined,
+    LockOutlined,
+    UnlockOutlined,
+    MailOutlined,
+    PhoneOutlined,
+    CalendarOutlined,
+    DollarOutlined,
+    ClockCircleOutlined,
+    DesktopOutlined,
+    ReloadOutlined,
+    EyeOutlined,
+    EyeInvisibleOutlined,
+    KeyOutlined,
+} from '@ant-design/icons';
+import dayjs from 'dayjs';
+import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions } from '../services/api';
+
+const { Text, Title } = Typography;
+const { Search } = Input;
+
+function Users() {
+    const [users, setUsers] = useState([]);
+    const [sessions, setSessions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchText, setSearchText] = useState('');
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [modalVisible, setModalVisible] = useState(false);
+    const [editingUser, setEditingUser] = useState(null);
+    const [form] = Form.useForm();
+    const [showPassword, setShowPassword] = useState(false);
+
+    // Fetch users from API
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            const [userData, sessionData] = await Promise.all([
+                getAgentUsers().catch(() => []),
+                getSessions({ limit: 200, type: 'LOGOUT' }).catch(() => []),
+            ]);
+            setUsers(userData || []);
+            setSessions(sessionData || []);
+        } catch (error) {
+            console.error('Failed to fetch users:', error);
+            message.error('Failed to load users');
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        fetchData();
+    }, []);
+
+    // Calculate user stats from sessions
+    const getUserStats = (username) => {
+        const userSessions = sessions.filter(s => s.user === username);
+        const totalSessions = userSessions.length;
+        const totalSpent = userSessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
+        const totalHours = userSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60;
+        const lastSession = userSessions[0]; // Most recent
+
+        return {
+            totalSessions,
+            totalSpent,
+            totalHours: Math.round(totalHours),
+            lastSessionDate: lastSession ? dayjs(lastSession.endTime || lastSession.receivedAt).format('MMM DD, YYYY') : 'Never',
+        };
+    };
+
+    const handleAddUser = () => {
+        setEditingUser(null);
+        form.resetFields();
+        setModalVisible(true);
+    };
+
+    const handleEditUser = (user) => {
+        setEditingUser(user);
+        form.setFieldsValue({
+            username: user.username,
+            name: user.name,
+            active: user.active,
+        });
+        setModalVisible(true);
+    };
+
+    const handleDeleteUser = async (username) => {
+        try {
+            await deleteAgentUser(username);
+            message.success(`User ${username} deleted`);
+            fetchData();
+        } catch (error) {
+            message.error('Failed to delete user');
+        }
+    };
+
+    const handleToggleStatus = async (username, currentStatus) => {
+        try {
+            await updateAgentUser(username, { active: !currentStatus });
+            message.success(`User ${username} ${currentStatus ? 'disabled' : 'enabled'}`);
+            fetchData();
+        } catch (error) {
+            message.error('Failed to update user status');
+        }
+    };
+
+    const handleSubmit = async (values) => {
+        try {
+            if (editingUser) {
+                // Update existing user
+                const updateData = { name: values.name, active: values.active };
+                if (values.password) {
+                    updateData.password = values.password;
+                }
+                await updateAgentUser(editingUser.username, updateData);
+                message.success('User updated successfully');
+            } else {
+                // Create new user
+                await createAgentUser({
+                    username: values.username,
+                    password: values.password,
+                    name: values.name,
+                });
+                message.success('User created successfully');
+            }
+            setModalVisible(false);
+            fetchData();
+        } catch (error) {
+            const errorMessage = error.response?.data?.error || 'Operation failed';
+            message.error(errorMessage);
+        }
+    };
+
+    // Stats
+    const stats = {
+        totalUsers: users.length,
+        activeUsers: users.filter(u => u.active).length,
+        inactiveUsers: users.filter(u => !u.active).length,
+        totalRevenue: sessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0),
+    };
+
+    // Filter users
+    const filteredUsers = users.filter(user => {
+        const matchesSearch = user.username?.toLowerCase().includes(searchText.toLowerCase()) ||
+            user.name?.toLowerCase().includes(searchText.toLowerCase());
+        const matchesStatus = filterStatus === 'all' ||
+            (filterStatus === 'active' && user.active) ||
+            (filterStatus === 'inactive' && !user.active);
+        return matchesSearch && matchesStatus;
+    });
+
+    const columns = [
+        {
+            title: 'User',
+            key: 'user',
+            render: (_, record) => (
+                <Space>
+                    <Avatar
+                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${record.username}`}
+                        size={40}
+                    />
+                    <div>
+                        <Text strong>{record.name || record.username}</Text>
+                        <br />
+                        <Text type="secondary" style={{ fontSize: 12 }}>@{record.username}</Text>
+                    </div>
+                </Space>
+            ),
+        },
+        {
+            title: 'Status',
+            key: 'status',
+            render: (_, record) => (
+                <Tag color={record.active ? 'green' : 'red'}>
+                    {record.active ? 'Active' : 'Disabled'}
+                </Tag>
+            ),
+            filters: [
+                { text: 'Active', value: true },
+                { text: 'Disabled', value: false },
+            ],
+            onFilter: (value, record) => record.active === value,
+        },
+        {
+            title: 'Sessions',
+            key: 'sessions',
+            render: (_, record) => {
+                const stats = getUserStats(record.username);
+                return <Text>{stats.totalSessions}</Text>;
+            },
+            sorter: (a, b) => getUserStats(a.username).totalSessions - getUserStats(b.username).totalSessions,
+        },
+        {
+            title: 'Total Spent',
+            key: 'spent',
+            render: (_, record) => {
+                const stats = getUserStats(record.username);
+                return (
+                    <Text style={{ fontFamily: 'JetBrains Mono', color: stats.totalSpent > 0 ? '#00C853' : '#64748B' }}>
+                        KSH {stats.totalSpent.toLocaleString()}
+                    </Text>
+                );
+            },
+            sorter: (a, b) => getUserStats(a.username).totalSpent - getUserStats(b.username).totalSpent,
+        },
+        {
+            title: 'Hours',
+            key: 'hours',
+            render: (_, record) => {
+                const stats = getUserStats(record.username);
+                return <Text>{stats.totalHours}h</Text>;
+            },
+        },
+        {
+            title: 'Last Session',
+            key: 'lastSession',
+            render: (_, record) => {
+                const stats = getUserStats(record.username);
+                return <Text type="secondary">{stats.lastSessionDate}</Text>;
+            },
+        },
+        {
+            title: 'Created',
+            dataIndex: 'createdAt',
+            key: 'createdAt',
+            render: (date) => (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                    {date ? dayjs(date).format('MMM DD, YYYY') : 'N/A'}
+                </Text>
+            ),
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record) => (
+                <Space>
+                    <Tooltip title={record.active ? 'Disable User' : 'Enable User'}>
+                        <Button
+                            type="text"
+                            icon={record.active ? <LockOutlined style={{ color: '#FF9500' }} /> : <UnlockOutlined style={{ color: '#00C853' }} />}
+                            onClick={() => handleToggleStatus(record.username, record.active)}
+                        />
+                    </Tooltip>
+                    <Tooltip title="Edit User">
+                        <Button
+                            type="text"
+                            icon={<EditOutlined style={{ color: '#00B4D8' }} />}
+                            onClick={() => handleEditUser(record)}
+                        />
+                    </Tooltip>
+                    <Popconfirm
+                        title="Delete this user?"
+                        description="This action cannot be undone."
+                        onConfirm={() => handleDeleteUser(record.username)}
+                        okButtonProps={{ danger: true }}
+                    >
+                        <Tooltip title="Delete User">
+                            <Button
+                                type="text"
+                                icon={<DeleteOutlined style={{ color: '#ff3b5c' }} />}
+                            />
+                        </Tooltip>
+                    </Popconfirm>
+                </Space>
+            ),
+        },
+    ];
+
+    return (
+        <div>
+            {/* Page Header */}
+            <div className="page-header">
+                <div className="page-title">
+                    <TeamOutlined className="icon" />
+                    <h1>Users</h1>
+                </div>
+                <p className="page-subtitle">Manage agent users who can log in to computers</p>
+            </div>
+
+            {/* Stats */}
+            <Spin spinning={loading}>
+                <div className="stats-row">
+                    <div className="stat-card blue">
+                        <div className="stat-header">
+                            <div className="stat-icon blue">
+                                <TeamOutlined />
+                            </div>
+                            <Button
+                                icon={<ReloadOutlined />}
+                                size="small"
+                                type="text"
+                                onClick={fetchData}
+                                loading={loading}
+                            />
+                        </div>
+                        <div className="stat-value">{stats.totalUsers}</div>
+                        <div className="stat-label">Total Users</div>
+                    </div>
+
+                    <div className="stat-card green">
+                        <div className="stat-header">
+                            <div className="stat-icon green">
+                                <UserOutlined />
+                            </div>
+                        </div>
+                        <div className="stat-value">{stats.activeUsers}</div>
+                        <div className="stat-label">Active Users</div>
+                    </div>
+
+                    <div className="stat-card orange">
+                        <div className="stat-header">
+                            <div className="stat-icon orange">
+                                <LockOutlined />
+                            </div>
+                        </div>
+                        <div className="stat-value">{stats.inactiveUsers}</div>
+                        <div className="stat-label">Disabled</div>
+                    </div>
+
+                    <div className="stat-card purple">
+                        <div className="stat-header">
+                            <div className="stat-icon purple">
+                                <DollarOutlined />
+                            </div>
+                        </div>
+                        <div className="stat-value">KSH {stats.totalRevenue.toLocaleString()}</div>
+                        <div className="stat-label">Total Revenue</div>
+                    </div>
+                </div>
+            </Spin>
+
+            {/* Actions */}
+            <div className="quick-actions">
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleAddUser}>
+                    Add User
+                </Button>
+                <Search
+                    placeholder="Search users..."
+                    style={{ width: 300 }}
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                />
+                <Select
+                    value={filterStatus}
+                    onChange={setFilterStatus}
+                    style={{ width: 150 }}
+                    options={[
+                        { value: 'all', label: 'All Status' },
+                        { value: 'active', label: 'Active' },
+                        { value: 'inactive', label: 'Disabled' },
+                    ]}
+                />
+            </div>
+
+            {/* Users Table */}
+            <Card
+                title={
+                    <Space>
+                        <TeamOutlined style={{ color: '#00B4D8' }} />
+                        <span>Agent Users</span>
+                        <Badge count={users.length} style={{ backgroundColor: '#00B4D8' }} />
+                    </Space>
+                }
+            >
+                {filteredUsers.length === 0 && !loading ? (
+                    <Empty
+                        description={
+                            <span>
+                                No users found
+                                <br />
+                                <Text type="secondary">Create users to allow them to log in to computers</Text>
+                            </span>
+                        }
+                    >
+                        <Button type="primary" icon={<PlusOutlined />} onClick={handleAddUser}>
+                            Add First User
+                        </Button>
+                    </Empty>
+                ) : (
+                    <Table
+                        columns={columns}
+                        dataSource={filteredUsers}
+                        rowKey="username"
+                        loading={loading}
+                        pagination={{ pageSize: 10 }}
+                    />
+                )}
+            </Card>
+
+            {/* Add/Edit User Modal */}
+            <Modal
+                title={
+                    <Space>
+                        {editingUser ? <EditOutlined style={{ color: '#00B4D8' }} /> : <PlusOutlined style={{ color: '#00C853' }} />}
+                        <span>{editingUser ? 'Edit User' : 'Add New User'}</span>
+                    </Space>
+                }
+                open={modalVisible}
+                onCancel={() => setModalVisible(false)}
+                onOk={() => form.submit()}
+                okText={editingUser ? 'Update' : 'Create'}
+                width={500}
+            >
+                <Form
+                    form={form}
+                    layout="vertical"
+                    onFinish={handleSubmit}
+                    initialValues={{ active: true }}
+                >
+                    <Form.Item
+                        name="username"
+                        label="Username"
+                        rules={[
+                            { required: true, message: 'Username is required' },
+                            { min: 3, message: 'Username must be at least 3 characters' },
+                            { pattern: /^[a-zA-Z0-9_]+$/, message: 'Only letters, numbers, and underscores allowed' },
+                        ]}
+                    >
+                        <Input
+                            prefix={<UserOutlined />}
+                            placeholder="username"
+                            disabled={!!editingUser}
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="name"
+                        label="Display Name"
+                        rules={[{ required: true, message: 'Display name is required' }]}
+                    >
+                        <Input prefix={<UserOutlined />} placeholder="John Doe" />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="password"
+                        label={editingUser ? "New Password (leave blank to keep current)" : "Password"}
+                        rules={editingUser ? [] : [
+                            { required: true, message: 'Password is required' },
+                            { min: 6, message: 'Password must be at least 6 characters' },
+                        ]}
+                    >
+                        <Input.Password
+                            prefix={<KeyOutlined />}
+                            placeholder={editingUser ? "••••••••" : "Enter password"}
+                        />
+                    </Form.Item>
+
+                    {editingUser && (
+                        <Form.Item
+                            name="active"
+                            label="Status"
+                            valuePropName="checked"
+                        >
+                            <Switch
+                                checkedChildren="Active"
+                                unCheckedChildren="Disabled"
+                            />
+                        </Form.Item>
+                    )}
+                </Form>
+            </Modal>
+        </div>
+    );
+}
+
+export default Users;
