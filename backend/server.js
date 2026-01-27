@@ -324,7 +324,12 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
         }
 
         const username = TEMP_TOKENS.get(tempToken);
+
+        // Debug logging
         if (!username) {
+            console.log('[AUTH DEBUG] Step 2 Failed: Token not found');
+            console.log(`[AUTH DEBUG] Received Token: ${tempToken}`);
+            console.log(`[AUTH DEBUG] Active Tokens: ${TEMP_TOKENS.size}`);
             return res.status(400).json({ error: 'Session expired. Please login again.' });
         }
 
@@ -340,6 +345,7 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
         }
 
         if (record.otp !== otp) {
+            console.log(`[AUTH DEBUG] Invalid OTP for ${username}. Expected: ${record.otp}, Got: ${otp}`);
             return res.status(401).json({ error: 'Invalid code' });
         }
 

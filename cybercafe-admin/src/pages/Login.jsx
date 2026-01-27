@@ -38,6 +38,7 @@ function Login({ onLogin }) {
     };
 
     const handleLoginStep2 = async (values) => {
+        if (successMsg) return; // Prevent double submission if already successful
         setLoading(true);
         setError('');
 
@@ -58,11 +59,14 @@ function Login({ onLogin }) {
                 }, 800);
             }
         } catch (err) {
-            console.error('Login Step 2 Error:', err);
-            if (err.response?.data?.error) {
-                setError(err.response.data.error);
-            } else {
-                setError('Verification failed. Please try again.');
+            // Only show error if we haven't already marked success
+            if (!successMsg) {
+                console.error('Login Step 2 Error:', err);
+                if (err.response?.data?.error) {
+                    setError(err.response.data.error);
+                } else {
+                    setError('Verification failed. Please try again.');
+                }
             }
         }
         setLoading(false);
