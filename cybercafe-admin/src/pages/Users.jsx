@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Modal, message, Form, Switch, Popconfirm, Row, Col, Spin, Empty } from 'antd';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Modal, message, Form, Switch, Popconfirm, Row, Col, Spin, Empty, Tabs } from 'antd';
 import {
     TeamOutlined,
     UserOutlined,
@@ -18,22 +18,16 @@ import {
     EyeOutlined,
     EyeInvisibleOutlined,
     KeyOutlined,
+    GlobalOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions } from '../services/api';
+import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions, getPortalUsers, createPortalUser, updatePortalUser, deletePortalUser } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
 
 function Users() {
-    const [users, setUsers] = useState([]);
-    const [sessions, setSessions] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [searchText, setSearchText] = useState('');
-    const [filterStatus, setFilterStatus] = useState('all');
-    const [modalVisible, setModalVisible] = useState(false);
-    const [editingUser, setEditingUser] = useState(null);
-    const [form] = Form.useForm();
+    const [userType, setUserType] = useState('agent'); // 'agent' or 'portal'
     const [showPassword, setShowPassword] = useState(false);
 
     // Fetch users from API
@@ -41,7 +35,7 @@ function Users() {
         setLoading(true);
         try {
             const [userData, sessionData] = await Promise.all([
-                getAgentUsers().catch(() => []),
+                userType === 'agent' ? getAgentUsers().catch(() => []) : getPortalUsers().catch(() => []),
                 getSessions({ limit: 200, type: 'LOGOUT' }).catch(() => []),
             ]);
             setUsers(userData || []);
@@ -55,7 +49,7 @@ function Users() {
 
     useEffect(() => {
         fetchData();
-    }, []);
+    }, [userType]);
 
     // Calculate user stats from sessions
     const getUserStats = (username) => {
@@ -84,6 +78,7 @@ function Users() {
         form.setFieldsValue({
             username: user.username,
             name: user.name,
+            email: user.email,
             active: user.active,
         });
         setModalVisible(true);
@@ -91,7 +86,11 @@ function Users() {
 
     const handleDeleteUser = async (username) => {
         try {
-            await deleteAgentUser(username);
+            if (userType === 'agent') {
+                await deleteAgentUser(username);
+            } else {
+                await deletePortalUser(username);
+            }
             message.success(`User ${username} deleted`);
             fetchData();
         } catch (error) {
@@ -101,7 +100,11 @@ function Users() {
 
     const handleToggleStatus = async (username, currentStatus) => {
         try {
-            await updateAgentUser(username, { active: !currentStatus });
+            if (userType === 'agent') {
+                await updateAgentUser(username, { active: !currentStatus });
+            } else {
+                await updatePortalUser(username, { active: !currentStatus });
+            }
             message.success(`User ${username} ${currentStatus ? 'disabled' : 'enabled'}`);
             fetchData();
         } catch (error) {
@@ -113,19 +116,33 @@ function Users() {
         try {
             if (editingUser) {
                 // Update existing user
-                const updateData = { name: values.name, active: values.active };
+                const updateData = { name: values.name, active: values.active, email: values.email };
                 if (values.password) {
                     updateData.password = values.password;
                 }
-                await updateAgentUser(editingUser.username, updateData);
+
+                if (userType === 'agent') {
+                    await updateAgentUser(editingUser.username, updateData);
+                } else {
+                    await updatePortalUser(editingUser.username, updateData);
+                }
                 message.success('User updated successfully');
             } else {
                 // Create new user
-                await createAgentUser({
-                    username: values.username,
-                    password: values.password,
-                    name: values.name,
-                });
+                if (userType === 'agent') {
+                    await createAgentUser({
+                        username: values.username,
+                        password: values.password,
+                        name: values.name,
+                    });
+                } else {
+                    await createPortalUser({
+                        username: values.username,
+                        password: values.password,
+                        email: values.email,
+                        name: values.name,
+                    });
+                }
                 message.success('User created successfully');
             }
             setModalVisible(false);
@@ -167,7 +184,9 @@ function Users() {
                     <div>
                         <Text strong>{record.name || record.username}</Text>
                         <br />
-                        <Text type="secondary" style={{ fontSize: 12 }}>@{record.username}</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                            @{record.username} {record.email ? `• ${record.email}` : ''}
+                        </Text>
                     </div>
                 </Space>
             ),
@@ -279,7 +298,7 @@ function Users() {
                     <TeamOutlined className="icon" />
                     <h1>Users</h1>
                 </div>
-                <p className="page-subtitle">Manage agent users who can log in to computers</p>
+                <p className="page-subtitle">Manage agent users and portal customers</p>
             </div>
 
             {/* Stats */}
@@ -358,12 +377,38 @@ function Users() {
             </div>
 
             {/* Users Table */}
+            <Tabs
+                activeKey={userType}
+                onChange={setUserType}
+                className="user-tabs"
+                items={[
+                    {
+                        key: 'agent',
+                        label: (
+                            <span>
+                                <DesktopOutlined />
+                                Agent Users
+                            </span>
+                        ),
+                    },
+                    {
+                        key: 'portal',
+                        label: (
+                            <span>
+                                <GlobalOutlined />
+                                Portal Users
+                            </span>
+                        ),
+                    },
+                ]}
+            />
+
             <Card
                 title={
                     <Space>
-                        <TeamOutlined style={{ color: '#00B4D8' }} />
-                        <span>Agent Users</span>
-                        <Badge count={users.length} style={{ backgroundColor: '#00B4D8' }} />
+                        {userType === 'agent' ? <DesktopOutlined style={{ color: '#00B4D8' }} /> : <GlobalOutlined style={{ color: '#FFB703' }} />}
+                        <span>{userType === 'agent' ? 'Agent Users' : 'Portal Users'}</span>
+                        <Badge count={users.length} style={{ backgroundColor: userType === 'agent' ? '#00B4D8' : '#FFB703' }} />
                     </Space>
                 }
             >
@@ -435,6 +480,19 @@ function Users() {
                     >
                         <Input prefix={<UserOutlined />} placeholder="John Doe" />
                     </Form.Item>
+
+                    {userType === 'portal' && (
+                        <Form.Item
+                            name="email"
+                            label="Email Address"
+                            rules={[
+                                { required: true, message: 'Email is required' },
+                                { type: 'email', message: 'Enter a valid email' }
+                            ]}
+                        >
+                            <Input prefix={<MailOutlined />} placeholder="user@example.com" />
+                        </Form.Item>
+                    )}
 
                     <Form.Item
                         name="password"

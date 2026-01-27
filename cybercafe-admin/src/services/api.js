@@ -107,6 +107,29 @@ export const deleteAgentUser = async (username) => {
     return response.data;
 };
 
+// ==================== PORTAL USERS ====================
+
+export const getPortalUsers = async () => {
+    const response = await api.get('/auth/portal/users');
+    return response.data;
+};
+
+export const createPortalUser = async (userData) => {
+    const response = await api.post('/auth/portal/users', userData);
+    return response.data;
+};
+
+export const updatePortalUser = async (username, userData) => {
+    const response = await api.put(`/auth/portal/users/${username}`, userData);
+    return response.data;
+};
+
+export const deletePortalUser = async (username) => {
+    const response = await api.delete(`/auth/portal/users/${username}`);
+    return response.data;
+};
+
+
 // ==================== COMPUTERS ====================
 
 export const getComputers = async () => {
@@ -366,6 +389,11 @@ export default {
     createAgentUser,
     updateAgentUser,
     deleteAgentUser,
+    getPortalUsers,
+    createPortalUser,
+    updatePortalUser,
+    deletePortalUser,
+
     // Computers
     getComputers,
     getComputer,

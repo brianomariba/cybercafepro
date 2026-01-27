@@ -13,6 +13,28 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
+
+// ==================== DATABASE CONNECTION ====================
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/hawknine';
+mongoose.connect(MONGODB_URI)
+    .then(() => console.log('✅ Connected to MongoDB persistence layer'))
+    .catch(err => {
+        console.error('❌ MongoDB connection error:', err);
+        console.log('Falling back to limited local state...');
+    });
+
+// Load Models
+const User = require('./models/User');
+const Computer = require('./models/Computer');
+const Session = require('./models/Session');
+const Task = require('./models/Task');
+const Service = require('./models/Service');
+const Transaction = require('./models/Transaction');
+const SharedDocument = require('./models/SharedDocument');
+const Log = require('./models/Log');
+
+
 
 const app = express();
 const server = http.createServer(app);
@@ -124,8 +146,7 @@ const sendOTPEmail = async (email, otp, username) => {
 };
 
 // Active sessions
-const adminSessions = new Map();
-const agentUsers = new Map();
+// adminSessions and agentUsers are declared below in the DATA STORES section
 
 // Crypto helpers
 const generateToken = () => crypto.randomBytes(32).toString('hex');
@@ -215,36 +236,19 @@ const authRateLimit = rateLimit({
 
 
 
-// ==================== IN-MEMORY DATA STORES ====================
-// In production, replace these with MongoDB/PostgreSQL
-
+// ==================== DATA STORES ====================
+// These remain in-memory for real-time tracking, but are persisted to MongoDB
 const computers = new Map();          // clientId -> computer status
-const sessions = [];                  // All session records
-const activityLogs = [];              // Recent activity snapshots
-const printJobs = [];                 // All print jobs across all computers
-const browserHistory = [];            // Aggregated browser history
-const fileActivity = [];              // File creation/modification logs
-const usbEvents = [];                 // USB device connection events
-const sharedDocuments = [];           // Documents shared between users/admin
+const activityLogs = [];              // Transient recent activity
+const transactions = [];              // Recent transactions (transient)
 
-// NEW: Task and Service Management
-const tasks = [];                     // Admin-defined tasks/activities
-const services = [                    // Service catalog with pricing
-    { id: 'svc-1', name: 'Computer Usage', category: 'usage', price: 200, unit: 'per_hour', isActive: true },
-    { id: 'svc-2', name: 'B&W Printing', category: 'printing', price: 10, unit: 'per_page', isActive: true },
-    { id: 'svc-3', name: 'Color Printing', category: 'printing', price: 50, unit: 'per_page', isActive: true },
-    { id: 'svc-4', name: 'Document Scanning', category: 'scanning', price: 20, unit: 'per_page', isActive: true },
-    { id: 'svc-5', name: 'Photocopying B&W', category: 'photocopy', price: 8, unit: 'per_copy', isActive: true },
-    { id: 'svc-6', name: 'Photocopying Color', category: 'photocopy', price: 40, unit: 'per_copy', isActive: true },
-    { id: 'svc-7', name: 'Typing Services', category: 'typing', price: 50, unit: 'per_page', isActive: true },
-    { id: 'svc-8', name: 'CV Creation', category: 'document', price: 500, unit: 'flat', isActive: true },
-    { id: 'svc-9', name: 'Email Setup', category: 'service', price: 200, unit: 'flat', isActive: true },
-    { id: 'svc-10', name: 'Internet Browsing', category: 'usage', price: 100, unit: 'per_hour', isActive: true },
-];
-const users = new Map();              // User accounts (userId -> user data)
-const transactions = [];              // Financial transactions
+// Sessions (Volatile tokens)
+const adminSessions = new Map();
+const userSessions = new Map();
+const USER_OTP_STORE = new Map();
+const USER_TEMP_TOKENS = new Map();
 
-// Pricing configuration (matches admin Settings.jsx)
+// Pricing configuration (Default)
 const pricing = {
     computerUsage: 200,    // KSH per hour
     printBW: 10,           // KSH per page B&W
@@ -254,24 +258,63 @@ const pricing = {
     photocopyColor: 40     // KSH per copy
 };
 
-// ==================== USER ACCOUNTS (TEST) ====================
-// In production, replace with a proper DB-backed user store
-const userAccounts = new Map(); // username -> user object
-// Seed a test user for development/testing
-const seedUser = {
-  username: 'demo',
-  email: 'demo@example.com',
-  name: 'Demo User',
-  passwordHash: hashPassword('demo123'),
-  active: true,
-  createdAt: new Date().toISOString()
-};
-userAccounts.set(seedUser.username, seedUser);
+// ==================== PERSISTENCE SEEDING ====================
+async function seedDatabase() {
+    try {
+        console.log('🌱 Seeding database with initial data...');
 
-// OTP stores for users and temporary tokens
-const USER_OTP_STORE = new Map();
-const USER_TEMP_TOKENS = new Map();
-const userSessions = new Map(); // token -> session
+        // Seed Portal User
+        const userCount = await User.countDocuments({ type: 'portal' });
+        if (userCount === 0) {
+            await User.create({
+                username: 'demo',
+                email: 'demo@example.com',
+                name: 'Demo User',
+                passwordHash: hashPassword('demo123'),
+                type: 'portal',
+                active: true
+            });
+            console.log('✅ Demo portal user created');
+        }
+
+        // Seed Agent User
+        const agentCount = await User.countDocuments({ type: 'agent' });
+        if (agentCount === 0) {
+            await User.create({
+                username: 'agent1',
+                name: 'Agent User 1',
+                passwordHash: hashPassword('agent123'),
+                type: 'agent',
+                active: true
+            });
+            console.log('✅ Demo agent user created');
+        }
+
+        // Seed Services
+        const serviceCount = await Service.countDocuments();
+        if (serviceCount === 0) {
+            const initialServices = [
+                { id: 'svc-1', name: 'Computer Usage', category: 'usage', price: 200, unit: 'per_hour', isActive: true },
+                { id: 'svc-2', name: 'B&W Printing', category: 'printing', price: 10, unit: 'per_page', isActive: true },
+                { id: 'svc-3', name: 'Color Printing', category: 'printing', price: 50, unit: 'per_page', isActive: true },
+                { id: 'svc-4', name: 'Document Scanning', category: 'scanning', price: 20, unit: 'per_page', isActive: true },
+                { id: 'svc-5', name: 'Photocopying B&W', category: 'photocopy', price: 8, unit: 'per_copy', isActive: true },
+                { id: 'svc-6', name: 'Photocopying Color', category: 'photocopy', price: 40, unit: 'per_copy', isActive: true },
+                { id: 'svc-7', name: 'Typing Services', category: 'typing', price: 50, unit: 'per_page', isActive: true },
+                { id: 'svc-8', name: 'CV Creation', category: 'document', price: 500, unit: 'flat', isActive: true },
+                { id: 'svc-9', name: 'Email Setup', category: 'service', price: 200, unit: 'flat', isActive: true },
+                { id: 'svc-10', name: 'Internet Browsing', category: 'usage', price: 100, unit: 'per_hour', isActive: true },
+            ];
+            await Service.insertMany(initialServices);
+            console.log('✅ Initial services seeded');
+        }
+    } catch (err) {
+        console.error('❌ Seeding error:', err);
+    }
+}
+// Run seed after connection
+mongoose.connection.once('open', seedDatabase);
+
 
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
@@ -429,7 +472,7 @@ app.get('/api/v1/auth/admin/verify', requireAdminAuth, (req, res) => {
  * POST /api/v1/auth/agent/login
  * Desktop agent user authentication
  */
-app.post('/api/v1/auth/agent/login', authRateLimit, (req, res) => {
+app.post('/api/v1/auth/agent/login', authRateLimit, async (req, res) => {
     try {
         const { username, password, clientId, hostname } = req.body;
 
@@ -437,8 +480,8 @@ app.post('/api/v1/auth/agent/login', authRateLimit, (req, res) => {
             return res.status(400).json({ success: false, message: 'Username and password required' });
         }
 
-        // Check if user exists
-        const user = agentUsers.get(username);
+        // Find user in MongoDB
+        const user = await User.findOne({ username, type: 'agent' });
 
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -468,6 +511,7 @@ app.post('/api/v1/auth/agent/login', authRateLimit, (req, res) => {
     }
 });
 
+
 /* User routes protection will be applied after requireUserAuth is defined. */
 
 /**
@@ -481,18 +525,20 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
         if (!username || !password) {
             return res.status(400).json({ error: 'Username and password required' });
         }
-        // Find user in in-memory store
-        const user = Array.from(userAccounts.values()).find(u => u.username === username);
-        if (!user) {
+        // Find user in MongoDB
+        const foundUser = await User.findOne({ username, type: 'portal' });
+        if (!foundUser) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        if (!user.active) {
+        if (!foundUser.active) {
             return res.status(401).json({ error: 'Account is disabled' });
         }
-        if (!verifyPassword(password, user.passwordHash)) {
+        if (!verifyPassword(password, foundUser.passwordHash)) {
             await new Promise(resolve => setTimeout(resolve, 800));
             return res.status(401).json({ error: 'Invalid credentials' });
         }
+
+
 
         // Generate OTP and send via email
         const otp = generateOTP();
@@ -521,7 +567,7 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
  * POST /api/v1/auth/user/login-step2
  * Verify OTP and issue user session token
  */
-app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
+app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
     try {
         const { tempToken, otp } = req.body;
         if (!tempToken || !otp) {
@@ -546,7 +592,7 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
         }
 
         // Success: create user session
-        const user = userAccounts.get(username) || Array.from(userAccounts.values()).find(u => u.username === username);
+        const user = await User.findOne({ username, type: 'portal' });
         if (!user) {
             return res.status(500).json({ error: 'User not found' });
         }
@@ -557,6 +603,7 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
         const session = {
             username: user.username,
             email: user.email,
+            name: user.name,
             loginAt: new Date().toISOString(),
             expiresAt: Date.now() + (24 * 60 * 60 * 1000)
         };
@@ -568,7 +615,7 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
             user: {
                 username: session.username,
                 email: session.email,
-                name: user.name
+                name: session.name
             },
             expiresIn: 86400
         });
@@ -578,23 +625,24 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
     }
 });
 
+
 /**
  * POST /api/v1/auth/user/logout
  * User dashboard logout
  */
 const requireUserAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
-  }
-  const token = authHeader.split(' ')[1];
-  const session = userSessions.get(token);
-  if (!session || Date.now() > session.expiresAt) {
-      userSessions.delete(token);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-  req.user = session;
-  next();
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'No token provided' });
+    }
+    const token = authHeader.split(' ')[1];
+    const session = userSessions.get(token);
+    if (!session || Date.now() > session.expiresAt) {
+        userSessions.delete(token);
+        return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    req.user = session;
+    next();
 };
 app.post('/api/v1/auth/user/logout', (req, res) => {
     const authHeader = req.headers.authorization;
@@ -622,7 +670,7 @@ app.get('/api/v1/auth/user/verify', requireUserAuth, (req, res) => {
  * POST /api/v1/auth/agent/users
  * Create new agent user (admin only)
  */
-app.post('/api/v1/auth/agent/users', requireAdminAuth, (req, res) => {
+app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
     try {
         const { username, password, name } = req.body;
 
@@ -630,18 +678,18 @@ app.post('/api/v1/auth/agent/users', requireAdminAuth, (req, res) => {
             return res.status(400).json({ error: 'Username and password required' });
         }
 
-        if (agentUsers.has(username)) {
+        const existing = await User.findOne({ username });
+        if (existing) {
             return res.status(409).json({ error: 'Username already exists' });
         }
 
-        const newUser = {
+        const newUser = await User.create({
             username,
             passwordHash: hashPassword(password),
             name: name || username,
-            active: true,
-            createdAt: new Date().toISOString()
-        };
-        agentUsers.set(username, newUser);
+            type: 'agent',
+            active: true
+        });
 
         res.json({
             success: true,
@@ -656,55 +704,175 @@ app.post('/api/v1/auth/agent/users', requireAdminAuth, (req, res) => {
  * GET /api/v1/auth/agent/users
  * List all agent users (admin only)
  */
-app.get('/api/v1/auth/agent/users', requireAdminAuth, (req, res) => {
-    const userList = Array.from(agentUsers.values()).map(u => ({
-        username: u.username,
-        name: u.name,
-        active: u.active,
-        createdAt: u.createdAt
-    }));
-    res.json(userList);
+app.get('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
+    try {
+        const users = await User.find({ type: 'agent' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
 });
 
 /**
  * PUT /api/v1/auth/agent/users/:username
  * Update agent user (admin only)
  */
-app.put('/api/v1/auth/agent/users/:username', requireAdminAuth, (req, res) => {
-    const { username } = req.params;
-    const { password, name, active } = req.body;
+app.put('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, name, active } = req.body;
 
-    const user = agentUsers.get(username);
-    if (!user) {
-        return res.status(404).json({ error: 'User not found' });
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'agent' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, name: user.name, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update user' });
     }
-
-    if (password) user.passwordHash = hashPassword(password);
-    if (name !== undefined) user.name = name;
-    if (active !== undefined) user.active = active;
-
-    agentUsers.set(username, user);
-
-    res.json({
-        success: true,
-        user: { username: user.username, name: user.name, active: user.active }
-    });
 });
 
 /**
  * DELETE /api/v1/auth/agent/users/:username
  * Delete agent user (admin only)
  */
-app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, (req, res) => {
-    const { username } = req.params;
+app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'agent' });
 
-    if (!agentUsers.has(username)) {
-        return res.status(404).json({ error: 'User not found' });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete user' });
     }
-
-    agentUsers.delete(username);
-    res.json({ success: true });
 });
+
+/**
+ * ==================== PORTAL USERS (userAccounts) ====================
+ * These are users who log into the User Portal (web)
+ */
+
+/**
+ * GET /api/v1/auth/portal/users
+ * List all portal users (admin only)
+ */
+app.get('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
+    try {
+        const users = await User.find({ type: 'portal' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch portal users' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/portal/users
+ * Create new portal user (admin only)
+ */
+app.post('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
+    try {
+        const { username, password, email, name } = req.body;
+
+        if (!username || !password || !email) {
+            return res.status(400).json({ error: 'Username, password and email required' });
+        }
+
+        const existing = await User.findOne({ username });
+        if (existing) {
+            return res.status(409).json({ error: 'Username already exists' });
+        }
+
+        const newUser = await User.create({
+            username,
+            email,
+            passwordHash: hashPassword(password),
+            name: name || username,
+            type: 'portal',
+            active: true
+        });
+
+        res.json({
+            success: true,
+            user: { username: newUser.username, email: newUser.email, name: newUser.name }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create portal user' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/portal/users/:username
+ * Update portal user (admin only)
+ */
+app.put('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, email, name, active } = req.body;
+
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (email) updateData.email = email;
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'portal' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, email: user.email, name: user.name, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update portal user' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/portal/users/:username
+ * Delete portal user (admin only)
+ */
+app.delete('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'portal' });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete portal user' });
+    }
+});
+
+
+
 
 // ==================== AGENT API ENDPOINTS ====================
 
@@ -712,7 +880,7 @@ app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, (req, res) =>
  * POST /api/v1/agent/sync
  * Receives heartbeat/status updates from agents
  */
-app.post('/api/v1/agent/sync', (req, res) => {
+app.post('/api/v1/agent/sync', async (req, res) => {
     try {
         const data = req.body;
 
@@ -720,11 +888,8 @@ app.post('/api/v1/agent/sync', (req, res) => {
             return res.status(400).json({ error: 'Missing clientId' });
         }
 
-        // Update computer status
-        const existing = computers.get(data.clientId) || {};
+        // Update computer status in MongoDB
         const computerData = {
-            ...existing,
-            clientId: data.clientId,
             hostname: data.hostname,
             ip: data.ip,
             status: data.status,
@@ -739,22 +904,29 @@ app.post('/api/v1/agent/sync', (req, res) => {
                 hasScreenshot: !!data.activity?.screenshot
             }
         };
-        computers.set(data.clientId, computerData);
 
-        // Store activity log (without screenshot for size)
-        const logEntry = {
-            ...data,
-            receivedAt: new Date().toISOString(),
-            activity: {
+        const computer = await Computer.findOneAndUpdate(
+            { clientId: data.clientId },
+            { $set: computerData },
+            { upsert: true, new: true }
+        );
+
+        // Store activity log in MongoDB
+        await Log.create({
+            type: 'activity',
+            clientId: data.clientId,
+            hostname: data.hostname,
+            sessionId: data.sessionId,
+            sessionUser: data.sessionUser,
+            data: {
                 ...data.activity,
                 screenshot: data.activity?.screenshot ? '[CAPTURED]' : null
-            }
-        };
-        activityLogs.unshift(logEntry);
-        if (activityLogs.length > 2000) activityLogs.pop();
+            },
+            receivedAt: new Date().toISOString()
+        });
 
         // Broadcast to admin dashboards
-        io.emit('computer-update', computerData);
+        io.emit('computer-update', computer);
 
         // Emit screenshot separately if included
         if (data.activity?.screenshot) {
@@ -777,7 +949,7 @@ app.post('/api/v1/agent/sync', (req, res) => {
  * POST /api/v1/agent/session
  * Receives session events (LOGIN/LOGOUT) with detailed reports
  */
-app.post('/api/v1/agent/session', (req, res) => {
+app.post('/api/v1/agent/session', async (req, res) => {
     try {
         const data = req.body;
 
@@ -826,85 +998,85 @@ app.post('/api/v1/agent/session', (req, res) => {
             };
         }
 
-        // Store session record
-        const sessionRecord = {
+        // Store session record in MongoDB
+        const session = await Session.create({
             ...data,
             charges: sessionCharges,
             receivedAt: new Date().toISOString()
-        };
-        sessions.unshift(sessionRecord);
-        if (sessions.length > 1000) sessions.pop();
+        });
 
-        // Store print jobs from this session
+        // Batch create logs for this session
+        const logTasks = [];
+
+        // Store print jobs
         if (data.printJobs && data.printJobs.length > 0) {
-            for (const job of data.printJobs) {
-                printJobs.unshift({
-                    ...job,
+            data.printJobs.forEach(job => {
+                logTasks.push(Log.create({
+                    type: 'print',
                     clientId: data.clientId,
                     hostname: data.hostname,
                     sessionId: data.sessionId,
                     sessionUser: data.user,
+                    data: job,
                     receivedAt: new Date().toISOString()
-                });
-            }
-            if (printJobs.length > 500) printJobs.splice(500);
+                }));
+            });
         }
 
-        // Store browser history from this session
+        // Store browser history
         if (data.browsedUrls && data.browsedUrls.length > 0) {
-            for (const url of data.browsedUrls) {
-                browserHistory.unshift({
-                    ...url,
+            data.browsedUrls.forEach(url => {
+                logTasks.push(Log.create({
+                    type: 'browser',
                     clientId: data.clientId,
                     hostname: data.hostname,
                     sessionId: data.sessionId,
                     sessionUser: data.user,
+                    data: url,
                     receivedAt: new Date().toISOString()
-                });
-            }
-            if (browserHistory.length > 1000) browserHistory.splice(1000);
+                }));
+            });
         }
 
-        // Store file activity from this session
+        // Store file activity
         if (data.filesCreated && data.filesCreated.length > 0) {
-            for (const file of data.filesCreated) {
-                fileActivity.unshift({
-                    ...file,
+            data.filesCreated.forEach(file => {
+                logTasks.push(Log.create({
+                    type: 'file',
                     clientId: data.clientId,
                     hostname: data.hostname,
                     sessionId: data.sessionId,
                     sessionUser: data.user,
-                    action: 'created',
+                    data: { ...file, action: 'created' },
                     receivedAt: new Date().toISOString()
-                });
-            }
-            if (fileActivity.length > 500) fileActivity.splice(500);
+                }));
+            });
         }
 
-        // Store USB events from this session
+        // Store USB events
         if (data.usbDevicesUsed && data.usbDevicesUsed.length > 0) {
-            for (const device of data.usbDevicesUsed) {
-                usbEvents.unshift({
-                    ...device,
+            data.usbDevicesUsed.forEach(device => {
+                logTasks.push(Log.create({
+                    type: 'usb',
                     clientId: data.clientId,
                     hostname: data.hostname,
                     sessionId: data.sessionId,
                     sessionUser: data.user,
+                    data: device,
                     receivedAt: new Date().toISOString()
-                });
-            }
-            if (usbEvents.length > 200) usbEvents.splice(200);
+                }));
+            });
         }
+
+        // Wait for all logs to be saved
+        if (logTasks.length > 0) await Promise.all(logTasks);
 
         // Broadcast session event to admin
-        io.emit('session-event', {
-            ...data,
-            charges: sessionCharges
-        });
+        io.emit('session-event', session);
 
         // IMPORTANT: Record session charges as a transaction for revenue tracking
         if (data.type === 'LOGOUT' && sessionCharges && sessionCharges.grandTotal > 0) {
-            const sessionTransaction = {
+            const sessionTransaction = await Transaction.create({
                 id: 'txn-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
                 type: 'session',
                 sessionId: data.sessionId,
@@ -917,11 +1089,8 @@ app.post('/api/v1/agent/session', (req, res) => {
                     usage: sessionCharges.usage.total,
                     printBW: sessionCharges.printing.bwTotal,
                     printColor: sessionCharges.printing.colorTotal
-                },
-                createdAt: new Date().toISOString()
-            };
-            transactions.unshift(sessionTransaction);
-            if (transactions.length > 1000) transactions.pop();
+                }
+            });
 
             // Emit transaction event
             io.emit('transaction-created', sessionTransaction);
@@ -937,6 +1106,7 @@ app.post('/api/v1/agent/session', (req, res) => {
     }
 });
 
+
 // User authentication middleware is defined later in the file
 
 // ==================== ADMIN API ENDPOINTS ====================
@@ -945,47 +1115,69 @@ app.post('/api/v1/agent/session', (req, res) => {
  * GET /api/v1/admin/computers
  * Returns list of all computers and their real-time status
  */
-app.get('/api/v1/admin/computers', (req, res) => {
-    const now = new Date();
-    const computerList = Array.from(computers.values()).map(c => ({
-        ...c,
-        isOnline: (now - new Date(c.lastSeen)) < 30000
-    }));
-    res.json(computerList);
+app.get('/api/v1/admin/computers', async (req, res) => {
+    try {
+        const computerDocs = await Computer.find();
+        const now = new Date();
+        const computerList = computerDocs.map(c => {
+            const doc = c.toObject();
+            return {
+                ...doc,
+                isOnline: (now - new Date(doc.lastSeen)) < 30000
+            };
+        });
+        res.json(computerList);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch computers' });
+    }
 });
+
 
 /**
  * GET /api/v1/admin/computers/:clientId
  * Returns detailed info for a specific computer
  */
-app.get('/api/v1/admin/computers/:clientId', (req, res) => {
-    const computer = computers.get(req.params.clientId);
-    if (!computer) {
-        return res.status(404).json({ error: 'Computer not found' });
+app.get('/api/v1/admin/computers/:clientId', async (req, res) => {
+    try {
+        const computer = await Computer.findOne({ clientId: req.params.clientId });
+        if (!computer) {
+            return res.status(404).json({ error: 'Computer not found' });
+        }
+
+        // Include recent activity for this computer from Log model
+        const recentActivity = await Log.find({ clientId: req.params.clientId, type: 'activity' })
+            .sort({ receivedAt: -1 })
+            .limit(20);
+
+        res.json({ ...computer.toObject(), recentActivity });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch computer details' });
     }
-
-    // Include recent activity for this computer
-    const recentActivity = activityLogs
-        .filter(l => l.clientId === req.params.clientId)
-        .slice(0, 20);
-
-    res.json({ ...computer, recentActivity });
 });
 
 /**
  * GET /api/v1/admin/sessions
  * Returns session records with filtering
  */
-app.get('/api/v1/admin/sessions', (req, res) => {
-    const { limit = 100, clientId, user, type } = req.query;
+app.get('/api/v1/admin/sessions', async (req, res) => {
+    try {
+        const { limit = 100, clientId, user, type } = req.query;
 
-    let filtered = sessions;
-    if (clientId) filtered = filtered.filter(s => s.clientId === clientId);
-    if (user) filtered = filtered.filter(s => s.user?.toLowerCase().includes(user.toLowerCase()));
-    if (type) filtered = filtered.filter(s => s.type === type);
+        const query = {};
+        if (clientId) query.clientId = clientId;
+        if (user) query.user = { $regex: user, $options: 'i' };
+        if (type) query.type = type;
 
-    res.json(filtered.slice(0, parseInt(limit)));
+        const sessionDocs = await Session.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(sessionDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
 });
+
 
 /**
  * GET /api/v1/admin/print-jobs
@@ -1264,62 +1456,82 @@ app.put('/api/v1/admin/pricing', (req, res) => {
  * GET /api/v1/admin/services
  * List all services with pricing
  */
-app.get('/api/v1/admin/services', (req, res) => {
-    res.json(services);
+app.get('/api/v1/admin/services', async (req, res) => {
+    try {
+        const serviceDocs = await Service.find({ isActive: true });
+        res.json(serviceDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
 });
 
 /**
  * POST /api/v1/admin/services
  * Create a new service
  */
-app.post('/api/v1/admin/services', (req, res) => {
-    const { name, category, price, unit, description } = req.body;
+app.post('/api/v1/admin/services', async (req, res) => {
+    try {
+        const { name, category, price, unit, description } = req.body;
 
-    if (!name || !price) {
-        return res.status(400).json({ error: 'Name and price required' });
+        if (!name || !price) {
+            return res.status(400).json({ error: 'Name and price required' });
+        }
+
+        const newService = await Service.create({
+            id: 'svc-' + Date.now(),
+            name,
+            category: category || 'custom',
+            description: description || '',
+            price: parseFloat(price),
+            unit: unit || 'flat',
+            isActive: true
+        });
+
+        io.emit('service-created', newService);
+        res.json({ success: true, service: newService });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create service' });
     }
-
-    const service = {
-        id: 'svc-' + Date.now(),
-        name,
-        category: category || 'custom',
-        description: description || '',
-        price: parseFloat(price),
-        unit: unit || 'flat',
-        isActive: true,
-        createdAt: new Date().toISOString()
-    };
-
-    services.push(service);
-    io.emit('service-created', service);
-    res.json({ success: true, service });
 });
 
 /**
  * PUT /api/v1/admin/services/:id
  * Update a service
  */
-app.put('/api/v1/admin/services/:id', (req, res) => {
-    const idx = services.findIndex(s => s.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Service not found' });
+app.put('/api/v1/admin/services/:id', async (req, res) => {
+    try {
+        const updatedService = await Service.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
 
-    services[idx] = { ...services[idx], ...req.body };
-    io.emit('service-updated', services[idx]);
-    res.json({ success: true, service: services[idx] });
+        if (!updatedService) return res.status(404).json({ error: 'Service not found' });
+
+        io.emit('service-updated', updatedService);
+        res.json({ success: true, service: updatedService });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update service' });
+    }
 });
 
 /**
  * DELETE /api/v1/admin/services/:id
  * Delete a service
  */
-app.delete('/api/v1/admin/services/:id', (req, res) => {
-    const idx = services.findIndex(s => s.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Service not found' });
+app.delete('/api/v1/admin/services/:id', async (req, res) => {
+    try {
+        const deleted = await Service.findOneAndDelete({ id: req.params.id });
 
-    const deleted = services.splice(idx, 1)[0];
-    io.emit('service-deleted', { id: deleted.id });
-    res.json({ success: true });
+        if (!deleted) return res.status(404).json({ error: 'Service not found' });
+
+        io.emit('service-deleted', { id: deleted.id });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
 });
+
 
 // ==================== TASK MANAGEMENT ====================
 
@@ -1327,16 +1539,24 @@ app.delete('/api/v1/admin/services/:id', (req, res) => {
  * GET /api/v1/admin/tasks
  * List all tasks with optional filters
  */
-app.get('/api/v1/admin/tasks', (req, res) => {
-    const { status, clientId, userId, limit = 100 } = req.query;
+app.get('/api/v1/admin/tasks', async (req, res) => {
+    try {
+        const { status, clientId, userId, limit = 100 } = req.query;
 
-    let filtered = tasks;
-    if (status) filtered = filtered.filter(t => t.status === status);
-    if (clientId) filtered = filtered.filter(t => t.assignedTo?.clientId === clientId);
-    if (userId) filtered = filtered.filter(t => t.assignedTo?.userId === userId);
+        const query = {};
+        if (status) query.status = status;
+        if (clientId) query['assignedTo.clientId'] = clientId;
+        if (userId) query['assignedTo.userId'] = userId;
 
-    res.json(filtered.slice(0, parseInt(limit)));
+        const taskDocs = await Task.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+        res.json(taskDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch tasks' });
+    }
 });
+
 
 /**
  * POST /api/v1/admin/tasks
