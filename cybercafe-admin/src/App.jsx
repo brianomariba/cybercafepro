@@ -27,6 +27,7 @@ import {
   FileOutlined,
   FolderOutlined,
   OrderedListOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -497,6 +498,24 @@ function App() {
             </div>
 
             <div className="header-right">
+              {/* Download Agent Button */}
+              <Tooltip title="Download Desktop Agent Installer">
+                <Button
+                  type="primary"
+                  icon={<DownloadOutlined />}
+                  onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'https://api.hawkninegroup.com/api/v1'}/admin/download-agent`, '_blank')}
+                  className="header-btn"
+                  style={{
+                    background: 'rgba(0, 180, 216, 0.1)',
+                    color: '#00B4D8',
+                    border: '1px solid rgba(0, 180, 216, 0.3)',
+                    marginRight: 8
+                  }}
+                >
+                  {!isMobile && "Get Agent"}
+                </Button>
+              </Tooltip>
+
               {/* Theme Toggle */}
               <Tooltip title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
                 <Button

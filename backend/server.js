@@ -179,11 +179,16 @@ const requireAdminAuth = async (req, res, next) => {
 };
 
 
-// Ensure uploads directory exists
+// Ensure uploads and downloads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
 if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
+if (!fs.existsSync(DOWNLOADS_DIR)) {
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+}
+
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -1137,6 +1142,26 @@ app.post('/api/v1/agent/session', async (req, res) => {
 // User authentication middleware is defined later in the file
 
 // ==================== ADMIN API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/download-agent
+ * Download the latest desktop agent installer
+ */
+app.get('/api/v1/admin/download-agent', (req, res) => {
+    try {
+        const files = fs.readdirSync(DOWNLOADS_DIR);
+        const agentFile = files.find(f => f.endsWith('.exe') || f.endsWith('.msi') || f.endsWith('.zip'));
+
+        if (!agentFile) {
+            return res.status(404).json({ error: 'Agent installer not found on server' });
+        }
+
+        const filePath = path.join(DOWNLOADS_DIR, agentFile);
+        res.download(filePath, agentFile);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to access downloads' });
+    }
+});
 
 /**
  * GET /api/v1/admin/computers
