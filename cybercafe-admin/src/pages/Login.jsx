@@ -1,69 +1,68 @@
 import { useState } from 'react';
-import { Form, Input, Button, Card, Typography, Alert, Steps, Result } from 'antd';
-import { MailOutlined, SafetyCertificateOutlined, ArrowLeftOutlined, CheckCircleFilled } from '@ant-design/icons';
-import { requestAdminOtp, verifyAdminOtp } from '../services/api';
+import { Form, Input, Button, Card, Typography, Alert, message } from 'antd';
+import { UserOutlined, LockOutlined, SafetyCertificateOutlined, ArrowLeftOutlined, MailOutlined } from '@ant-design/icons';
+import { adminLoginStep1, adminLoginStep2 } from '../services/api';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 function Login({ onLogin }) {
-    const [step, setStep] = useState(0); // 0: Email, 1: OTP
-    const [email, setEmail] = useState('');
+    const [step, setStep] = useState(0); // 0: Credentials, 1: OTP
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [tempToken, setTempToken] = useState(null);
+    const [emailMask, setEmailMask] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
-    const handleRequestOtp = async (values) => {
+    const handleLoginStep1 = async (values) => {
         setLoading(true);
         setError('');
         setSuccessMsg('');
 
         try {
-            const response = await requestAdminOtp(values.email);
+            const response = await adminLoginStep1(values.username, values.password);
             if (response.success) {
-                setEmail(values.email);
+                setTempToken(response.tempToken);
+                setEmailMask(response.emailMask);
                 setStep(1);
-                setSuccessMsg('Verification code sent to your email.');
-            } else {
-                setError('Failed to send verification code.');
+                message.success('Credentials verified. OTP sent.');
             }
         } catch (err) {
-            console.error('OTP Request Error:', err);
+            console.error('Login Step 1 Error:', err);
             if (err.response?.data?.error) {
                 setError(err.response.data.error);
             } else {
-                setError('Unable to send code. Please try again.');
+                setError('Login failed. Please check your connection.');
             }
         }
         setLoading(false);
     };
 
-    const handleVerifyOtp = async (values) => {
+    const handleLoginStep2 = async (values) => {
         setLoading(true);
         setError('');
 
         try {
-            const response = await verifyAdminOtp(email, values.otp);
+            const response = await adminLoginStep2(tempToken, values.otp);
             if (response.success) {
                 const userData = {
-                    name: response.user?.username || email.split('@')[0],
+                    name: response.user?.username || 'Admin',
                     role: response.user?.role || 'Admin',
-                    email: response.user?.email || email,
-                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${response.user?.username || email}`,
+                    email: response.user?.email,
+                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${response.user?.username}`,
                     token: response.token
                 };
 
-                // Show success animation briefly
-                setSuccessMsg('Login successful redirecting...');
+                setSuccessMsg('Authentication successful! Redirecting...');
                 setTimeout(() => {
                     onLogin(userData);
                 }, 800);
             }
         } catch (err) {
-            console.error('OTP Verify Error:', err);
+            console.error('Login Step 2 Error:', err);
             if (err.response?.data?.error) {
                 setError(err.response.data.error);
             } else {
-                setError('Invalid code. Please try again.');
+                setError('Verification failed. Please try again.');
             }
         }
         setLoading(false);
@@ -73,6 +72,7 @@ function Login({ onLogin }) {
         setStep(0);
         setError('');
         setSuccessMsg('');
+        setTempToken(null);
     };
 
     return (
@@ -115,7 +115,7 @@ function Login({ onLogin }) {
                     <Text type="secondary">Secure Admin Access</Text>
                 </div>
 
-                {/* Progress Steps (Subtle) */}
+                {/* Progress Steps */}
                 <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'center', gap: 8 }}>
                     <div style={{ height: 4, width: 24, borderRadius: 2, background: step >= 0 ? '#00B4D8' : '#334155' }} />
                     <div style={{ height: 4, width: 24, borderRadius: 2, background: step >= 1 ? '#00B4D8' : '#334155' }} />
@@ -142,32 +142,39 @@ function Login({ onLogin }) {
                     />
                 )}
 
-                {/* Step 1: Email Input */}
+                {/* Step 1: Credentials */}
                 {step === 0 && (
                     <Form
-                        name="email-login"
-                        onFinish={handleRequestOtp}
+                        name="login-step1"
+                        onFinish={handleLoginStep1}
                         layout="vertical"
                         size="large"
-                        initialValues={{ email: '' }}
                     >
                         <div style={{ textAlign: 'center', marginBottom: 24 }}>
                             <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Welcome Back</Title>
-                            <Text type="secondary">Enter your specialized admin email to continue</Text>
+                            <Text type="secondary">Enter your username and password</Text>
                         </div>
 
                         <Form.Item
-                            name="email"
-                            rules={[
-                                { required: true, message: 'Please enter your email' },
-                                { type: 'email', message: 'Please enter a valid email' }
-                            ]}
+                            name="username"
+                            rules={[{ required: true, message: 'Please enter your username' }]}
                         >
                             <Input
-                                prefix={<MailOutlined style={{ color: '#64748B' }} />}
-                                placeholder="admin@hawknine.co.ke"
+                                prefix={<UserOutlined style={{ color: '#64748B' }} />}
+                                placeholder="Username"
                                 className="login-input"
                                 autoFocus
+                            />
+                        </Form.Item>
+
+                        <Form.Item
+                            name="password"
+                            rules={[{ required: true, message: 'Please enter your password' }]}
+                        >
+                            <Input.Password
+                                prefix={<LockOutlined style={{ color: '#64748B' }} />}
+                                placeholder="Password"
+                                className="login-input"
                             />
                         </Form.Item>
 
@@ -178,7 +185,6 @@ function Login({ onLogin }) {
                                 block
                                 loading={loading}
                                 className="login-button"
-                                icon={<SafetyCertificateOutlined />}
                                 style={{
                                     background: 'linear-gradient(135deg, #00B4D8, #023047)',
                                     border: 'none',
@@ -188,17 +194,17 @@ function Login({ onLogin }) {
                                     marginTop: 8
                                 }}
                             >
-                                Send Verification Code
+                                Continue
                             </Button>
                         </Form.Item>
                     </Form>
                 )}
 
-                {/* Step 2: OTP Input */}
+                {/* Step 2: OTP Verification */}
                 {step === 1 && (
                     <Form
-                        name="otp-verify"
-                        onFinish={handleVerifyOtp}
+                        name="login-step2"
+                        onFinish={handleLoginStep2}
                         layout="vertical"
                         size="large"
                     >
@@ -215,8 +221,8 @@ function Login({ onLogin }) {
                             }}>
                                 <MailOutlined style={{ fontSize: 28, color: '#00B4D8' }} />
                             </div>
-                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Check your inbox</Title>
-                            <Text type="secondary">We sent a 6-digit code to <br /><span style={{ color: '#E2E8F0' }}>{email}</span></Text>
+                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Two-Factor Auth</Title>
+                            <Text type="secondary">Enter the code sent to <br /><span style={{ color: '#00B4D8' }}>{emailMask}</span></Text>
                         </div>
 
                         <Form.Item
@@ -238,6 +244,7 @@ function Login({ onLogin }) {
                                 }}
                                 maxLength={6}
                                 autoFocus
+                                prefix={<SafetyCertificateOutlined style={{ color: '#64748B' }} />}
                             />
                         </Form.Item>
 
@@ -256,7 +263,7 @@ function Login({ onLogin }) {
                                     fontWeight: 600,
                                 }}
                             >
-                                Verify & Sign In
+                                Verify & Login
                             </Button>
                         </Form.Item>
 
@@ -267,7 +274,7 @@ function Login({ onLogin }) {
                                 onClick={handleBack}
                                 style={{ color: '#94A3B8' }}
                             >
-                                Change Email
+                                Back to Login
                             </Button>
                         </div>
                     </Form>

@@ -48,13 +48,13 @@ api.interceptors.response.use(
 
 // ==================== AUTHENTICATION ====================
 
-export const requestAdminOtp = async (email) => {
-    const response = await api.post('/auth/admin/request-otp', { email });
+export const adminLoginStep1 = async (username, password) => {
+    const response = await api.post('/auth/admin/login-step1', { username, password });
     return response.data;
 };
 
-export const verifyAdminOtp = async (email, otp) => {
-    const response = await api.post('/auth/admin/verify-otp', { email, otp });
+export const adminLoginStep2 = async (tempToken, otp) => {
+    const response = await api.post('/auth/admin/login-step2', { tempToken, otp });
     if (response.data.token) {
         setStoredToken(response.data.token);
     }
@@ -355,8 +355,8 @@ export const disconnectSocket = () => {
 // Default export
 export default {
     // Auth
-    requestAdminOtp,
-    verifyAdminOtp,
+    adminLoginStep1,
+    adminLoginStep2,
     adminLogout,
     verifyAdminToken,
     isAuthenticated,

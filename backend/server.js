@@ -68,43 +68,51 @@ setInterval(() => {
 // ==================== AUTHENTICATION SYSTEM ====================
 
 // Admin credentials (in production, store hashed in DB)
-// ==================== AUTHENTICATION SYSTEM (OTP) ====================
+// ==================== AUTHENTICATION SYSTEM (2FA) ====================
 
-// Admin Email Configuration
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hawknine.co.ke'; // Change this!
-const OTP_STORE = new Map(); // email -> { otp, expiresAt }
+// Admin Configuration
+const ADMIN_CONFIG = {
+    email: process.env.ADMIN_EMAIL || 'admin@hawknine.co.ke',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH || crypto.createHash('sha256').update(process.env.ADMIN_PASSWORD || 'admin123').digest('hex')
+};
+
+const OTP_STORE = new Map(); // username -> { otp, expiresAt }
+const TEMP_TOKENS = new Map(); // tempToken -> username (for linking step 1 to step 2)
 
 // Email Transporter
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // Use your email service
+    service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     }
 });
 
-// Helper: Generate 6-digit OTP
+// Helper: Generate OTP
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// Helper: Send Email
-const sendOTPEmail = async (email, otp) => {
+// Helper: Send Email with OTP
+const sendOTPEmail = async (email, otp, username) => {
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.log(`[DEV MODE] OTP for ${email}: ${otp}`);
-        return true; // Mock success if no email config
+        console.log(`[DEV MODE] OTP for ${username} (${email}): ${otp}`);
+        return true;
     }
 
     try {
         await transporter.sendMail({
             from: '"HawkNine Security" <noreply@hawknine.co.ke>',
             to: email,
-            subject: 'Your HawkNine Admin Login OTP',
+            subject: 'HawkNine Admin Access Code',
             html: `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                    <h2 style="color: #00B4D8;">HawkNine Cybercafe Admin</h2>
-                    <p>Your One-Time Password (OTP) for login is:</p>
-                    <h1 style="font-size: 32px; letter-spacing: 5px; color: #023047;">${otp}</h1>
-                    <p>This code expires in 5 minutes.</p>
-                    <p>If you did not request this code, please ignore this email.</p>
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+                    <h2 style="color: #00B4D8; text-align: center;">Two-Factor Authentication</h2>
+                    <p style="color: #333;">Hello <strong>${username}</strong>,</p>
+                    <p>A login attempt was made for your HawkNine Admin account.</p>
+                    <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 5px; margin: 20px 0;">
+                        <span style="font-size: 32px; letter-spacing: 5px; color: #023047; font-weight: bold;">${otp}</span>
+                    </div>
+                    <p style="font-size: 12px; color: #666; text-align: center;">This code expires in 5 minutes. Do not share it with anyone.</p>
                 </div>
             `
         });
@@ -115,19 +123,13 @@ const sendOTPEmail = async (email, otp) => {
     }
 };
 
-// Active admin sessions
+// Active sessions
 const adminSessions = new Map();
-
-// User accounts for agents (Cleaned - No demo data)
 const agentUsers = new Map();
 
-// Generate secure token
+// Crypto helpers
 const generateToken = () => crypto.randomBytes(32).toString('hex');
-
-// Hash password (keep for agents)
 const hashPassword = (password) => crypto.createHash('sha256').update(password).digest('hex');
-
-// Verify password
 const verifyPassword = (password, hash) => hashPassword(password) === hash;
 
 // Auth middleware for admin routes
@@ -255,84 +257,106 @@ const pricing = {
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
 /**
- * POST /api/v1/auth/admin/request-otp
- * Step 1: Request OTP for admin login
+ * POST /api/v1/auth/admin/login-step1
+ * Validate credentials and send OTP
  */
-app.post('/api/v1/auth/admin/request-otp', authRateLimit, async (req, res) => {
+app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
     try {
-        const { email } = req.body;
+        const { username, password } = req.body;
 
-        if (!email) {
-            return res.status(400).json({ error: 'Email is required' });
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
         }
 
-        // Verify email matches admin email (simple check for now)
-        // In a real app, you'd check a database of admins
-        if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-            console.log(`[AUTH] Unauthorized email attempt: ${email}`);
-            // Return specific error for clarity since this is admin portal
-            return res.status(401).json({ error: 'Unauthorized email address. Please use the registered admin email.' });
+        // 1. Verify Credentials
+        const isValid = (
+            username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase() &&
+            verifyPassword(password, ADMIN_CONFIG.passwordHash)
+        );
+
+        if (!isValid) {
+            // Delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 800));
+            return res.status(401).json({ error: 'Invalid username or password' });
         }
 
+        // 2. Generate and Send OTP
         const otp = generateOTP();
-        OTP_STORE.set(email, {
-            otp,
-            expiresAt: Date.now() + 5 * 60 * 1000 // 5 minutes
-        });
+        const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
 
-        const sent = await sendOTPEmail(email, otp);
+        // Store OTP linked to username
+        OTP_STORE.set(username, { otp, expiresAt });
+
+        // Use a temporary token to identify this login flow without exposing username in step 2
+        const tempToken = generateToken();
+        TEMP_TOKENS.set(tempToken, username);
+
+        // Send to registered admin email
+        const sent = await sendOTPEmail(ADMIN_CONFIG.email, otp, username);
 
         if (sent) {
-            res.json({ success: true, message: 'OTP sent to email' });
+            res.json({
+                success: true,
+                message: '2FA Code sent to email',
+                tempToken,
+                emailMask: ADMIN_CONFIG.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+            });
         } else {
-            res.status(500).json({ error: 'Failed to send email' });
+            res.status(500).json({ error: 'Failed to send verification code' });
         }
+
     } catch (error) {
-        console.error('OTP Request Error:', error);
+        console.error('Login Step 1 Error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 /**
- * POST /api/v1/auth/admin/verify-otp
- * Step 2: Verify OTP and login
+ * POST /api/v1/auth/admin/login-step2
+ * Verify OTP and issue session token
  */
-app.post('/api/v1/auth/admin/verify-otp', authRateLimit, (req, res) => {
+app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
     try {
-        const { email, otp } = req.body;
+        const { tempToken, otp } = req.body;
 
-        if (!email || !otp) {
-            return res.status(400).json({ error: 'Email and OTP required' });
+        if (!tempToken || !otp) {
+            return res.status(400).json({ error: 'Missing verification data' });
         }
 
-        const record = OTP_STORE.get(email);
+        const username = TEMP_TOKENS.get(tempToken);
+        if (!username) {
+            return res.status(400).json({ error: 'Session expired. Please login again.' });
+        }
 
+        const record = OTP_STORE.get(username);
         if (!record) {
-            return res.status(400).json({ error: 'No OTP requested for this email' });
+            return res.status(400).json({ error: 'OTP expired or invalid' });
         }
 
         if (Date.now() > record.expiresAt) {
-            OTP_STORE.delete(email);
-            return res.status(400).json({ error: 'OTP expired' });
+            OTP_STORE.delete(username);
+            TEMP_TOKENS.delete(tempToken);
+            return res.status(400).json({ error: 'Code expired' });
         }
 
         if (record.otp !== otp) {
-            return res.status(401).json({ error: 'Invalid OTP' });
+            return res.status(401).json({ error: 'Invalid code' });
         }
 
-        // Success! Clear OTP and generate session
-        OTP_STORE.delete(email);
+        // Success! Cleanup and Create Session
+        OTP_STORE.delete(username);
+        TEMP_TOKENS.delete(tempToken);
 
         const token = generateToken();
         const session = {
-            username: email.split('@')[0], // Use part before @ as username
-            email,
+            username: username,
+            email: ADMIN_CONFIG.email,
             loginAt: new Date().toISOString(),
             expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
         };
         adminSessions.set(token, session);
 
-        console.log(`Admin login success: ${email}`);
+        console.log(`Admin login success: ${username}`);
 
         res.json({
             success: true,
@@ -346,7 +370,7 @@ app.post('/api/v1/auth/admin/verify-otp', authRateLimit, (req, res) => {
         });
 
     } catch (error) {
-        console.error('OTP Verify Error:', error);
+        console.error('Login Step 2 Error:', error);
         res.status(500).json({ error: 'Login failed' });
     }
 });
