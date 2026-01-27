@@ -24,7 +24,7 @@ The HawkNine Desktop Agent is a production-ready Windows application that monito
 │              ┌────────────────────────┐                         │
 │              │   HawkNine Backend     │                         │
 │              │   (Express + Socket.IO)│                         │
-│              │   localhost:5000       │                         │
+│              │   api.hawkninegroup.com│                         │
 │              └───────────┬────────────┘                         │
 │                          │                                      │
 │                          ▼                                      │
@@ -187,7 +187,7 @@ backend/
 ```json
 {
     "server": {
-        "baseUrl": "http://localhost:5000",
+        "baseUrl": "https://api.hawkninegroup.com",
         "heartbeatInterval": 10000
     },
     "monitoring": {
@@ -211,7 +211,7 @@ backend/
 ```bash
 cd backend
 npm start
-# Runs on http://localhost:5000
+# Runs on your configured production/server URL
 ```
 
 ### 2. Start Desktop Agent

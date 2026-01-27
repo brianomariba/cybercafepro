@@ -25,10 +25,21 @@ let config;
 try {
     config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
 } catch (e) {
-    console.error('Failed to load config.json, using defaults');
+    console.error('Failed to load config.json. Falling back to hardened production defaults.');
     config = {
-        server: { baseUrl: 'http://localhost:5000', endpoints: { sync: '/api/v1/agent/sync', session: '/api/v1/agent/session' }, heartbeatInterval: 10000 },
-        monitoring: { captureScreenshots: true, screenshotInterval: 30000 }
+        server: {
+            baseUrl: 'https://api.hawkninegroup.com',
+            endpoints: {
+                sync: '/api/v1/agent/sync',
+                session: '/api/v1/agent/session',
+                auth: '/api/v1/auth/agent/login'
+            },
+            heartbeatInterval: 10000
+        },
+        monitoring: {
+            captureScreenshots: true,
+            screenshotInterval: 30000
+        }
     };
 }
 
@@ -121,7 +132,7 @@ function getLocalIP() {
 
 ipcMain.on('login-attempt', async (event, credentials) => {
     try {
-        // Call backend API for authentication
+        // Call backend API for authentication (production only – no offline/demo users)
         const authUrl = config.server.baseUrl + '/api/v1/auth/agent/login';
 
         const response = await axios.post(authUrl, {
@@ -147,40 +158,14 @@ ipcMain.on('login-attempt', async (event, credentials) => {
             });
         }
     } catch (error) {
-        // Handle specific error cases
+        // Handle specific error cases (no offline fallback)
         if (error.response) {
-            // Server responded with error status
             const message = error.response.data?.message || 'Invalid credentials';
             event.reply('login-response', { success: false, message });
-        } else if (error.code === 'ECONNREFUSED') {
-            // Server not reachable - allow offline mode with default users for development
-            console.warn('Server not reachable, checking offline mode...');
-
-            // DEFAULT OFFLINE USERS (remove in production!)
-            const offlineUsers = {
-                'user1': 'pass1234',
-                'user2': 'pass1234',
-                'admin': 'admin123'
-            };
-
-            if (offlineUsers[credentials.username] === credentials.pass) {
-                console.log('Offline login accepted for:', credentials.username);
-                await startSession(credentials.username);
-                event.reply('login-response', {
-                    success: true,
-                    user: credentials.username,
-                    offline: true
-                });
-            } else {
-                event.reply('login-response', {
-                    success: false,
-                    message: 'Invalid credentials (offline mode)'
-                });
-            }
         } else {
             event.reply('login-response', {
                 success: false,
-                message: 'Connection error: ' + error.message
+                message: 'Unable to reach authentication server. Please check network or backend status.'
             });
         }
     }

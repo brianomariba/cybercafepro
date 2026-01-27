@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, Form, Input, Select, Switch, Button, Space, Typography, Divider, InputNumber, Table, Tag, Modal, Popconfirm, message, Tabs, ColorPicker, TimePicker, Row, Col, Slider, Upload } from 'antd';
 import {
     SettingOutlined,
@@ -25,28 +25,15 @@ import {
     DatabaseOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { getServices, createService, updateService, deleteService as deleteServiceApi } from '../services/api';
 
 const { Text, Title } = Typography;
 
 // Format KSH
-const formatKSH = (amount) => `KSH ${amount.toLocaleString()}`;
-
-// Mock services data - These are editable by admin (in KSH)
-const mockServices = [
-    { id: 1, name: 'Computer Usage', category: 'core', priceType: 'hourly', price: 200, unit: 'per hour', enabled: true, description: 'Standard computer usage fee' },
-    { id: 2, name: 'Printing (B&W)', category: 'printing', priceType: 'per_page', price: 10, unit: 'per page', enabled: true, description: 'Black and white printing' },
-    { id: 3, name: 'Printing (Color)', category: 'printing', priceType: 'per_page', price: 50, unit: 'per page', enabled: true, description: 'Full color printing' },
-    { id: 4, name: 'Scanning', category: 'scanning', priceType: 'per_page', price: 20, unit: 'per page', enabled: true, description: 'Document scanning to digital' },
-    { id: 5, name: 'Photocopy (B&W)', category: 'photocopy', priceType: 'per_copy', price: 8, unit: 'per copy', enabled: true, description: 'Black and white photocopying' },
-    { id: 6, name: 'Photocopy (Color)', category: 'photocopy', priceType: 'per_copy', price: 40, unit: 'per copy', enabled: true, description: 'Color photocopying' },
-    { id: 7, name: 'Gaming (Premium)', category: 'core', priceType: 'hourly', price: 300, unit: 'per hour', enabled: true, description: 'Premium gaming PC usage' },
-    { id: 8, name: 'Fax Service', category: 'other', priceType: 'per_page', price: 100, unit: 'per page', enabled: false, description: 'Send fax documents' },
-    { id: 9, name: 'CD/DVD Burning', category: 'other', priceType: 'fixed', price: 250, unit: 'per disc', enabled: true, description: 'Burn data to CD/DVD' },
-    { id: 10, name: 'USB File Transfer', category: 'other', priceType: 'fixed', price: 50, unit: 'per transfer', enabled: true, description: 'Transfer files to USB drive' },
-];
+const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
 
 function Settings() {
-    const [services, setServices] = useState(mockServices);
+    const [services, setServices] = useState([]);
     const [editingService, setEditingService] = useState(null);
     const [serviceModalVisible, setServiceModalVisible] = useState(false);
     const [generalSettings, setGeneralSettings] = useState({
@@ -58,7 +45,25 @@ function Settings() {
         autoLogoutMinutes: 5,
         sessionWarningMinutes: 10,
     });
+    const [loadingServices, setLoadingServices] = useState(false);
     const [form] = Form.useForm();
+
+    const loadServices = async () => {
+        setLoadingServices(true);
+        try {
+            const data = await getServices();
+            setServices(data || []);
+        } catch (error) {
+            console.error('Failed to load services', error);
+            message.error('Failed to load services from server');
+        } finally {
+            setLoadingServices(false);
+        }
+    };
+
+    useEffect(() => {
+        loadServices();
+    }, []);
 
     const handleAddService = () => {
         setEditingService(null);
@@ -72,31 +77,44 @@ function Settings() {
         setServiceModalVisible(true);
     };
 
-    const handleSaveService = (values) => {
-        if (editingService) {
-            setServices(prev => prev.map(s => s.id === editingService.id ? { ...s, ...values } : s));
-            message.success('Service updated successfully');
-        } else {
-            const newService = {
-                id: services.length + 1,
-                ...values,
-                enabled: true,
-            };
-            setServices(prev => [...prev, newService]);
-            message.success('Service added successfully');
+    const handleSaveService = async (values) => {
+        try {
+            if (editingService) {
+                await updateService(editingService.id, { ...editingService, ...values });
+                message.success('Service updated successfully');
+            } else {
+                await createService(values);
+                message.success('Service added successfully');
+            }
+            setServiceModalVisible(false);
+            form.resetFields();
+            loadServices();
+        } catch (error) {
+            console.error('Failed to save service', error);
+            message.error('Failed to save service');
         }
-        setServiceModalVisible(false);
-        form.resetFields();
     };
 
-    const handleDeleteService = (service) => {
-        setServices(prev => prev.filter(s => s.id !== service.id));
-        message.success('Service deleted successfully');
+    const handleDeleteService = async (service) => {
+        try {
+            await deleteServiceApi(service.id);
+            message.success('Service deleted successfully');
+            loadServices();
+        } catch (error) {
+            console.error('Failed to delete service', error);
+            message.error('Failed to delete service');
+        }
     };
 
-    const handleToggleService = (service, enabled) => {
-        setServices(prev => prev.map(s => s.id === service.id ? { ...s, enabled } : s));
-        message.success(`${service.name} ${enabled ? 'enabled' : 'disabled'}`);
+    const handleToggleService = async (service, enabled) => {
+        try {
+            await updateService(service.id, { ...service, isActive: enabled });
+            message.success(`${service.name} ${enabled ? 'enabled' : 'disabled'}`);
+            loadServices();
+        } catch (error) {
+            console.error('Failed to update service status', error);
+            message.error('Failed to update service status');
+        }
     };
 
     const getCategoryColor = (category) => {
@@ -176,7 +194,7 @@ function Settings() {
             key: 'enabled',
             render: (enabled, record) => (
                 <Switch
-                    checked={enabled}
+                    checked={record.isActive !== false}
                     onChange={(checked) => handleToggleService(record, checked)}
                     checkedChildren="ON"
                     unCheckedChildren="OFF"
@@ -251,7 +269,7 @@ function Settings() {
                         })}
                     </Row>
 
-                    <Card>
+                    <Card loading={loadingServices}>
                         <Table
                             columns={serviceColumns}
                             dataSource={services}

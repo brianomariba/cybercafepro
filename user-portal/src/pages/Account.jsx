@@ -23,14 +23,9 @@ import {
 
 const { Text, Title } = Typography;
 
-// Usage history mock data
-const usageHistory = [
-    { date: '2024-01-07', activity: 'Computer Session', duration: '2h 30m', amount: 'KSH 500' },
-    { date: '2024-01-06', activity: 'Document Printing', pages: '15 pages', amount: 'KSH 150' },
-    { date: '2024-01-05', activity: 'Scanning Service', pages: '8 pages', amount: 'KSH 80' },
-    { date: '2024-01-04', activity: 'Computer Session', duration: '1h 15m', amount: 'KSH 250' },
-    { date: '2024-01-03', activity: 'Photocopy Service', pages: '25 pages', amount: 'KSH 125' },
-];
+// TODO: Wire to real billing / usage history API when available.
+// For now, show an empty state instead of mock data.
+const usageHistory = [];
 
 
 function Account({ user, onUpdateUser, isDarkMode }) {
@@ -426,58 +421,51 @@ function Account({ user, onUpdateUser, isDarkMode }) {
                     }
                     extra={<Button type="primary" ghost icon={<ExportOutlined />}>Export</Button>}
                 >
-                    <List
-                        dataSource={usageHistory}
-                        renderItem={(item) => (
-                            <List.Item
-                                actions={[
-                                    <Text strong style={{ color: '#00C853', fontFamily: 'JetBrains Mono' }}>
-                                        {item.amount}
-                                    </Text>
-                                ]}
-                            >
-                                <List.Item.Meta
-                                    avatar={
-                                        <div style={{
-                                            width: 40,
-                                            height: 40,
-                                            borderRadius: 10,
-                                            background: 'rgba(0, 180, 216, 0.1)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                        }}>
-                                            <ClockCircleOutlined style={{ color: '#00B4D8' }} />
-                                        </div>
-                                    }
-                                    title={<Text style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>{item.activity}</Text>}
-                                    description={
-                                        <Space>
-                                            <Text type="secondary" style={{ fontSize: 12 }}>{item.date}</Text>
-                                            <Text type="secondary" style={{ fontSize: 12 }}>
-                                                {item.duration || item.pages}
-                                            </Text>
-                                        </Space>
-                                    }
-                                />
-                            </List.Item>
-                        )}
-                    />
-
-                    <div style={{
-                        marginTop: 20,
-                        padding: 16,
-                        background: 'rgba(0, 180, 216, 0.05)',
-                        borderRadius: 12,
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                    }}>
-                        <Text type="secondary">Total This Month</Text>
-                        <Text strong style={{ fontSize: 20, color: '#00C853', fontFamily: 'JetBrains Mono' }}>
-                            KSH 1,105
-                        </Text>
-                    </div>
+                    {usageHistory.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: 32 }}>
+                            <Text type="secondary">
+                                Your usage history will appear here once billing and session data are connected.
+                            </Text>
+                        </div>
+                    ) : (
+                        <List
+                            dataSource={usageHistory}
+                            renderItem={(item) => (
+                                <List.Item
+                                    actions={[
+                                        <Text strong style={{ color: '#00C853', fontFamily: 'JetBrains Mono' }}>
+                                            {item.amount}
+                                        </Text>
+                                    ]}
+                                >
+                                    <List.Item.Meta
+                                        avatar={
+                                            <div style={{
+                                                width: 40,
+                                                height: 40,
+                                                borderRadius: 10,
+                                                background: 'rgba(0, 180, 216, 0.1)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                            }}>
+                                                <ClockCircleOutlined style={{ color: '#00B4D8' }} />
+                                            </div>
+                                        }
+                                        title={<Text style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>{item.activity}</Text>}
+                                        description={
+                                            <Space>
+                                                <Text type="secondary" style={{ fontSize: 12 }}>{item.date}</Text>
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    {item.duration || item.pages}
+                                                </Text>
+                                            </Space>
+                                        }
+                                    />
+                                </List.Item>
+                            )}
+                        />
+                    )}
                 </Card>
             ),
         },

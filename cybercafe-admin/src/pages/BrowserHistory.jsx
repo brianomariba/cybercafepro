@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Row, Col, Tabs, Timeline, Progress, Modal, DatePicker, message } from 'antd';
 import {
     GlobalOutlined,
@@ -21,66 +21,48 @@ import {
     FireOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { getBrowserHistory } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
 const { RangePicker } = DatePicker;
 
-// Mock browser history data from all computers
-const mockBrowserHistory = [
-    { id: 1, computer: 'PC-01', user: 'John Doe', url: 'https://www.google.com', title: 'Google Search', category: 'search', timestamp: '2024-12-13 10:30:15', duration: '2m 30s', blocked: false },
-    { id: 2, computer: 'PC-01', user: 'John Doe', url: 'https://www.youtube.com/watch?v=abc123', title: 'YouTube - Programming Tutorial', category: 'video', timestamp: '2024-12-13 10:33:00', duration: '15m 45s', blocked: false },
-    { id: 3, computer: 'PC-03', user: 'Jane Smith', url: 'https://www.facebook.com', title: 'Facebook', category: 'social', timestamp: '2024-12-13 11:00:30', duration: '8m 20s', blocked: false },
-    { id: 4, computer: 'PC-05', user: 'Mike Johnson', url: 'https://stackoverflow.com/questions/12345', title: 'Stack Overflow - How to...', category: 'education', timestamp: '2024-12-13 09:20:00', duration: '12m 10s', blocked: false },
-    { id: 5, computer: 'PC-02', user: 'Sarah Wilson', url: 'https://www.linkedin.com', title: 'LinkedIn - Professional Network', category: 'social', timestamp: '2024-12-13 11:45:00', duration: '5m 30s', blocked: false },
-    { id: 6, computer: 'PC-06', user: 'Tom Brown', url: 'https://gambling-site.com', title: 'Online Casino', category: 'blocked', timestamp: '2024-12-13 08:45:00', duration: '0s', blocked: true },
-    { id: 7, computer: 'PC-01', user: 'John Doe', url: 'https://github.com/user/repo', title: 'GitHub - Project Repository', category: 'development', timestamp: '2024-12-13 10:50:00', duration: '25m 00s', blocked: false },
-    { id: 8, computer: 'PC-08', user: 'Emma Davis', url: 'https://www.netflix.com', title: 'Netflix - Watch Movies', category: 'entertainment', timestamp: '2024-12-13 12:10:00', duration: '45m 00s', blocked: false },
-    { id: 9, computer: 'PC-03', user: 'Jane Smith', url: 'https://mail.google.com', title: 'Gmail - Inbox', category: 'productivity', timestamp: '2024-12-13 11:15:00', duration: '10m 00s', blocked: false },
-    { id: 10, computer: 'PC-05', user: 'Mike Johnson', url: 'https://www.wikipedia.org', title: 'Wikipedia', category: 'education', timestamp: '2024-12-13 09:40:00', duration: '7m 30s', blocked: false },
-    { id: 11, computer: 'PC-06', user: 'Tom Brown', url: 'https://www.spotify.com', title: 'Spotify - Music Streaming', category: 'entertainment', timestamp: '2024-12-13 08:50:00', duration: '120m 00s', blocked: false },
-    { id: 12, computer: 'PC-04', user: 'Guest', url: 'https://adult-content.com', title: 'Adult Content Site', category: 'blocked', timestamp: '2024-12-13 12:30:00', duration: '0s', blocked: true },
-    { id: 13, computer: 'PC-08', user: 'Emma Davis', url: 'https://www.amazon.com', title: 'Amazon - Shopping', category: 'shopping', timestamp: '2024-12-13 12:00:00', duration: '8m 45s', blocked: false },
-    { id: 14, computer: 'PC-02', user: 'Sarah Wilson', url: 'https://docs.google.com', title: 'Google Docs - Document', category: 'productivity', timestamp: '2024-12-13 11:50:00', duration: '35m 00s', blocked: false },
-    { id: 15, computer: 'PC-01', user: 'John Doe', url: 'https://www.twitter.com', title: 'Twitter / X', category: 'social', timestamp: '2024-12-13 11:20:00', duration: '12m 00s', blocked: false },
-];
-
-// Website categories summary
-const categoryStats = [
-    { category: 'Social Media', count: 45, duration: '3h 20m', color: '#ff006e', icon: <UserOutlined /> },
-    { category: 'Video/Streaming', count: 32, duration: '5h 45m', color: '#ff3b5c', icon: <FireOutlined /> },
-    { category: 'Education', count: 28, duration: '2h 15m', color: '#00ff88', icon: <CheckCircleOutlined /> },
-    { category: 'Productivity', count: 25, duration: '4h 30m', color: '#00d4ff', icon: <SafetyOutlined /> },
-    { category: 'Entertainment', count: 22, duration: '4h 00m', color: '#7b2cbf', icon: <ChromeOutlined /> },
-    { category: 'Shopping', count: 15, duration: '1h 20m', color: '#ff9500', icon: <GlobalOutlined /> },
-    { category: 'Blocked Attempts', count: 8, duration: '0m', color: '#ff3b5c', icon: <BlockOutlined /> },
-];
-
-// Top visited sites
-const topSites = [
-    { site: 'youtube.com', visits: 125, totalTime: '8h 30m', icon: '🎬' },
-    { site: 'google.com', visits: 98, totalTime: '1h 45m', icon: '🔍' },
-    { site: 'facebook.com', visits: 67, totalTime: '2h 20m', icon: '👥' },
-    { site: 'github.com', visits: 45, totalTime: '3h 15m', icon: '💻' },
-    { site: 'stackoverflow.com', visits: 38, totalTime: '2h 00m', icon: '📚' },
-];
-
-// Real-time activity (simulated)
-const realtimeActivity = [
-    { computer: 'PC-01', user: 'John Doe', site: 'github.com', status: 'active' },
-    { computer: 'PC-03', user: 'Jane Smith', site: 'linkedin.com', status: 'active' },
-    { computer: 'PC-05', user: 'Mike Johnson', site: 'stackoverflow.com', status: 'active' },
-    { computer: 'PC-06', user: 'Tom Brown', site: 'spotify.com', status: 'idle' },
-    { computer: 'PC-08', user: 'Emma Davis', site: 'netflix.com', status: 'active' },
-];
-
 function BrowserHistory() {
-    const [history, setHistory] = useState(mockBrowserHistory);
+    const [history, setHistory] = useState([]);
     const [selectedEntry, setSelectedEntry] = useState(null);
     const [detailsVisible, setDetailsVisible] = useState(false);
     const [searchText, setSearchText] = useState('');
     const [filterCategory, setFilterCategory] = useState('all');
     const [filterComputer, setFilterComputer] = useState('all');
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const loadHistory = async () => {
+            setLoading(true);
+            try {
+                const data = await getBrowserHistory({ limit: 200 });
+                // Map backend records to UI-friendly shape
+                const mapped = data.map((item, index) => ({
+                    id: item.id || index,
+                    computer: item.hostname || item.clientId || 'Unknown',
+                    user: item.sessionUser || item.user || 'Unknown',
+                    url: item.url,
+                    title: item.title || item.url,
+                    category: item.category || 'other',
+                    timestamp: item.timestamp || item.receivedAt || new Date().toISOString(),
+                    duration: item.duration || null,
+                    blocked: item.blocked || false,
+                }));
+                setHistory(mapped);
+            } catch (e) {
+                console.error('Failed to load browser history', e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadHistory();
+    }, []);
 
     const getCategoryColor = (category) => {
         switch (category) {
@@ -300,7 +282,7 @@ function BrowserHistory() {
                             <CheckCircleOutlined />
                         </div>
                     </div>
-                    <div className="stat-value">5</div>
+                    <div className="stat-value">{new Set(history.map(h => h.computer)).size}</div>
                     <div className="stat-label">Active Browsers</div>
                 </div>
 
@@ -320,8 +302,8 @@ function BrowserHistory() {
                             <ClockCircleOutlined />
                         </div>
                     </div>
-                    <div className="stat-value">24h</div>
-                    <div className="stat-label">Total Browse Time</div>
+                    <div className="stat-value">-</div>
+                    <div className="stat-label">Total Browse Time (coming soon)</div>
                 </div>
             </div>
 
@@ -376,139 +358,27 @@ function BrowserHistory() {
                             columns={columns}
                             dataSource={filteredHistory}
                             rowKey="id"
+                            loading={loading}
                             pagination={{ pageSize: 8 }}
                             size="middle"
                         />
                     </Card>
                 </Col>
 
-                {/* Sidebar */}
+                {/* Sidebar reserved for future real-time analytics */}
                 <Col xs={24} lg={8}>
-                    {/* Real-time Activity */}
-                    <Card
-                        title={
-                            <Space>
-                                <Badge status="processing" />
-                                <span>Live Activity</span>
-                            </Space>
-                        }
-                    >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                            {realtimeActivity.map((activity, index) => (
-                                <div
-                                    key={index}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 12,
-                                        padding: 12,
-                                        background: 'rgba(255,255,255,0.03)',
-                                        borderRadius: 8,
-                                        borderLeft: `3px solid ${activity.status === 'active' ? '#00ff88' : '#ff9500'}`
-                                    }}
-                                >
-                                    <div style={{
-                                        width: 32,
-                                        height: 32,
-                                        borderRadius: 6,
-                                        background: 'rgba(0, 212, 255, 0.15)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        color: '#00d4ff',
-                                        fontSize: 14
-                                    }}>
-                                        <DesktopOutlined />
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                        <Text strong style={{ fontSize: 13 }}>{activity.computer}</Text>
-                                        <br />
-                                        <Text type="secondary" style={{ fontSize: 11 }}>{activity.site}</Text>
-                                    </div>
-                                    <Badge
-                                        status={activity.status === 'active' ? 'success' : 'warning'}
-                                        text={<Text type="secondary" style={{ fontSize: 11 }}>{activity.status}</Text>}
-                                    />
-                                </div>
-                            ))}
-                        </div>
-                    </Card>
-
-                    {/* Top Sites */}
-                    <Card
-                        title={
-                            <Space>
-                                <FireOutlined style={{ color: '#ff9500' }} />
-                                <span>Top Sites Today</span>
-                            </Space>
-                        }
-                        style={{ marginTop: 24 }}
-                    >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                            {topSites.map((site, index) => (
-                                <div
-                                    key={site.site}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 12,
-                                        padding: 8
-                                    }}
-                                >
-                                    <div style={{
-                                        width: 28,
-                                        height: 28,
-                                        borderRadius: '50%',
-                                        background: index === 0 ? '#ff9500' : index === 1 ? '#00d4ff' : 'rgba(255,255,255,0.1)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        fontSize: 12
-                                    }}>
-                                        {site.icon}
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                        <Text strong style={{ fontSize: 13 }}>{site.site}</Text>
-                                        <br />
-                                        <Text type="secondary" style={{ fontSize: 11 }}>{site.visits} visits</Text>
-                                    </div>
-                                    <Text style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: '#7b2cbf' }}>
-                                        {site.totalTime}
-                                    </Text>
-                                </div>
-                            ))}
-                        </div>
-                    </Card>
-
-                    {/* Category Breakdown */}
                     <Card
                         title={
                             <Space>
                                 <SafetyOutlined style={{ color: '#00ff88' }} />
-                                <span>Categories</span>
+                                <span>Insights</span>
                             </Space>
                         }
-                        style={{ marginTop: 24 }}
                     >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                            {categoryStats.slice(0, 5).map(cat => (
-                                <div key={cat.category}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                        <Space>
-                                            <span style={{ color: cat.color }}>{cat.icon}</span>
-                                            <Text style={{ fontSize: 13 }}>{cat.category}</Text>
-                                        </Space>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>{cat.count} visits</Text>
-                                    </div>
-                                    <Progress
-                                        percent={Math.round((cat.count / 45) * 100)}
-                                        size="small"
-                                        showInfo={false}
-                                        strokeColor={cat.color}
-                                    />
-                                </div>
-                            ))}
-                        </div>
+                        <Text type="secondary">
+                            Insights and live activity will appear here once enough real browsing data has been collected
+                            from agents.
+                        </Text>
                     </Card>
                 </Col>
             </Row>

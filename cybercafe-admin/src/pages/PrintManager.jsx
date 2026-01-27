@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Progress, Tabs, Statistic, Row, Col, DatePicker, Modal, message, Avatar } from 'antd';
 import {
     PrinterOutlined,
@@ -22,144 +22,64 @@ import {
     FilterOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { getPrintJobs } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
 const { RangePicker } = DatePicker;
 
 // Format KSH
-const formatKSH = (amount) => `KSH ${amount.toLocaleString()}`;
-
-// Mock print jobs data (in KSH)
-const mockPrintJobs = [
-    {
-        id: 1,
-        documentName: 'Annual Report 2024.pdf',
-        documentType: 'pdf',
-        computer: 'PC-01',
-        user: 'John Doe',
-        pages: 25,
-        copies: 2,
-        colorType: 'bw',
-        pricePerPage: 10,
-        totalPrice: 500,
-        status: 'completed',
-        timestamp: '2024-12-13 10:30:00',
-    },
-    {
-        id: 2,
-        documentName: 'Marketing Brochure.docx',
-        documentType: 'docx',
-        computer: 'PC-03',
-        user: 'Jane Smith',
-        pages: 8,
-        copies: 5,
-        colorType: 'color',
-        pricePerPage: 50,
-        totalPrice: 2000,
-        status: 'printing',
-        timestamp: '2024-12-13 10:45:00',
-    },
-    {
-        id: 3,
-        documentName: 'Invoice_December.xlsx',
-        documentType: 'xlsx',
-        computer: 'PC-05',
-        user: 'Mike Johnson',
-        pages: 3,
-        copies: 1,
-        colorType: 'bw',
-        pricePerPage: 10,
-        totalPrice: 30,
-        status: 'completed',
-        timestamp: '2024-12-13 11:00:00',
-    },
-    {
-        id: 4,
-        documentName: 'Presentation_Q4.pptx',
-        documentType: 'pptx',
-        computer: 'PC-02',
-        user: 'Sarah Wilson',
-        pages: 15,
-        copies: 3,
-        colorType: 'color',
-        pricePerPage: 50,
-        totalPrice: 2250,
-        status: 'pending',
-        timestamp: '2024-12-13 11:15:00',
-    },
-    {
-        id: 5,
-        documentName: 'Photo_Vacation.jpg',
-        documentType: 'image',
-        computer: 'PC-06',
-        user: 'Tom Brown',
-        pages: 1,
-        copies: 4,
-        colorType: 'color',
-        pricePerPage: 100,
-        totalPrice: 400,
-        status: 'completed',
-        timestamp: '2024-12-13 11:30:00',
-    },
-    {
-        id: 6,
-        documentName: 'Contract_Agreement.pdf',
-        documentType: 'pdf',
-        computer: 'PC-08',
-        user: 'Emma Davis',
-        pages: 12,
-        copies: 2,
-        colorType: 'bw',
-        pricePerPage: 10,
-        totalPrice: 240,
-        status: 'completed',
-        timestamp: '2024-12-13 11:45:00',
-    },
-    {
-        id: 7,
-        documentName: 'Thesis_Final_Draft.pdf',
-        documentType: 'pdf',
-        computer: 'PC-01',
-        user: 'John Doe',
-        pages: 85,
-        copies: 1,
-        colorType: 'bw',
-        pricePerPage: 10,
-        totalPrice: 850,
-        status: 'completed',
-        timestamp: '2024-12-13 12:00:00',
-    },
-    {
-        id: 8,
-        documentName: 'ID_Photo.jpg',
-        documentType: 'image',
-        computer: 'PC-04',
-        user: 'Guest User',
-        pages: 1,
-        copies: 8,
-        colorType: 'color',
-        pricePerPage: 75,
-        totalPrice: 600,
-        status: 'failed',
-        timestamp: '2024-12-13 12:15:00',
-    },
-];
-
-// Printer status
-const printers = [
-    { id: 1, name: 'HP LaserJet Pro', status: 'online', paperLevel: 75, tonerLevel: 60, type: 'bw' },
-    { id: 2, name: 'Canon PIXMA G7000', status: 'online', paperLevel: 45, tonerLevel: 80, type: 'color' },
-    { id: 3, name: 'Epson EcoTank L3250', status: 'offline', paperLevel: 20, tonerLevel: 30, type: 'color' },
-];
+const formatKSH = (amount) => `KSH ${Number(amount || 0).toLocaleString()}`;
 
 function PrintManager() {
-    const [printJobs, setPrintJobs] = useState(mockPrintJobs);
+    const [printJobs, setPrintJobs] = useState([]);
     const [selectedJob, setSelectedJob] = useState(null);
     const [detailsVisible, setDetailsVisible] = useState(false);
     const [filterStatus, setFilterStatus] = useState('all');
     const [filterColorType, setFilterColorType] = useState('all');
     const [searchText, setSearchText] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [totals, setTotals] = useState({
+        totalJobs: 0,
+        bwPages: 0,
+        colorPages: 0,
+        bwRevenue: 0,
+        colorRevenue: 0,
+        totalRevenue: 0,
+    });
+
+    useEffect(() => {
+        const loadPrintJobs = async () => {
+            setLoading(true);
+            try {
+                const data = await getPrintJobs({ limit: 200 });
+                const jobs = data.jobs || [];
+                setPrintJobs(jobs.map((job, index) => ({
+                    id: job.id || index,
+                    documentName: job.document || job.name || 'Document',
+                    documentType: job.documentType || 'pdf',
+                    computer: job.hostname || job.clientId || 'Unknown',
+                    user: job.sessionUser || job.user || 'Unknown',
+                    pages: job.totalPages || job.pages || 1,
+                    copies: job.copies || 1,
+                    colorType: job.printType || 'bw',
+                    pricePerPage: job.pricePerPage || 0,
+                    totalPrice: job.totalPrice || job.amount || 0,
+                    status: job.status || 'completed',
+                    timestamp: job.timestamp || job.receivedAt || new Date().toISOString(),
+                })));
+                if (data.totals) {
+                    setTotals(data.totals);
+                }
+            } catch (e) {
+                console.error('Failed to load print jobs', e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadPrintJobs();
+    }, []);
 
     const getDocumentIcon = (type) => {
         switch (type) {
@@ -197,13 +117,13 @@ function PrintManager() {
     });
 
     const stats = {
-        totalJobs: printJobs.length,
+        totalJobs: totals.totalJobs || printJobs.length,
         completed: printJobs.filter(j => j.status === 'completed').length,
         pending: printJobs.filter(j => j.status === 'pending' || j.status === 'printing').length,
-        totalPages: printJobs.reduce((sum, j) => sum + (j.pages * j.copies), 0),
-        bwPages: printJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.pages * j.copies), 0),
-        colorPages: printJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.pages * j.copies), 0),
-        totalRevenue: printJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
+        totalPages: totals.totalPages || printJobs.reduce((sum, j) => sum + (j.pages * j.copies), 0),
+        bwPages: totals.bwPages || printJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.pages * j.copies), 0),
+        colorPages: totals.colorPages || printJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.pages * j.copies), 0),
+        totalRevenue: totals.totalRevenue || printJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
     };
 
     const columns = [
@@ -381,62 +301,8 @@ function PrintManager() {
             </div>
 
             <Row gutter={[24, 24]}>
-                {/* Printer Status */}
+                {/* Quick Stats */}
                 <Col xs={24} lg={8}>
-                    <Card
-                        title={
-                            <Space>
-                                <PrinterOutlined style={{ color: '#7b2cbf' }} />
-                                <span>Printer Status</span>
-                            </Space>
-                        }
-                    >
-                        {printers.map(printer => (
-                            <div
-                                key={printer.id}
-                                style={{
-                                    padding: 16,
-                                    background: 'rgba(255,255,255,0.03)',
-                                    borderRadius: 12,
-                                    marginBottom: 12,
-                                    border: `1px solid ${printer.status === 'online' ? 'rgba(0, 255, 136, 0.2)' : 'rgba(255, 59, 92, 0.2)'}`
-                                }}
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                                    <div>
-                                        <Text strong style={{ display: 'block' }}>{printer.name}</Text>
-                                        <Tag color={printer.type === 'color' ? 'magenta' : 'default'} style={{ marginTop: 4 }}>
-                                            {printer.type === 'color' ? 'Color' : 'B&W'}
-                                        </Tag>
-                                    </div>
-                                    <Badge
-                                        status={printer.status === 'online' ? 'success' : 'error'}
-                                        text={<Text type="secondary">{printer.status}</Text>}
-                                    />
-                                </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                                    <div>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>Paper</Text>
-                                        <Progress
-                                            percent={printer.paperLevel}
-                                            size="small"
-                                            strokeColor={printer.paperLevel < 30 ? '#ff3b5c' : '#00d4ff'}
-                                        />
-                                    </div>
-                                    <div>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>Toner/Ink</Text>
-                                        <Progress
-                                            percent={printer.tonerLevel}
-                                            size="small"
-                                            strokeColor={printer.tonerLevel < 30 ? '#ff3b5c' : '#7b2cbf'}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </Card>
-
-                    {/* Quick Stats */}
                     <Card
                         title={
                             <Space>
@@ -509,6 +375,7 @@ function PrintManager() {
                             columns={columns}
                             dataSource={filteredJobs}
                             rowKey="id"
+                                loading={loading}
                             pagination={{ pageSize: 6 }}
                             size="middle"
                         />
