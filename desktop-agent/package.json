@@ -1,26 +1,45 @@
 {
   "name": "desktop-agent",
   "version": "1.0.0",
-  "description": "",
+  "description": "Desktop agent for HawkNine Cybercafe Management System",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "build": "electron-builder",
+    "postinstall": "electron-builder install-app-deps",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "build": {
+    "appId": "com.hawkninegroup.agent",
+    "productName": "HawkNine Agent",
+    "win": {
+      "target": "nsis",
+      "icon": "src/logo.jpg"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HawkNine Agent"
+    }
+  },
   "keywords": [],
-  "author": "",
+  "author": "HawkNine Group",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "active-win": "^8.2.1",
     "axios": "^1.13.2",
-    "better-sqlite3": "^12.5.0",
     "chokidar": "^5.0.0",
     "dotenv": "^17.2.3",
-    "electron": "^39.2.7",
     "electron-store": "^11.0.2",
     "screenshot-desktop": "^1.15.3",
     "systeminformation": "^5.30.1",
     "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
   }
 }

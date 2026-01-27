@@ -5,7 +5,7 @@
         "version": "1.0.0"
     },
     "server": {
-        "baseUrl": "http://localhost:5000",
+        "baseUrl": "https://api.hawkninegroup.com",
         "endpoints": {
             "sync": "/api/v1/agent/sync",
             "session": "/api/v1/agent/session",

@@ -1,48 +1,78 @@
 import { useState } from 'react';
-import { Form, Input, Button, Card, Typography, Space, message, Checkbox, Alert } from 'antd';
-import { UserOutlined, LockOutlined, ThunderboltOutlined, InfoCircleOutlined } from '@ant-design/icons';
-import { adminLogin } from '../services/api';
+import { Form, Input, Button, Card, Typography, Alert, Steps, Result } from 'antd';
+import { MailOutlined, SafetyCertificateOutlined, ArrowLeftOutlined, CheckCircleFilled } from '@ant-design/icons';
+import { requestAdminOtp, verifyAdminOtp } from '../services/api';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
 function Login({ onLogin }) {
+    const [step, setStep] = useState(0); // 0: Email, 1: OTP
+    const [email, setEmail] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [successMsg, setSuccessMsg] = useState('');
 
-    const handleSubmit = async (values) => {
+    const handleRequestOtp = async (values) => {
+        setLoading(true);
+        setError('');
+        setSuccessMsg('');
+
+        try {
+            const response = await requestAdminOtp(values.email);
+            if (response.success) {
+                setEmail(values.email);
+                setStep(1);
+                setSuccessMsg('Verification code sent to your email.');
+            } else {
+                setError('Failed to send verification code.');
+            }
+        } catch (err) {
+            console.error('OTP Request Error:', err);
+            if (err.response?.data?.error) {
+                setError(err.response.data.error);
+            } else {
+                setError('Unable to send code. Please try again.');
+            }
+        }
+        setLoading(false);
+    };
+
+    const handleVerifyOtp = async (values) => {
         setLoading(true);
         setError('');
 
         try {
-            // Call real authentication API
-            const response = await adminLogin(values.username, values.password);
-
+            const response = await verifyAdminOtp(email, values.otp);
             if (response.success) {
                 const userData = {
-                    name: response.user?.username || values.username,
-                    role: 'Admin',
-                    email: `${values.username}@hawknine.co.ke`,
-                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${values.username}`,
+                    name: response.user?.username || email.split('@')[0],
+                    role: response.user?.role || 'Admin',
+                    email: response.user?.email || email,
+                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${response.user?.username || email}`,
                     token: response.token
                 };
 
-                message.success('Login successful! Welcome to HawkNine');
-                onLogin(userData);
-            } else {
-                setError(response.error || 'Login failed');
+                // Show success animation briefly
+                setSuccessMsg('Login successful redirecting...');
+                setTimeout(() => {
+                    onLogin(userData);
+                }, 800);
             }
         } catch (err) {
-            console.error('Login error:', err);
+            console.error('OTP Verify Error:', err);
             if (err.response?.data?.error) {
                 setError(err.response.data.error);
-            } else if (err.code === 'ECONNREFUSED' || err.message.includes('Network')) {
-                setError('Cannot connect to server. Please check if the backend is running.');
             } else {
-                setError('Login failed. Please try again.');
+                setError('Invalid code. Please try again.');
             }
         }
-
         setLoading(false);
+    };
+
+    const handleBack = () => {
+        setStep(0);
+        setError('');
+        setSuccessMsg('');
     };
 
     return (
@@ -55,15 +85,16 @@ function Login({ onLogin }) {
             </div>
 
             {/* Login Card */}
-            <Card className="login-card" bordered={false}>
+            <Card className="login-card" bordered={false} style={{ maxWidth: 420, margin: '0 auto' }}>
                 {/* Logo */}
-                <div className="login-logo">
+                <div className="login-logo" style={{ marginBottom: 32 }}>
                     <div className="login-logo-icon" style={{
                         background: 'linear-gradient(135deg, #00B4D8, #023047)',
                         borderRadius: 16,
                         padding: 16,
                         display: 'inline-flex',
-                        marginBottom: 16
+                        marginBottom: 16,
+                        boxShadow: '0 10px 25px rgba(0, 180, 216, 0.3)'
                     }}>
                         <img
                             src="/logo.png"
@@ -72,104 +103,180 @@ function Login({ onLogin }) {
                         />
                     </div>
                     <Title level={2} className="login-title" style={{
+                        marginTop: 0,
+                        marginBottom: 4,
                         background: 'linear-gradient(135deg, #00B4D8, #FFB703)',
                         WebkitBackgroundClip: 'text',
                         WebkitTextFillColor: 'transparent',
+                        fontWeight: 700
                     }}>
                         HawkNine
                     </Title>
-                    <Text type="secondary">Cybercafe Admin Dashboard</Text>
+                    <Text type="secondary">Secure Admin Access</Text>
                 </div>
 
-                {/* Error Alert */}
+                {/* Progress Steps (Subtle) */}
+                <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'center', gap: 8 }}>
+                    <div style={{ height: 4, width: 24, borderRadius: 2, background: step >= 0 ? '#00B4D8' : '#334155' }} />
+                    <div style={{ height: 4, width: 24, borderRadius: 2, background: step >= 1 ? '#00B4D8' : '#334155' }} />
+                </div>
+
+                {/* Messages */}
                 {error && (
                     <Alert
                         message={error}
                         type="error"
                         showIcon
-                        style={{ marginTop: 16, marginBottom: 8 }}
+                        style={{ marginBottom: 24, borderRadius: 8 }}
                         closable
                         onClose={() => setError('')}
                     />
                 )}
 
-                {/* Login Form */}
-                <Form
-                    name="login"
-                    onFinish={handleSubmit}
-                    layout="vertical"
-                    size="large"
-                    style={{ marginTop: error ? 16 : 32 }}
-                >
-                    <Form.Item
-                        name="username"
-                        rules={[{ required: true, message: 'Please enter your username' }]}
-                    >
-                        <Input
-                            prefix={<UserOutlined style={{ color: '#64748B' }} />}
-                            placeholder="Username"
-                            className="login-input"
-                        />
-                    </Form.Item>
+                {successMsg && (
+                    <Alert
+                        message={successMsg}
+                        type="success"
+                        showIcon
+                        style={{ marginBottom: 24, borderRadius: 8 }}
+                    />
+                )}
 
-                    <Form.Item
-                        name="password"
-                        rules={[{ required: true, message: 'Please enter your password' }]}
+                {/* Step 1: Email Input */}
+                {step === 0 && (
+                    <Form
+                        name="email-login"
+                        onFinish={handleRequestOtp}
+                        layout="vertical"
+                        size="large"
+                        initialValues={{ email: '' }}
                     >
-                        <Input.Password
-                            prefix={<LockOutlined style={{ color: '#64748B' }} />}
-                            placeholder="Password"
-                            className="login-input"
-                        />
-                    </Form.Item>
+                        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Welcome Back</Title>
+                            <Text type="secondary">Enter your specialized admin email to continue</Text>
+                        </div>
 
-                    <Form.Item>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Checkbox style={{ color: '#94A3B8' }}>Remember me</Checkbox>
-                            <Button type="link" style={{ padding: 0, color: '#00B4D8' }}>
-                                Forgot password?
+                        <Form.Item
+                            name="email"
+                            rules={[
+                                { required: true, message: 'Please enter your email' },
+                                { type: 'email', message: 'Please enter a valid email' }
+                            ]}
+                        >
+                            <Input
+                                prefix={<MailOutlined style={{ color: '#64748B' }} />}
+                                placeholder="admin@hawknine.co.ke"
+                                className="login-input"
+                                autoFocus
+                            />
+                        </Form.Item>
+
+                        <Form.Item>
+                            <Button
+                                type="primary"
+                                htmlType="submit"
+                                block
+                                loading={loading}
+                                className="login-button"
+                                icon={<SafetyCertificateOutlined />}
+                                style={{
+                                    background: 'linear-gradient(135deg, #00B4D8, #023047)',
+                                    border: 'none',
+                                    height: 48,
+                                    fontSize: 16,
+                                    fontWeight: 600,
+                                    marginTop: 8
+                                }}
+                            >
+                                Send Verification Code
+                            </Button>
+                        </Form.Item>
+                    </Form>
+                )}
+
+                {/* Step 2: OTP Input */}
+                {step === 1 && (
+                    <Form
+                        name="otp-verify"
+                        onFinish={handleVerifyOtp}
+                        layout="vertical"
+                        size="large"
+                    >
+                        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                            <div style={{
+                                background: 'rgba(0, 180, 216, 0.1)',
+                                width: 64,
+                                height: 64,
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                margin: '0 auto 16px'
+                            }}>
+                                <MailOutlined style={{ fontSize: 28, color: '#00B4D8' }} />
+                            </div>
+                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Check your inbox</Title>
+                            <Text type="secondary">We sent a 6-digit code to <br /><span style={{ color: '#E2E8F0' }}>{email}</span></Text>
+                        </div>
+
+                        <Form.Item
+                            name="otp"
+                            rules={[
+                                { required: true, message: 'Please enter the verification code' },
+                                { len: 6, message: 'Code must be 6 digits' }
+                            ]}
+                        >
+                            <Input
+                                placeholder="123456"
+                                className="login-input"
+                                style={{
+                                    textAlign: 'center',
+                                    letterSpacing: 8,
+                                    fontSize: 24,
+                                    fontWeight: 'bold',
+                                    height: 56
+                                }}
+                                maxLength={6}
+                                autoFocus
+                            />
+                        </Form.Item>
+
+                        <Form.Item>
+                            <Button
+                                type="primary"
+                                htmlType="submit"
+                                block
+                                loading={loading}
+                                className="login-button"
+                                style={{
+                                    background: 'linear-gradient(135deg, #00B4D8, #023047)',
+                                    border: 'none',
+                                    height: 48,
+                                    fontSize: 16,
+                                    fontWeight: 600,
+                                }}
+                            >
+                                Verify & Sign In
+                            </Button>
+                        </Form.Item>
+
+                        <div style={{ textAlign: 'center', marginTop: 16 }}>
+                            <Button
+                                type="link"
+                                icon={<ArrowLeftOutlined />}
+                                onClick={handleBack}
+                                style={{ color: '#94A3B8' }}
+                            >
+                                Change Email
                             </Button>
                         </div>
-                    </Form.Item>
-
-                    <Form.Item>
-                        <Button
-                            type="primary"
-                            htmlType="submit"
-                            block
-                            loading={loading}
-                            className="login-button"
-                            style={{
-                                background: 'linear-gradient(135deg, #00B4D8, #023047)',
-                                border: 'none',
-                                height: 48,
-                                fontSize: 16,
-                                fontWeight: 600,
-                            }}
-                        >
-                            Sign In
-                        </Button>
-                    </Form.Item>
-                </Form>
-
-                {/* Default Credentials Info */}
-                <div className="demo-credentials" style={{
-                    background: 'rgba(255, 183, 3, 0.1)',
-                    border: '1px solid rgba(255, 183, 3, 0.3)',
-                    borderRadius: 8,
-                    padding: 12,
-                    marginTop: 16,
-                }}>
-                    <InfoCircleOutlined style={{ color: '#FFB703' }} />
-                    <Text type="secondary" style={{ marginLeft: 8 }}>
-                        Default: <code style={{ color: '#00B4D8' }}>admin</code> / <code style={{ color: '#00B4D8' }}>admin123</code>
-                    </Text>
-                </div>
+                    </Form>
+                )}
 
                 {/* Footer */}
-                <div className="login-footer" style={{ marginTop: 24, textAlign: 'center' }}>
+                <div className="login-footer" style={{ marginTop: 32, textAlign: 'center' }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                        © 2024 HawkNine. All rights reserved.
+                        © 2024 HawkNine. Secure System for Cybercafe Management.
                     </Text>
                 </div>
             </Card>

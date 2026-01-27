@@ -48,8 +48,13 @@ api.interceptors.response.use(
 
 // ==================== AUTHENTICATION ====================
 
-export const adminLogin = async (username, password) => {
-    const response = await api.post('/auth/admin/login', { username, password });
+export const requestAdminOtp = async (email) => {
+    const response = await api.post('/auth/admin/request-otp', { email });
+    return response.data;
+};
+
+export const verifyAdminOtp = async (email, otp) => {
+    const response = await api.post('/auth/admin/verify-otp', { email, otp });
     if (response.data.token) {
         setStoredToken(response.data.token);
     }
