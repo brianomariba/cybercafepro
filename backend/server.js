@@ -230,7 +230,7 @@ app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 // Stricter rate limit for auth endpoints
 const authRateLimit = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 30,
     message: 'Too many login attempts, please try again later'
 });
 
@@ -406,7 +406,7 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
             return res.status(400).json({ error: 'Code expired' });
         }
 
-        if (record.otp !== otp) {
+        if (String(record.otp).trim() !== String(otp).trim()) {
             console.log(`[AUTH DEBUG] Invalid OTP for ${username}. Expected: ${record.otp}, Got: ${otp}`);
             return res.status(401).json({ error: 'Invalid code' });
         }
@@ -546,13 +546,13 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
         USER_OTP_STORE.set(username, { otp, expiresAt });
         const tempToken = generateToken();
         USER_TEMP_TOKENS.set(tempToken, username);
-        const emailSent = await sendOTPEmail(user.email, otp, username);
+        const emailSent = await sendOTPEmail(foundUser.email, otp, username);
         if (emailSent) {
             res.json({
                 success: true,
                 message: '2FA Code sent to email',
                 tempToken,
-                emailMask: user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+                emailMask: foundUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
             });
         } else {
             res.status(500).json({ error: 'Failed to send verification code' });
@@ -587,7 +587,8 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
             USER_TEMP_TOKENS.delete(tempToken);
             return res.status(400).json({ error: 'Code expired' });
         }
-        if (record.otp !== otp) {
+        if (String(record.otp).trim() !== String(otp).trim()) {
+            console.log(`[USER AUTH DEBUG] Invalid OTP for ${username}. Expected: ${record.otp}, Got: ${otp}`);
             return res.status(401).json({ error: 'Invalid code' });
         }
 

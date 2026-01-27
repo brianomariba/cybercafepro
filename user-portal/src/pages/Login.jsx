@@ -204,11 +204,7 @@ function Login({ onLogin }) {
               </Button>
             </Form.Item>
 
-            <div style={{ textAlign: 'center', marginTop: 16 }}>
-              <Text type="secondary" style={{ fontSize: 13, color: '#64748B' }}>
-                Trial: demo / demo123
-              </Text>
-            </div>
+
           </Form>
         )}
 
