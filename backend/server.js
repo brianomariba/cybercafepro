@@ -34,6 +34,7 @@ const Transaction = require('./models/Transaction');
 const SharedDocument = require('./models/SharedDocument');
 const Log = require('./models/Log');
 const AuthSession = require('./models/AuthSession');
+const VerificationCode = require('./models/VerificationCode');
 
 
 
@@ -253,9 +254,8 @@ const computers = new Map();          // clientId -> computer status
 const activityLogs = [];              // Transient recent activity
 const transactions = [];              // Recent transactions (transient)
 
-// Sessions (handled by MongoDB AuthSession model)
-const USER_OTP_STORE = new Map();
-const USER_TEMP_TOKENS = new Map();
+// Sessions (handled by MongoDB AuthSession and VerificationCode models)
+// No in-memory stores needed for cluster stability
 
 
 // Pricing configuration (Default)
@@ -354,17 +354,27 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
 
         // 2. Generate and Send OTP
         const otp = generateOTP();
-        const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
-        // Store OTP linked to username
-        OTP_STORE.set(username, { otp, expiresAt });
+        // Store OTP linked to username (Persistent for Cluster)
+        await VerificationCode.findOneAndUpdate(
+            { type: 'admin_otp', key: username },
+            { value: otp, expiresAt },
+            { upsert: true }
+        );
 
-        // Use a temporary token to identify this login flow without exposing username in step 2
+        // Use a temporary token to identify this login flow
         const tempToken = generateToken();
-        TEMP_TOKENS.set(tempToken, username);
+        await VerificationCode.create({
+            type: 'admin_temp_token',
+            key: tempToken,
+            value: username,
+            expiresAt
+        });
 
         // Send to registered admin email
         const sent = await sendOTPEmail(ADMIN_CONFIG.email, otp, username);
+
 
         if (sent) {
             res.json({
@@ -395,33 +405,41 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
             return res.status(400).json({ error: 'Missing verification data' });
         }
 
-        const username = TEMP_TOKENS.get(tempToken);
+        // Get username from tempToken
+        const tokenRecord = await VerificationCode.findOne({ type: 'admin_temp_token', key: tempToken });
 
-        // Debug logging
-        if (!username) {
-            console.log('[AUTH DEBUG] Step 2 Failed: Token not found');
+        if (!tokenRecord) {
+            console.log('[AUTH DEBUG] Step 2 Failed: Temp token not found or expired');
             return res.status(400).json({ error: 'Session expired. Please login again.' });
         }
 
-        const record = OTP_STORE.get(username);
-        if (!record) {
-            return res.status(400).json({ error: 'OTP expired or invalid' });
+        const username = tokenRecord.value;
+
+        // Get OTP for this user
+        const otpRecord = await VerificationCode.findOne({ type: 'admin_otp', key: username });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: 'Verification code not found' });
         }
 
-        if (Date.now() > record.expiresAt) {
-            OTP_STORE.delete(username);
-            TEMP_TOKENS.delete(tempToken);
+        if (Date.now() > otpRecord.expiresAt) {
+            await VerificationCode.deleteMany({ key: { $in: [username, tempToken] } });
             return res.status(400).json({ error: 'Code expired' });
         }
 
-        if (String(record.otp).trim() !== String(otp).trim()) {
-            console.log(`[AUTH DEBUG] Invalid OTP for ${username}. Expected: ${record.otp}, Got: ${otp}`);
+        if (String(otpRecord.value).trim() !== String(otp).trim()) {
+            console.log(`[AUTH DEBUG] Invalid OTP for ${username}. Expected: ${otpRecord.value}, Got: ${otp}`);
             return res.status(401).json({ error: 'Invalid code' });
         }
 
         // Success! Cleanup and Create Session
-        OTP_STORE.delete(username);
-        TEMP_TOKENS.delete(tempToken);
+        await VerificationCode.deleteMany({
+            $or: [
+                { type: 'admin_otp', key: username },
+                { type: 'admin_temp_token', key: tempToken }
+            ]
+        });
+
 
         const token = generateToken();
         const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // 24 hours
@@ -559,11 +577,26 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
 
         // Generate OTP and send via email
         const otp = generateOTP();
-        const expiresAt = Date.now() + 5 * 60 * 1000;
-        USER_OTP_STORE.set(username, { otp, expiresAt });
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+        // Store OTP linked to username (Persistent for Cluster)
+        await VerificationCode.findOneAndUpdate(
+            { type: 'user_otp', key: username },
+            { value: otp, expiresAt },
+            { upsert: true }
+        );
+
+        // Use a temporary token identify this login flow
         const tempToken = generateToken();
-        USER_TEMP_TOKENS.set(tempToken, username);
+        await VerificationCode.create({
+            type: 'user_temp_token',
+            key: tempToken,
+            value: username,
+            expiresAt
+        });
+
         const emailSent = await sendOTPEmail(foundUser.email, otp, username);
+
         if (emailSent) {
             res.json({
                 success: true,
@@ -590,22 +623,31 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
         if (!tempToken || !otp) {
             return res.status(400).json({ error: 'Missing verification data' });
         }
-        const username = USER_TEMP_TOKENS.get(tempToken);
-        if (!username) {
-            console.log('[USER AUTH] Step 2 Failed: Token not found');
+
+        // Get username from tempToken
+        const tokenRecord = await VerificationCode.findOne({ type: 'user_temp_token', key: tempToken });
+
+        if (!tokenRecord) {
+            console.log('[USER AUTH] Step 2 Failed: Temp token not found or expired');
             return res.status(400).json({ error: 'Session expired. Please login again.' });
         }
-        const record = USER_OTP_STORE.get(username);
-        if (!record) {
-            return res.status(400).json({ error: 'OTP expired or invalid' });
+
+        const username = tokenRecord.value;
+
+        // Get OTP for this user
+        const otpRecord = await VerificationCode.findOne({ type: 'user_otp', key: username });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: 'Verification code not found' });
         }
-        if (Date.now() > record.expiresAt) {
-            USER_OTP_STORE.delete(username);
-            USER_TEMP_TOKENS.delete(tempToken);
+
+        if (Date.now() > otpRecord.expiresAt) {
+            await VerificationCode.deleteMany({ key: { $in: [username, tempToken] } });
             return res.status(400).json({ error: 'Code expired' });
         }
-        if (String(record.otp).trim() !== String(otp).trim()) {
-            console.log(`[USER AUTH DEBUG] Invalid OTP for ${username}. Expected: ${record.otp}, Got: ${otp}`);
+
+        if (String(otpRecord.value).trim() !== String(otp).trim()) {
+            console.log(`[USER AUTH DEBUG] Invalid OTP for ${username}. Expected: ${otpRecord.value}, Got: ${otp}`);
             return res.status(401).json({ error: 'Invalid code' });
         }
 
@@ -614,8 +656,15 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
         if (!foundUserDetails) {
             return res.status(500).json({ error: 'User not found' });
         }
-        USER_OTP_STORE.delete(username);
-        USER_TEMP_TOKENS.delete(tempToken);
+
+        // Cleanup codes
+        await VerificationCode.deleteMany({
+            $or: [
+                { type: 'user_otp', key: username },
+                { type: 'user_temp_token', key: tempToken }
+            ]
+        });
+
 
         const token = generateToken();
         const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));

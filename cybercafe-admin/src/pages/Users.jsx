@@ -29,6 +29,14 @@ const { Search } = Input;
 function Users() {
     const [userType, setUserType] = useState('agent'); // 'agent' or 'portal'
     const [showPassword, setShowPassword] = useState(false);
+    const [users, setUsers] = useState([]);
+    const [sessions, setSessions] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [modalVisible, setModalVisible] = useState(false);
+    const [editingUser, setEditingUser] = useState(null);
+    const [searchText, setSearchText] = useState('');
+    const [filterStatus, setFilterStatus] = useState('all');
+    const [form] = Form.useForm();
 
     // Fetch users from API
     const fetchData = async () => {
