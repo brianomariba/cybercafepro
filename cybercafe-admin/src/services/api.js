@@ -355,7 +355,8 @@ export const disconnectSocket = () => {
 // Default export
 export default {
     // Auth
-    adminLogin,
+    requestAdminOtp,
+    verifyAdminOtp,
     adminLogout,
     verifyAdminToken,
     isAuthenticated,
