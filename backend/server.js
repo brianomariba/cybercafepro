@@ -3,6 +3,7 @@
  * Enhanced with detailed activity tracking, print management, and browser history
  */
 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -267,11 +268,10 @@ app.post('/api/v1/auth/admin/request-otp', authRateLimit, async (req, res) => {
 
         // Verify email matches admin email (simple check for now)
         // In a real app, you'd check a database of admins
-        if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
-            // Return success even if invalid to prevent email enumeration
-            // But for this use-case, we can be honest or mock send
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Fake delay
-            return res.status(401).json({ error: 'Unauthorized email address' });
+        if (email.trim().toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+            console.log(`[AUTH] Unauthorized email attempt: ${email}`);
+            // Return specific error for clarity since this is admin portal
+            return res.status(401).json({ error: 'Unauthorized email address. Please use the registered admin email.' });
         }
 
         const otp = generateOTP();
