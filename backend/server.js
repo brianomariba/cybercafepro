@@ -254,6 +254,25 @@ const pricing = {
     photocopyColor: 40     // KSH per copy
 };
 
+// ==================== USER ACCOUNTS (TEST) ====================
+// In production, replace with a proper DB-backed user store
+const userAccounts = new Map(); // username -> user object
+// Seed a test user for development/testing
+const seedUser = {
+  username: 'demo',
+  email: 'demo@example.com',
+  name: 'Demo User',
+  passwordHash: hashPassword('demo123'),
+  active: true,
+  createdAt: new Date().toISOString()
+};
+userAccounts.set(seedUser.username, seedUser);
+
+// OTP stores for users and temporary tokens
+const USER_OTP_STORE = new Map();
+const USER_TEMP_TOKENS = new Map();
+const userSessions = new Map(); // token -> session
+
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
 /**
@@ -448,6 +467,156 @@ app.post('/api/v1/auth/agent/login', authRateLimit, (req, res) => {
         res.status(500).json({ success: false, message: 'Authentication failed' });
     }
 });
+
+/* User routes protection will be applied after requireUserAuth is defined. */
+
+/**
+ * USER AUTHENTICATION (OTP-based)
+ * POST /api/v1/auth/user/login-step1
+ * Validate credentials and send OTP to user email
+ */
+app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+        // Find user in in-memory store
+        const user = Array.from(userAccounts.values()).find(u => u.username === username);
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        if (!user.active) {
+            return res.status(401).json({ error: 'Account is disabled' });
+        }
+        if (!verifyPassword(password, user.passwordHash)) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Generate OTP and send via email
+        const otp = generateOTP();
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        USER_OTP_STORE.set(username, { otp, expiresAt });
+        const tempToken = generateToken();
+        USER_TEMP_TOKENS.set(tempToken, username);
+        const emailSent = await sendOTPEmail(user.email, otp, username);
+        if (emailSent) {
+            res.json({
+                success: true,
+                message: '2FA Code sent to email',
+                tempToken,
+                emailMask: user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+            });
+        } else {
+            res.status(500).json({ error: 'Failed to send verification code' });
+        }
+    } catch (error) {
+        console.error('User Login Step 1 Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/user/login-step2
+ * Verify OTP and issue user session token
+ */
+app.post('/api/v1/auth/user/login-step2', authRateLimit, (req, res) => {
+    try {
+        const { tempToken, otp } = req.body;
+        if (!tempToken || !otp) {
+            return res.status(400).json({ error: 'Missing verification data' });
+        }
+        const username = USER_TEMP_TOKENS.get(tempToken);
+        if (!username) {
+            console.log('[USER AUTH] Step 2 Failed: Token not found');
+            return res.status(400).json({ error: 'Session expired. Please login again.' });
+        }
+        const record = USER_OTP_STORE.get(username);
+        if (!record) {
+            return res.status(400).json({ error: 'OTP expired or invalid' });
+        }
+        if (Date.now() > record.expiresAt) {
+            USER_OTP_STORE.delete(username);
+            USER_TEMP_TOKENS.delete(tempToken);
+            return res.status(400).json({ error: 'Code expired' });
+        }
+        if (record.otp !== otp) {
+            return res.status(401).json({ error: 'Invalid code' });
+        }
+
+        // Success: create user session
+        const user = userAccounts.get(username) || Array.from(userAccounts.values()).find(u => u.username === username);
+        if (!user) {
+            return res.status(500).json({ error: 'User not found' });
+        }
+        USER_OTP_STORE.delete(username);
+        USER_TEMP_TOKENS.delete(tempToken);
+
+        const token = generateToken();
+        const session = {
+            username: user.username,
+            email: user.email,
+            loginAt: new Date().toISOString(),
+            expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+        };
+        userSessions.set(token, session);
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                username: session.username,
+                email: session.email,
+                name: user.name
+            },
+            expiresIn: 86400
+        });
+    } catch (error) {
+        console.error('User Login Step 2 Error:', error);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/user/logout
+ * User dashboard logout
+ */
+const requireUserAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No token provided' });
+  }
+  const token = authHeader.split(' ')[1];
+  const session = userSessions.get(token);
+  if (!session || Date.now() > session.expiresAt) {
+      userSessions.delete(token);
+      return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  req.user = session;
+  next();
+};
+app.post('/api/v1/auth/user/logout', (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        userSessions.delete(token);
+    }
+    res.json({ success: true });
+});
+
+/**
+ * GET /api/v1/auth/user/verify
+ * Verify user token validity
+ */
+app.get('/api/v1/auth/user/verify', requireUserAuth, (req, res) => {
+    res.json({
+        valid: true,
+        user: { username: req.user.username, email: req.user.email, name: req.user.name },
+        expiresAt: req.user.expiresAt
+    });
+});
+
 
 /**
  * POST /api/v1/auth/agent/users
@@ -768,7 +937,7 @@ app.post('/api/v1/agent/session', (req, res) => {
     }
 });
 
-// NOTE: Old /api/v1/agent/auth endpoint removed - use /api/v1/auth/agent/login instead
+// User authentication middleware is defined later in the file
 
 // ==================== ADMIN API ENDPOINTS ====================
 
@@ -1318,7 +1487,7 @@ app.post('/api/v1/admin/tasks/:id/assign', (req, res) => {
  * GET /api/v1/user/tasks
  * Get tasks for a specific user/computer
  */
-app.get('/api/v1/user/tasks', (req, res) => {
+app.get('/api/v1/user/tasks', requireUserAuth, (req, res) => {
     const { clientId, userId, status, period } = req.query;
 
     let filtered = tasks;
@@ -1363,7 +1532,7 @@ app.get('/api/v1/user/tasks', (req, res) => {
  * PUT /api/v1/user/tasks/:id/status
  * Update task status (for user to mark as completed, etc.)
  */
-app.put('/api/v1/user/tasks/:id/status', (req, res) => {
+app.put('/api/v1/user/tasks/:id/status', requireUserAuth, (req, res) => {
     const { status } = req.body;
     const idx = tasks.findIndex(t => t.id === req.params.id);
 

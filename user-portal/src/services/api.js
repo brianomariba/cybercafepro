@@ -18,6 +18,23 @@ const api = axios.create({
     }
 });
 
+// Attach token for authenticated user requests
+api.interceptors.request.use((config) => {
+  try {
+    const token = localStorage.getItem('hawknine_user_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch (e) {
+    // ignore storage errors
+  }
+  return config;
+});
+
+export const setUserToken = (token) => {
+  localStorage.setItem('hawknine_user_token', token);
+};
+
 // ==================== TASKS ====================
 
 export const getUserTasks = async (params = {}) => {
@@ -46,6 +63,22 @@ export const getDocuments = async (params = {}) => {
 
 export const downloadDocument = (documentId) => {
     return `${API_BASE_URL}/documents/${documentId}/download`;
+};
+
+// ==================== USER AUTHENDPOINTS (OTP-BASED) ====================
+export const loginUserStep1 = async (username, password) => {
+    const response = await api.post('/auth/user/login-step1', { username, password });
+    return response.data;
+};
+
+export const loginUserStep2 = async (tempToken, otp) => {
+    const response = await api.post('/auth/user/login-step2', { tempToken, otp });
+    return response.data;
+};
+
+export const userLogout = async () => {
+    const response = await api.post('/auth/user/logout');
+    return response.data;
 };
 
 // ==================== WEBSOCKET ====================
