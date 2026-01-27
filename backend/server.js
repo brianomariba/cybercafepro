@@ -33,6 +33,7 @@ const Service = require('./models/Service');
 const Transaction = require('./models/Transaction');
 const SharedDocument = require('./models/SharedDocument');
 const Log = require('./models/Log');
+const AuthSession = require('./models/AuthSession');
 
 
 
@@ -154,24 +155,29 @@ const hashPassword = (password) => crypto.createHash('sha256').update(password).
 const verifyPassword = (password, hash) => hashPassword(password) === hash;
 
 // Auth middleware for admin routes
-const requireAdminAuth = (req, res, next) => {
-    const authHeader = req.headers.authorization;
+const requireAdminAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'No token provided' });
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const session = await AuthSession.findOne({ token, type: 'admin' });
+
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+
+        req.admin = session;
+        next();
+    } catch (error) {
+        res.status(500).json({ error: 'Authentication error' });
     }
-
-    const token = authHeader.split(' ')[1];
-    const session = adminSessions.get(token);
-
-    if (!session || Date.now() > session.expiresAt) {
-        adminSessions.delete(token);
-        return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    req.admin = session;
-    next();
 };
+
 
 // Ensure uploads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -242,11 +248,10 @@ const computers = new Map();          // clientId -> computer status
 const activityLogs = [];              // Transient recent activity
 const transactions = [];              // Recent transactions (transient)
 
-// Sessions (Volatile tokens)
-const adminSessions = new Map();
-const userSessions = new Map();
+// Sessions (handled by MongoDB AuthSession model)
 const USER_OTP_STORE = new Map();
 const USER_TEMP_TOKENS = new Map();
+
 
 // Pricing configuration (Default)
 const pricing = {
@@ -377,7 +382,7 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
  * POST /api/v1/auth/admin/login-step2
  * Verify OTP and issue session token
  */
-app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
+app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
     try {
         const { tempToken, otp } = req.body;
 
@@ -390,8 +395,6 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
         // Debug logging
         if (!username) {
             console.log('[AUTH DEBUG] Step 2 Failed: Token not found');
-            console.log(`[AUTH DEBUG] Received Token: ${tempToken}`);
-            console.log(`[AUTH DEBUG] Active Tokens: ${TEMP_TOKENS.size}`);
             return res.status(400).json({ error: 'Session expired. Please login again.' });
         }
 
@@ -416,13 +419,16 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
         TEMP_TOKENS.delete(tempToken);
 
         const token = generateToken();
-        const session = {
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // 24 hours
+
+        const session = await AuthSession.create({
+            token,
             username: username,
             email: ADMIN_CONFIG.email,
-            loginAt: new Date().toISOString(),
-            expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-        };
-        adminSessions.set(token, session);
+            type: 'admin',
+            role: 'Super Admin',
+            expiresAt
+        });
 
         console.log(`Admin login success: ${username}`);
 
@@ -432,7 +438,7 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
             user: {
                 username: session.username,
                 email: session.email,
-                role: 'Super Admin'
+                role: session.role
             },
             expiresIn: 86400
         });
@@ -443,18 +449,24 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, (req, res) => {
     }
 });
 
+
 /**
  * POST /api/v1/auth/admin/logout
  * Admin dashboard logout
  */
-app.post('/api/v1/auth/admin/logout', (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.split(' ')[1];
-        adminSessions.delete(token);
+app.post('/api/v1/auth/admin/logout', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.split(' ')[1];
+            await AuthSession.deleteOne({ token, type: 'admin' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Logout failed' });
     }
-    res.json({ success: true });
 });
+
 
 /**
  * GET /api/v1/auth/admin/verify
@@ -593,22 +605,24 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
         }
 
         // Success: create user session
-        const user = await User.findOne({ username, type: 'portal' });
-        if (!user) {
+        const foundUserDetails = await User.findOne({ username, type: 'portal' });
+        if (!foundUserDetails) {
             return res.status(500).json({ error: 'User not found' });
         }
         USER_OTP_STORE.delete(username);
         USER_TEMP_TOKENS.delete(tempToken);
 
         const token = generateToken();
-        const session = {
-            username: user.username,
-            email: user.email,
-            name: user.name,
-            loginAt: new Date().toISOString(),
-            expiresAt: Date.now() + (24 * 60 * 60 * 1000)
-        };
-        userSessions.set(token, session);
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+
+        const session = await AuthSession.create({
+            token,
+            username: foundUserDetails.username,
+            email: foundUserDetails.email,
+            name: foundUserDetails.name,
+            type: 'portal',
+            expiresAt
+        });
 
         res.json({
             success: true,
@@ -627,32 +641,44 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
 });
 
 
+
 /**
  * POST /api/v1/auth/user/logout
  * User dashboard logout
  */
-const requireUserAuth = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'No token provided' });
-    }
-    const token = authHeader.split(' ')[1];
-    const session = userSessions.get(token);
-    if (!session || Date.now() > session.expiresAt) {
-        userSessions.delete(token);
-        return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-    req.user = session;
-    next();
-};
-app.post('/api/v1/auth/user/logout', (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+const requireUserAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
         const token = authHeader.split(' ')[1];
-        userSessions.delete(token);
+        const session = await AuthSession.findOne({ token, type: 'portal' });
+
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+        req.user = session;
+        next();
+    } catch (error) {
+        res.status(500).json({ error: 'Authentication error' });
     }
-    res.json({ success: true });
+};
+
+app.post('/api/v1/auth/user/logout', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.split(' ')[1];
+            await AuthSession.deleteOne({ token, type: 'portal' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Logout failed' });
+    }
 });
+
 
 /**
  * GET /api/v1/auth/user/verify
