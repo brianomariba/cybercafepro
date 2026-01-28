@@ -10,7 +10,7 @@ const axios = require('axios');
 const os = require('os');
 const fs = require('fs');
 const { exec } = require('child_process');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID: uuidv4 } = require('crypto');
 
 // Custom Modules
 const FileMonitor = require('./file-monitor');
