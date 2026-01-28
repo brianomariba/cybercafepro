@@ -31,7 +31,6 @@
   "dependencies": {
     "active-win": "6.3.0",
     "axios": "1.7.9",
-    "chokidar": "3.6.0",
     "dotenv": "16.4.7",
     "electron-store": "8.1.0",
     "screenshot-desktop": "1.15.3",
