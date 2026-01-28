@@ -102,6 +102,43 @@ async function createWindow() {
 
     mainWindow.loadFile(path.join(__dirname, 'src/index.html'));
 
+    // --- PERSISTENCE: AUTO-LAUNCH ---
+    try {
+        const AutoLaunch = require('auto-launch');
+        const hawkNineLauncher = new AutoLaunch({
+            name: 'HawkNine Agent',
+            path: app.getPath('exe'),
+        });
+
+        hawkNineLauncher.isEnabled().then((isEnabled) => {
+            if (!isEnabled) hawkNineLauncher.enable();
+        });
+    } catch (e) {
+        // Fallback: Add to registry manually if auto-launch package fails
+        if (process.platform === 'win32') {
+            const regPath = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+            const appPath = app.getPath('exe');
+            exec(`reg add "${regPath}" /v "HawkNineAgent" /t REG_SZ /d "${appPath}" /f`, (err) => {
+                if (err) console.error('Manual auto-launch failed:', err);
+            });
+        }
+    }
+
+    // --- SECURITY: FOCUS ENFORCEMENT ---
+    setInterval(() => {
+        if (isLocked && mainWindow) {
+            // Keep on top and in focus if locked
+            if (!mainWindow.isFocused()) {
+                mainWindow.focus();
+            }
+            mainWindow.setAlwaysOnTop(true, 'screen-saver');
+            // Prevent minimizing
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
+        }
+    }, 1000);
+
     // Prevent closing
     mainWindow.on('close', (e) => e.preventDefault());
 

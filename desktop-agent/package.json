@@ -30,6 +30,7 @@
   "type": "commonjs",
   "dependencies": {
     "active-win": "6.3.0",
+    "auto-launch": "^5.0.5",
     "axios": "1.7.9",
     "dotenv": "16.4.7",
     "electron-store": "8.1.0",

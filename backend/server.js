@@ -515,8 +515,11 @@ app.post('/api/v1/auth/agent/login', authRateLimit, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Username and password required' });
         }
 
-        // Find user in MongoDB
-        const user = await User.findOne({ username, type: 'agent' });
+        // Find user in MongoDB (either by username or email)
+        const user = await User.findOne({
+            $or: [{ username }, { email: username }],
+            type: 'agent'
+        });
 
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -753,7 +756,7 @@ app.get('/api/v1/auth/user/verify', requireUserAuth, (req, res) => {
  */
 app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
     try {
-        const { username, password, name } = req.body;
+        const { username, password, name, email } = req.body;
 
         if (!username || !password) {
             return res.status(400).json({ error: 'Username and password required' });
@@ -767,6 +770,7 @@ app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
         const newUser = await User.create({
             username,
             passwordHash: hashPassword(password),
+            email: email,
             name: name || username,
             type: 'agent',
             active: true
@@ -801,12 +805,13 @@ app.get('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
 app.put('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res) => {
     try {
         const { username } = req.params;
-        const { password, name, active } = req.body;
+        const { password, name, active, email } = req.body;
 
         const updateData = {};
         if (password) updateData.passwordHash = hashPassword(password);
         if (name !== undefined) updateData.name = name;
         if (active !== undefined) updateData.active = active;
+        if (email !== undefined) updateData.email = email;
 
         const user = await User.findOneAndUpdate(
             { username, type: 'agent' },

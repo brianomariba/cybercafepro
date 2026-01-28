@@ -142,6 +142,7 @@ function Users() {
                         username: values.username,
                         password: values.password,
                         name: values.name,
+                        email: values.email,
                     });
                 } else {
                     await createPortalUser({
@@ -489,18 +490,16 @@ function Users() {
                         <Input prefix={<UserOutlined />} placeholder="John Doe" />
                     </Form.Item>
 
-                    {userType === 'portal' && (
-                        <Form.Item
-                            name="email"
-                            label="Email Address"
-                            rules={[
-                                { required: true, message: 'Email is required' },
-                                { type: 'email', message: 'Enter a valid email' }
-                            ]}
-                        >
-                            <Input prefix={<MailOutlined />} placeholder="user@example.com" />
-                        </Form.Item>
-                    )}
+                    <Form.Item
+                        name="email"
+                        label="Email Address"
+                        rules={[
+                            { required: true, message: 'Email is required' },
+                            { type: 'email', message: 'Enter a valid email' }
+                        ]}
+                    >
+                        <Input prefix={<MailOutlined />} placeholder="user@example.com" />
+                    </Form.Item>
 
                     <Form.Item
                         name="password"
