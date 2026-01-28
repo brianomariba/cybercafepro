@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
+
 // File type categories
 const FILE_CATEGORIES = {
     documents: ['.doc', '.docx', '.pdf', '.txt', '.rtf', '.odt', '.pages'],
@@ -61,6 +62,7 @@ class FileMonitor {
 
     start() {
         const homeDir = os.homedir();
+
         const directoriesToWatch = [
             path.join(homeDir, 'Documents'),
             path.join(homeDir, 'Downloads'),

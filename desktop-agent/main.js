@@ -307,17 +307,7 @@ function lockSession() {
 // ==================== DATA COLLECTION ====================
 
 async function startDataCollection() {
-    let activeWindow = null;
     let screenshot = null;
-
-    // Dynamic imports with fallbacks
-    try {
-        const module = await import('active-win');
-        activeWindow = module.default;
-    } catch (e) {
-        console.error('active-win not available:', e.message);
-    }
-
     try {
         screenshot = require('screenshot-desktop');
     } catch (e) {
@@ -335,9 +325,11 @@ async function startDataCollection() {
 
             // Active Window (only when unlocked)
             let currentApp = { title: 'LOCKED STATION', owner: 'System', url: '' };
-            if (!isLocked && activeWindow) {
+            if (!isLocked) {
                 try {
-                    const win = await activeWindow();
+                    const activeWin = require('active-win');
+                    // active-win 6.0.1 uses sync() for synchronous capture
+                    const win = activeWin.sync();
                     if (win) {
                         currentApp = {
                             title: win.title || '',
@@ -371,7 +363,6 @@ async function startDataCollection() {
             let printJobs = [];
             try {
                 printJobs = await getRecentPrintJobs();
-                // Add new print jobs to session
                 if (currentSession && printJobs.length > 0) {
                     for (const job of printJobs) {
                         const exists = currentSession.printJobs.find(j => j.id === job.id);
@@ -382,10 +373,9 @@ async function startDataCollection() {
 
             // USB Devices
             try {
-                const { current, newDevices } = await getUsbDevices();
+                const { newDevices } = await getUsbDevices();
                 if (newDevices.length > 0) {
                     connectedUsbDevices.push(...newDevices);
-                    console.log('New USB devices detected:', newDevices);
                 }
             } catch (e) { }
 
@@ -399,7 +389,6 @@ async function startDataCollection() {
                 sessionId: currentSession?.id || null,
                 sessionUser: currentSession?.user || null,
                 uptime: process.uptime(),
-
                 metrics: {
                     cpu: {
                         load: parseFloat(load.currentLoad.toFixed(2)),
@@ -416,7 +405,6 @@ async function startDataCollection() {
                         percentUsed: parseFloat(disk[0].use.toFixed(2))
                     } : null
                 },
-
                 activity: {
                     window: currentApp,
                     screenshot: screenshotBase64,
@@ -425,8 +413,6 @@ async function startDataCollection() {
             };
 
             await sendToServer(ADMIN_API_URL, payload);
-
-            // Process any queued data
             dataQueue.processQueue();
 
         } catch (error) {
@@ -438,6 +424,7 @@ async function startDataCollection() {
 }
 
 // ==================== SERVER COMMUNICATION ====================
+
 
 async function sendToServer(url, data) {
     try {
