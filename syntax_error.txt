@@ -1,0 +1,22 @@
+﻿node : C:\Users\Admin\OneDrive\Desktop\HawkNine\backend
+\server.js:2374
+At line:1 char:1
++ node --check backend/server.js 2>&1 | Out-File 
+-FilePath syntax_error ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\ 
+   Admin\...\server.js:2374:String) [], RemoteExcepti  
+  on
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+const documentRequests = [];
+      ^
+
+SyntaxError: Identifier 'documentRequests' has already 
+been declared
+    at wrapSafe 
+(node:internal/modules/cjs/loader:1620:18)
+    at checkSyntax 
+(node:internal/main/check_syntax:78:3)
+
+Node.js v22.18.0

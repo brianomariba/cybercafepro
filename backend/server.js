@@ -55,7 +55,7 @@ const rateLimit = (options = {}) => {
     const message = options.message || 'Too many requests, please try again later';
 
     return (req, res, next) => {
-        const key = req.ip || req.connection.remoteAddress;
+        const key = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
         const now = Date.now();
 
         if (!rateLimitStore.has(key)) {
@@ -252,6 +252,7 @@ const authRateLimit = rateLimit({
 // Real-time tracking stores
 const computers = new Map();          // clientId -> computer status
 const documentRequests = [];          // Transient document request tracking (until handled)
+const sharedDocuments = [];           // Transient shared documents tracking
 
 // Sessions (handled by MongoDB AuthSession and VerificationCode models)
 // No in-memory stores needed for cluster stability
@@ -353,6 +354,12 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
             return res.status(401).json({ error: 'Invalid username or password' });
         }
 
+        // Check DB connection
+        if (mongoose.connection.readyState !== 1) {
+            console.error('[AUTH] Login Step 1 blocked: MongoDB not connected');
+            return res.status(503).json({ error: 'Database connection failed. Please ensure MongoDB is running.' });
+        }
+
         // 2. Generate and Send OTP
         const otp = generateOTP();
         const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
@@ -404,6 +411,11 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
 
         if (!tempToken || !otp) {
             return res.status(400).json({ error: 'Missing verification data' });
+        }
+
+        // Check DB connection
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database connection failed. Please try again later.' });
         }
 
         // Get username from tempToken
@@ -2370,8 +2382,7 @@ app.get('/api/v1/documents/stats', (req, res) => {
 
 // ==================== PUBLIC API (LANDING PAGE) ====================
 
-// Store for public document requests
-const documentRequests = [];
+// Store for public document requests (Already declared at top)
 
 /**
  * POST /api/v1/public/document-request
@@ -2634,15 +2645,25 @@ app.delete('/api/v1/auth/portal/users/:username', async (req, res) => {
 
 // ==================== SOCKET.IO ====================
 
-io.on('connection', (socket) => {
-    console.log(`[SOCKET] Admin connected: ${socket.id}`);
+io.on('connection', async (socket) => {
+    try {
+        console.log(`[SOCKET] Admin connected: ${socket.id}`);
 
-    // Send current state on connect
-    socket.emit('init-data', {
-        computers: Array.from(computers.values()),
-        recentSessions: sessions.slice(0, 20),
-        pricing: pricing
-    });
+        // Fetch recent data for initial state
+        const recentSessions = await Session.find()
+            .sort({ receivedAt: -1 })
+            .limit(20)
+            .catch(() => []); // Fallback to empty if DB fails
+
+        // Send current state on connect
+        socket.emit('init-data', {
+            computers: Array.from(computers.values()),
+            recentSessions: recentSessions,
+            pricing: pricing
+        });
+    } catch (error) {
+        console.error('[SOCKET ERROR] Initialization failed:', error);
+    }
 
     socket.on('disconnect', () => {
         console.log(`[SOCKET] Admin disconnected: ${socket.id}`);
