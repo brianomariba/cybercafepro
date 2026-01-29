@@ -25,7 +25,7 @@ import {
     DatabaseOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -45,24 +45,29 @@ function Settings() {
         autoLogoutMinutes: 5,
         sessionWarningMinutes: 10,
     });
+    const [computers, setComputers] = useState([]);
     const [loadingServices, setLoadingServices] = useState(false);
     const [form] = Form.useForm();
 
-    const loadServices = async () => {
+    const loadData = async () => {
         setLoadingServices(true);
         try {
-            const data = await getServices();
-            setServices(data || []);
+            const [servicesData, computersData] = await Promise.all([
+                getServices(),
+                getComputers()
+            ]);
+            setServices(servicesData || []);
+            setComputers(computersData || []);
         } catch (error) {
-            console.error('Failed to load services', error);
-            message.error('Failed to load services from server');
+            console.error('Failed to load data', error);
+            message.error('Failed to load settings data');
         } finally {
             setLoadingServices(false);
         }
     };
 
     useEffect(() => {
-        loadServices();
+        loadData();
     }, []);
 
     const handleAddService = () => {
@@ -88,7 +93,7 @@ function Settings() {
             }
             setServiceModalVisible(false);
             form.resetFields();
-            loadServices();
+            loadData();
         } catch (error) {
             console.error('Failed to save service', error);
             message.error('Failed to save service');
@@ -99,7 +104,7 @@ function Settings() {
         try {
             await deleteServiceApi(service.id);
             message.success('Service deleted successfully');
-            loadServices();
+            loadData();
         } catch (error) {
             console.error('Failed to delete service', error);
             message.error('Failed to delete service');
@@ -110,7 +115,7 @@ function Settings() {
         try {
             await updateService(service.id, { ...service, isActive: enabled });
             message.success(`${service.name} ${enabled ? 'enabled' : 'disabled'}`);
-            loadServices();
+            loadData();
         } catch (error) {
             console.error('Failed to update service status', error);
             message.error('Failed to update service status');
@@ -416,25 +421,29 @@ function Settings() {
                     extra={<Button type="primary" icon={<PlusOutlined />}>Add Computer</Button>}
                 >
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
-                        {Array.from({ length: 10 }, (_, i) => i + 1).map(num => (
-                            <div
-                                key={num}
-                                style={{
-                                    padding: 20,
-                                    background: 'rgba(255,255,255,0.03)',
-                                    border: '1px solid rgba(255,255,255,0.08)',
-                                    borderRadius: 12,
-                                    textAlign: 'center'
-                                }}
-                            >
-                                <DesktopOutlined style={{ fontSize: 32, color: '#00d4ff', marginBottom: 12 }} />
-                                <Text strong style={{ display: 'block' }}>PC-{String(num).padStart(2, '0')}</Text>
-                                <Text type="secondary" style={{ fontSize: 12 }}>192.168.1.{100 + num}</Text>
-                                <div style={{ marginTop: 12 }}>
-                                    <Switch defaultChecked checkedChildren="Active" unCheckedChildren="Disabled" />
+                        {computers.length === 0 ? (
+                            <Empty description="No computers registered. They appear here automatically when the Desktop Agent connects." />
+                        ) : (
+                            computers.map(pc => (
+                                <div
+                                    key={pc.clientId}
+                                    style={{
+                                        padding: 20,
+                                        background: 'rgba(255,255,255,0.03)',
+                                        border: '1px solid rgba(255,255,255,0.08)',
+                                        borderRadius: 12,
+                                        textAlign: 'center'
+                                    }}
+                                >
+                                    <DesktopOutlined style={{ fontSize: 32, color: pc.isOnline ? '#00ff88' : '#00d4ff', marginBottom: 12 }} />
+                                    <Text strong style={{ display: 'block' }}>{pc.hostname || 'Unknown PC'}</Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>{pc.ip || 'N/A'}</Text>
+                                    <div style={{ marginTop: 12 }}>
+                                        <Badge status={pc.isOnline ? 'success' : 'default'} text={pc.isOnline ? 'Online' : 'Offline'} />
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            ))
+                        )}
                     </div>
                 </Card>
             ),

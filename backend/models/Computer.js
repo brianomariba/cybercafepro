@@ -4,7 +4,7 @@ const ComputerSchema = new mongoose.Schema({
     clientId: { type: String, required: true, unique: true },
     hostname: { type: String },
     ip: { type: String },
-    status: { type: String, enum: ['locked', 'active', 'offline'], default: 'offline' },
+    status: { type: String, enum: ['locked', 'unlocked', 'active', 'offline'], default: 'offline' },
     sessionId: { type: String },
     sessionUser: { type: String },
     uptime: { type: String },

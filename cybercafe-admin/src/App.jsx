@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
-import { ConfigProvider, Layout, Menu, Badge, Avatar, Dropdown, Space, Typography, Button, Input, Tooltip, message, Switch } from 'antd';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+
+dayjs.extend(relativeTime);
+import { ConfigProvider, Layout, Menu, Badge, Avatar, Dropdown, Space, Typography, Button, Input, Tooltip, message, Switch, Spin } from 'antd';
 import {
   DashboardOutlined,
   DesktopOutlined,
@@ -42,7 +46,7 @@ import Settings from './pages/Settings';
 import BrowserHistory from './pages/BrowserHistory';
 import Documents from './pages/Documents';
 import Tasks from './pages/Tasks';
-import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken } from './services/api';
+import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats } from './services/api';
 
 import './App.css';
 
@@ -157,9 +161,10 @@ const menuItems = [
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [collapsed, setCollapsed] = useState(window.innerWidth < 768);
-  const [selectedKey, setSelectedKey] = useState('dashboard');
+  const [selectedKey, setSelectedKey] = useState(localStorage.getItem('hawknine_selected_key') || 'dashboard');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -206,6 +211,7 @@ function App() {
           }
         }
       }
+      setIsInitialLoading(false);
     };
 
     checkSession();
@@ -224,11 +230,15 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Apply theme class to body
   useEffect(() => {
     document.body.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
     localStorage.setItem('hawknine_theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  // Persist selected key
+  useEffect(() => {
+    localStorage.setItem('hawknine_selected_key', selectedKey);
+  }, [selectedKey]);
 
   const handleLogin = (userData) => {
     setUser(userData);
@@ -257,68 +267,54 @@ function App() {
     }
   };
 
+  const [systemStats, setSystemStats] = useState({ online: 0, active: 0 });
+  const [notifications, setNotifications] = useState([]);
+
+  // Fetch system stats for sidebar
+  const updateSystemStatus = async () => {
+    try {
+      const stats = await getStats();
+      if (stats && stats.computers) {
+        setSystemStats({
+          online: stats.computers.online || 0,
+          active: stats.computers.activeSessions || 0
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch system stats:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      updateSystemStatus();
+      const interval = setInterval(updateSystemStatus, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [isAuthenticated]);
+
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode);
     message.success(`Switched to ${!isDarkMode ? 'dark' : 'light'} mode`);
   };
 
   // Notification dropdown items
-  const notificationItems = [
-    {
-      key: '1',
-      label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>PC-05 Session Expired</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>User session ended after 2 hours</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>2 minutes ago</Text>
-        </div>
-      ),
-    },
-    {
-      key: '2',
-      label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>Print job completed</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>Document "Report.pdf" printed successfully</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>5 minutes ago</Text>
-        </div>
-      ),
-    },
-    {
-      key: '3',
-      label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>Blocked site access attempt</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>PC-04 tried to access blocked content</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>8 minutes ago</Text>
-        </div>
-      ),
-    },
-    {
-      key: '4',
-      label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>New payment received</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>KSH 1,500 from John Doe for PC-03</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>10 minutes ago</Text>
-        </div>
-      ),
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'view-all',
-      label: <Text style={{ color: '#00B4D8' }}>View all notifications</Text>,
-    },
+  const notificationItems = notifications.length > 0 ? notifications.map(n => ({
+    key: n.id,
+    label: (
+      <div style={{ maxWidth: 280 }}>
+        <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>{n.title}</Text>
+        <br />
+        <Text type="secondary" style={{ fontSize: 12 }}>{n.message}</Text>
+        <br />
+        <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(n.timestamp).fromNow()}</Text>
+      </div>
+    ),
+  })).concat([
+    { type: 'divider' },
+    { key: 'view-all', label: <Text style={{ color: '#00B4D8' }}>View all notifications</Text> }
+  ]) : [
+    { key: 'none', label: <Text type="secondary">No new notifications</Text> }
   ];
 
   // User dropdown items
@@ -375,6 +371,24 @@ function App() {
         return <Dashboard isDarkMode={isDarkMode} />;
     }
   };
+
+  // Show loading screen while checking session
+  if (isInitialLoading) {
+    return (
+      <div style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        background: '#011627',
+        color: '#00B4D8'
+      }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, fontSize: 18, fontWeight: 600, letterSpacing: 1 }}>HAWKNINE</div>
+      </div>
+    );
+  }
 
   // Show login page if not authenticated
   if (!isAuthenticated) {
@@ -448,7 +462,7 @@ function App() {
                   <span>All systems operational</span>
                 </div>
                 <div className="status-info">
-                  <span>8 PCs Online • 5 Active Sessions</span>
+                  <span>{systemStats.online} PCs Online • {systemStats.active} Active Sessions</span>
                 </div>
               </div>
             </div>

@@ -249,10 +249,9 @@ const authRateLimit = rateLimit({
 
 
 // ==================== DATA STORES ====================
-// These remain in-memory for real-time tracking, but are persisted to MongoDB
+// Real-time tracking stores
 const computers = new Map();          // clientId -> computer status
-const activityLogs = [];              // Transient recent activity
-const transactions = [];              // Recent transactions (transient)
+const documentRequests = [];          // Transient document request tracking (until handled)
 
 // Sessions (handled by MongoDB AuthSession and VerificationCode models)
 // No in-memory stores needed for cluster stability
@@ -273,6 +272,7 @@ async function seedDatabase() {
     try {
         console.log('🌱 Seeding database with initial data...');
 
+        /*
         // Seed Portal User
         const userCount = await User.countDocuments({ type: 'portal' });
         if (userCount === 0) {
@@ -299,6 +299,7 @@ async function seedDatabase() {
             });
             console.log('✅ Demo agent user created');
         }
+        */
 
         // Seed Services
         const serviceCount = await Service.countDocuments();
@@ -1289,91 +1290,169 @@ app.get('/api/v1/admin/sessions', async (req, res) => {
  * GET /api/v1/admin/print-jobs
  * Returns print job records with filtering
  */
-app.get('/api/v1/admin/print-jobs', (req, res) => {
-    const { limit = 100, clientId, user, printType } = req.query;
+/**
+ * GET /api/v1/admin/print-jobs
+ * Returns print job records with filtering from Logs
+ */
+app.get('/api/v1/admin/print-jobs', async (req, res) => {
+    try {
+        const { limit = 100, clientId, user, printType } = req.query;
 
-    let filtered = printJobs;
-    if (clientId) filtered = filtered.filter(j => j.clientId === clientId);
-    if (user) filtered = filtered.filter(j => j.sessionUser?.toLowerCase().includes(user.toLowerCase()));
-    if (printType) filtered = filtered.filter(j => j.printType === printType);
+        const query = { type: 'print' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
 
-    // Calculate totals
-    const totals = {
-        totalJobs: filtered.length,
-        bwPages: filtered.filter(j => j.printType === 'bw').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
-        colorPages: filtered.filter(j => j.printType === 'color').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
-        bwRevenue: 0,
-        colorRevenue: 0
-    };
-    totals.bwRevenue = totals.bwPages * pricing.printBW;
-    totals.colorRevenue = totals.colorPages * pricing.printColor;
-    totals.totalRevenue = totals.bwRevenue + totals.colorRevenue;
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
 
-    res.json({
-        jobs: filtered.slice(0, parseInt(limit)),
-        totals
-    });
+        const jobs = logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        });
+
+        // Filter by printType if requested (since it's inside data field)
+        const finalJobs = printType ? jobs.filter(j => j.printType === printType) : jobs;
+
+        // Calculate totals (for the set being returned or the whole query?)
+        // Usually totals should be for the filtered set
+        const totals = {
+            totalJobs: finalJobs.length,
+            bwPages: finalJobs.filter(j => j.printType === 'bw').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
+            colorPages: finalJobs.filter(j => j.printType === 'color').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
+            bwRevenue: 0,
+            colorRevenue: 0
+        };
+        totals.bwRevenue = totals.bwPages * pricing.printBW;
+        totals.colorRevenue = totals.colorPages * pricing.printColor;
+        totals.totalRevenue = totals.bwRevenue + totals.colorRevenue;
+
+        res.json({
+            jobs: finalJobs,
+            totals
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch print jobs' });
+    }
 });
 
 /**
  * GET /api/v1/admin/browser-history
  * Returns browser history records
  */
-app.get('/api/v1/admin/browser-history', (req, res) => {
-    const { limit = 100, clientId, user } = req.query;
+/**
+ * GET /api/v1/admin/browser-history
+ * Returns browser history records from Logs
+ */
+app.get('/api/v1/admin/browser-history', async (req, res) => {
+    try {
+        const { limit = 200, clientId, user } = req.query;
 
-    let filtered = browserHistory;
-    if (clientId) filtered = filtered.filter(h => h.clientId === clientId);
-    if (user) filtered = filtered.filter(h => h.sessionUser?.toLowerCase().includes(user.toLowerCase()));
+        const query = { type: 'browser' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
 
-    res.json(filtered.slice(0, parseInt(limit)));
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        const history = logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        });
+
+        res.json(history);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch browser history' });
+    }
 });
 
 /**
  * GET /api/v1/admin/file-activity
  * Returns file creation/modification logs with category support
  */
-app.get('/api/v1/admin/file-activity', (req, res) => {
-    const { limit = 100, clientId, user, category, groupByCategory } = req.query;
+/**
+ * GET /api/v1/admin/file-activity
+ * Returns file creation/modification logs from database
+ */
+app.get('/api/v1/admin/file-activity', async (req, res) => {
+    try {
+        const { limit = 200, clientId, user, category, groupByCategory } = req.query;
 
-    let filtered = fileActivity;
-    if (clientId) filtered = filtered.filter(f => f.clientId === clientId);
-    if (user) filtered = filtered.filter(f => f.sessionUser?.toLowerCase().includes(user.toLowerCase()));
-    if (category) filtered = filtered.filter(f => f.category === category);
+        const query = { type: 'file' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
 
-    // Group by category if requested
-    if (groupByCategory === 'true') {
-        const grouped = {};
-        for (const file of filtered) {
-            const cat = file.category || 'other';
-            if (!grouped[cat]) {
-                grouped[cat] = { count: 0, totalSize: 0, files: [] };
-            }
-            grouped[cat].count++;
-            grouped[cat].totalSize += file.sizeBytes || 0;
-            grouped[cat].files.push({
-                name: file.name,
-                size: file.size,
-                folder: file.folder,
-                user: file.sessionUser,
-                computer: file.hostname,
-                timestamp: file.timestamp || file.receivedAt
-            });
-        }
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
 
-        // Format sizes
-        for (const cat of Object.keys(grouped)) {
-            const bytes = grouped[cat].totalSize;
-            grouped[cat].totalSizeFormatted = formatBytes(bytes);
-            grouped[cat].files = grouped[cat].files.slice(0, 20); // Limit files per category
-        }
-
-        res.json({
-            categories: grouped,
-            totalFiles: filtered.length
+        let filtered = logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
         });
-    } else {
-        res.json(filtered.slice(0, parseInt(limit)));
+
+        if (category) {
+            filtered = filtered.filter(f => f.category === category);
+        }
+
+        // Group by category if requested
+        if (groupByCategory === 'true') {
+            const grouped = {};
+            for (const file of filtered) {
+                const cat = file.category || 'other';
+                if (!grouped[cat]) {
+                    grouped[cat] = { count: 0, totalSize: 0, files: [] };
+                }
+                grouped[cat].count++;
+                grouped[cat].totalSize += file.sizeBytes || 0;
+                grouped[cat].files.push({
+                    name: file.name,
+                    size: file.size,
+                    folder: file.folder,
+                    user: file.sessionUser,
+                    computer: file.hostname,
+                    timestamp: file.timestamp || file.receivedAt
+                });
+            }
+
+            // Format sizes
+            for (const cat of Object.keys(grouped)) {
+                const bytes = grouped[cat].totalSize;
+                grouped[cat].totalSizeFormatted = formatBytes(bytes);
+                grouped[cat].files = grouped[cat].files.slice(0, 20); // Limit files per category
+            }
+
+            res.json({
+                categories: grouped,
+                totalFiles: filtered.length
+            });
+        } else {
+            res.json(filtered);
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch file activity' });
     }
 });
 
@@ -1387,141 +1466,194 @@ function formatBytes(bytes) {
 
 /**
  * GET /api/v1/admin/file-stats
- * Returns aggregated file statistics by category
+ * Returns aggregated file statistics by category from database
  */
-app.get('/api/v1/admin/file-stats', (req, res) => {
-    const { clientId } = req.query;
+app.get('/api/v1/admin/file-stats', async (req, res) => {
+    try {
+        const { clientId } = req.query;
 
-    let filtered = fileActivity;
-    if (clientId) filtered = filtered.filter(f => f.clientId === clientId);
+        const query = { type: 'file' };
+        if (clientId) query.clientId = clientId;
 
-    // Aggregate by category
-    const categoryStats = {};
-    for (const file of filtered) {
-        const cat = file.category || 'other';
-        if (!categoryStats[cat]) {
-            categoryStats[cat] = {
-                category: cat,
-                count: 0,
-                totalSizeBytes: 0,
-                extensions: new Set()
+        const logs = await Log.find(query).sort({ receivedAt: -1 });
+
+        const filtered = logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
             };
+        });
+
+        // Aggregate by category
+        const categoryStats = {};
+        for (const file of filtered) {
+            const cat = file.category || 'other';
+            if (!categoryStats[cat]) {
+                categoryStats[cat] = {
+                    category: cat,
+                    count: 0,
+                    totalSizeBytes: 0,
+                    extensions: new Set()
+                };
+            }
+            categoryStats[cat].count++;
+            categoryStats[cat].totalSizeBytes += file.sizeBytes || 0;
+            if (file.extension) categoryStats[cat].extensions.add(file.extension);
         }
-        categoryStats[cat].count++;
-        categoryStats[cat].totalSizeBytes += file.sizeBytes || 0;
-        if (file.extension) categoryStats[cat].extensions.add(file.extension);
+
+        // Convert to array and format
+        const stats = Object.values(categoryStats).map(c => ({
+            category: c.category,
+            count: c.count,
+            totalSize: formatBytes(c.totalSizeBytes),
+            totalSizeBytes: c.totalSizeBytes,
+            extensions: Array.from(c.extensions)
+        })).sort((a, b) => b.count - a.count);
+
+        // Recent files by type
+        const recentByCategory = {};
+        const categories = ['documents', 'spreadsheets', 'images', 'videos', 'audio', 'archives'];
+        for (const cat of categories) {
+            recentByCategory[cat] = filtered
+                .filter(f => f.category === cat)
+                .slice(0, 5)
+                .map(f => ({
+                    name: f.name,
+                    size: f.size,
+                    user: f.sessionUser,
+                    computer: f.hostname,
+                    timestamp: f.timestamp || f.receivedAt
+                }));
+        }
+
+        res.json({
+            totalFiles: filtered.length,
+            totalSize: formatBytes(filtered.reduce((s, f) => s + (f.sizeBytes || 0), 0)),
+            categoryStats: stats,
+            recentByCategory: recentByCategory
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch file stats' });
     }
-
-    // Convert to array and format
-    const stats = Object.values(categoryStats).map(c => ({
-        category: c.category,
-        count: c.count,
-        totalSize: formatBytes(c.totalSizeBytes),
-        totalSizeBytes: c.totalSizeBytes,
-        extensions: Array.from(c.extensions)
-    })).sort((a, b) => b.count - a.count);
-
-    // Recent files by type
-    const recentByCategory = {};
-    const categories = ['documents', 'spreadsheets', 'images', 'videos', 'audio', 'archives'];
-    for (const cat of categories) {
-        recentByCategory[cat] = filtered
-            .filter(f => f.category === cat)
-            .slice(0, 5)
-            .map(f => ({
-                name: f.name,
-                size: f.size,
-                user: f.sessionUser,
-                computer: f.hostname,
-                timestamp: f.timestamp || f.receivedAt
-            }));
-    }
-
-    res.json({
-        totalFiles: filtered.length,
-        totalSize: formatBytes(filtered.reduce((s, f) => s + (f.sizeBytes || 0), 0)),
-        categoryStats: stats,
-        recentByCategory: recentByCategory
-    });
 });
 
 /**
  * GET /api/v1/admin/usb-events
  * Returns USB device connection events
  */
-app.get('/api/v1/admin/usb-events', (req, res) => {
-    const { limit = 100, clientId } = req.query;
+/**
+ * GET /api/v1/admin/usb-events
+ * Returns USB device connection events from database
+ */
+app.get('/api/v1/admin/usb-events', async (req, res) => {
+    try {
+        const { limit = 100, clientId } = req.query;
 
-    let filtered = usbEvents;
-    if (clientId) filtered = filtered.filter(u => u.clientId === clientId);
+        const query = { type: 'usb' };
+        if (clientId) query.clientId = clientId;
 
-    res.json(filtered.slice(0, parseInt(limit)));
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        }));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch USB events' });
+    }
 });
 
 /**
  * GET /api/v1/admin/activity
  * Returns recent activity logs
  */
-app.get('/api/v1/admin/activity', (req, res) => {
-    const { limit = 50, clientId } = req.query;
+/**
+ * GET /api/v1/admin/activity
+ * Returns recent activity logs from database
+ */
+app.get('/api/v1/admin/activity', async (req, res) => {
+    try {
+        const { limit = 50, clientId } = req.query;
 
-    let filtered = activityLogs;
-    if (clientId) filtered = filtered.filter(l => l.clientId === clientId);
+        const query = { type: 'activity' };
+        if (clientId) query.clientId = clientId;
 
-    res.json(filtered.slice(0, parseInt(limit)));
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(logs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch activity logs' });
+    }
 });
 
 /**
  * GET /api/v1/admin/stats
- * Returns aggregate dashboard statistics
+ * Returns aggregate dashboard statistics from database
  */
-app.get('/api/v1/admin/stats', (req, res) => {
-    const allComputers = Array.from(computers.values());
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+app.get('/api/v1/admin/stats', async (req, res) => {
+    try {
+        const allComputers = Array.from(computers.values());
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    // Filter today's data
-    const todaySessions = sessions.filter(s => new Date(s.receivedAt) >= todayStart);
-    const todayPrintJobs = printJobs.filter(j => new Date(j.receivedAt) >= todayStart);
+        // Fetch statistics from DB
+        const [todaySessions, todayPrintJobs] = await Promise.all([
+            Session.find({ receivedAt: { $gte: todayStart } }),
+            Log.find({ type: 'print', receivedAt: { $gte: todayStart } })
+        ]);
 
-    // Calculate revenues
-    const todaySessionRevenue = todaySessions
-        .filter(s => s.type === 'LOGOUT' && s.charges)
-        .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+        // Calculate session revenues
+        const todaySessionRevenue = todaySessions
+            .filter(s => s.type === 'LOGOUT' && s.charges)
+            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
 
-    const todayPrintBWPages = todayPrintJobs
-        .filter(j => j.printType === 'bw')
-        .reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0);
+        // Calculate printing revenues
+        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+            const data = j.data || {};
+            const pages = data.totalPages || data.pages || 1;
+            const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
+            return sum + (pages * rate);
+        }, 0);
 
-    const todayPrintColorPages = todayPrintJobs
-        .filter(j => j.printType === 'color')
-        .reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0);
-
-    const stats = {
-        computers: {
-            total: allComputers.length,
-            online: allComputers.filter(c => (now - new Date(c.lastSeen)) < 30000).length,
-            locked: allComputers.filter(c => c.status === 'locked').length,
-            activeSessions: allComputers.filter(c => c.status === 'active' && c.sessionUser).length
-        },
-        today: {
-            sessions: todaySessions.filter(s => s.type === 'LOGIN').length,
-            uniqueUsers: [...new Set(todaySessions.map(s => s.user).filter(Boolean))].length,
-            printJobsBW: todayPrintBWPages,
-            printJobsColor: todayPrintColorPages,
-            filesCreated: fileActivity.filter(f => new Date(f.receivedAt) >= todayStart).length,
-            usbDevices: usbEvents.filter(u => new Date(u.receivedAt) >= todayStart).length
-        },
-        revenue: {
-            today: todaySessionRevenue,
-            printBW: todayPrintBWPages * pricing.printBW,
-            printColor: todayPrintColorPages * pricing.printColor,
-            totalPrint: (todayPrintBWPages * pricing.printBW) + (todayPrintColorPages * pricing.printColor)
-        },
-        pricing: pricing
-    };
-
-    res.json(stats);
+        res.json({
+            computers: {
+                total: allComputers.length,
+                online: allComputers.filter(c => c.isOnline).length,
+                busy: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length,
+                offline: allComputers.filter(c => !c.isOnline).length
+            },
+            revenue: {
+                today: todaySessionRevenue + todayPrintRevenue,
+                sessions: todaySessionRevenue,
+                printing: todayPrintRevenue
+            },
+            sessions: {
+                today: todaySessions.filter(s => s.type === 'LOGIN').length,
+                active: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length
+            },
+            recentActivity: todaySessions.slice(0, 10),
+            pricing: pricing
+        });
+    } catch (error) {
+        console.error('Stats Error:', error);
+        res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+    }
 });
 
 /**
@@ -1666,103 +1798,113 @@ app.get('/api/v1/admin/tasks', async (req, res) => {
 
 /**
  * POST /api/v1/admin/tasks
- * Create a new task
+ * Create a new task in database
  */
-app.post('/api/v1/admin/tasks', (req, res) => {
-    const { title, description, serviceId, price, priority, dueAt, assignTo } = req.body;
+app.post('/api/v1/admin/tasks', async (req, res) => {
+    try {
+        const { title, description, serviceId, price, priority, dueAt, assignTo } = req.body;
 
-    if (!title) {
-        return res.status(400).json({ error: 'Title required' });
-    }
-
-    // Get price from service if serviceId provided
-    let taskPrice = price || 0;
-    let serviceName = null;
-    if (serviceId) {
-        const service = services.find(s => s.id === serviceId);
-        if (service) {
-            taskPrice = service.price;
-            serviceName = service.name;
+        if (!title) {
+            return res.status(400).json({ error: 'Title required' });
         }
-    }
 
-    const task = {
-        id: 'task-' + Date.now() + Math.random().toString(36).substr(2, 5),
-        title,
-        description: description || '',
-        serviceId: serviceId || null,
-        serviceName,
-        price: taskPrice,
-        priority: priority || 'normal', // low, normal, high, urgent
-        status: assignTo ? 'assigned' : 'available', // available, assigned, in-progress, completed, cancelled
-        assignedTo: assignTo ? {
-            userId: assignTo.userId || null,
-            clientId: assignTo.clientId || null,
-            hostname: assignTo.hostname || null,
-            userName: assignTo.userName || null
-        } : null,
-        assignedAt: assignTo ? new Date().toISOString() : null,
-        dueAt: dueAt || null,
-        completedAt: null,
-        createdAt: new Date().toISOString()
-    };
-
-    tasks.unshift(task);
-    if (tasks.length > 1000) tasks.pop();
-
-    // Notify if assigned to a computer
-    if (task.assignedTo?.clientId) {
-        io.emit('task-assigned', {
-            targetClientId: task.assignedTo.clientId,
-            task: {
-                id: task.id,
-                title: task.title,
-                price: task.price,
-                priority: task.priority,
-                dueAt: task.dueAt
+        // Get price from service if serviceId provided
+        let taskPrice = price || 0;
+        let serviceName = null;
+        if (serviceId) {
+            const service = await Service.findOne({ id: serviceId });
+            if (service) {
+                taskPrice = service.price;
+                serviceName = service.name;
             }
-        });
-    }
+        }
 
-    console.log(`[TASK] Created: ${task.title} - KSH ${task.price}`);
-    res.json({ success: true, task });
+        const taskData = {
+            id: 'task-' + Date.now() + Math.random().toString(36).substr(2, 5),
+            title,
+            description: description || '',
+            serviceId: serviceId || null,
+            serviceName,
+            price: taskPrice,
+            priority: priority || 'normal',
+            status: assignTo ? 'assigned' : 'available',
+            assignedTo: assignTo ? {
+                userId: assignTo.userId || null,
+                clientId: assignTo.clientId || null,
+                hostname: assignTo.hostname || null,
+                userName: assignTo.userName || null
+            } : null,
+            assignedAt: assignTo ? new Date().toISOString() : null,
+            dueAt: dueAt || null,
+            createdAt: new Date().toISOString()
+        };
+
+        const task = await Task.create(taskData);
+
+        // Notify if assigned to a computer
+        if (task.assignedTo?.clientId) {
+            io.emit('task-assigned', {
+                targetClientId: task.assignedTo.clientId,
+                task: {
+                    id: task.id,
+                    title: task.title,
+                    price: task.price,
+                    priority: task.priority,
+                    dueAt: task.dueAt
+                }
+            });
+        }
+
+        console.log(`[TASK] Created in DB: ${task.title} - KSH ${task.price}`);
+        res.json({ success: true, task });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create task' });
+    }
 });
 
 /**
  * PUT /api/v1/admin/tasks/:id
- * Update a task
+ * Update a task in database
  */
-app.put('/api/v1/admin/tasks/:id', (req, res) => {
-    const idx = tasks.findIndex(t => t.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+app.put('/api/v1/admin/tasks/:id', async (req, res) => {
+    try {
+        const task = await Task.findOne({ id: req.params.id });
+        if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    const oldStatus = tasks[idx].status;
-    tasks[idx] = { ...tasks[idx], ...req.body, updatedAt: new Date().toISOString() };
+        const oldStatus = task.status;
+        const updates = { ...req.body, updatedAt: new Date().toISOString() };
 
-    // If status changed to completed, record transaction
-    if (req.body.status === 'completed' && oldStatus !== 'completed') {
-        tasks[idx].completedAt = new Date().toISOString();
+        if (updates.status === 'completed' && oldStatus !== 'completed') {
+            updates.completedAt = new Date().toISOString();
+        }
 
-        // Create transaction record
-        const transaction = {
-            id: 'txn-' + Date.now(),
-            type: 'task_completion',
-            taskId: tasks[idx].id,
-            description: tasks[idx].title,
-            amount: tasks[idx].price,
-            clientId: tasks[idx].assignedTo?.clientId,
-            userId: tasks[idx].assignedTo?.userId,
-            hostname: tasks[idx].assignedTo?.hostname,
-            createdAt: new Date().toISOString()
-        };
-        transactions.unshift(transaction);
-        if (transactions.length > 2000) transactions.pop();
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: updates },
+            { new: true }
+        );
 
-        io.emit('transaction-created', transaction);
+        // If status changed to completed, record transaction
+        if (updates.status === 'completed' && oldStatus !== 'completed') {
+            const transaction = await Transaction.create({
+                id: 'txn-' + Date.now(),
+                type: 'task_completion',
+                taskId: updatedTask.id,
+                description: updatedTask.title,
+                amount: updatedTask.price,
+                clientId: updatedTask.assignedTo?.clientId,
+                userId: updatedTask.assignedTo?.userId,
+                hostname: updatedTask.assignedTo?.hostname,
+                createdAt: new Date().toISOString()
+            });
+            io.emit('transaction-created', transaction);
+        }
+
+        io.emit('task-updated', updatedTask);
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update task' });
     }
-
-    io.emit('task-updated', tasks[idx]);
-    res.json({ success: true, task: tasks[idx] });
 });
 
 /**
@@ -1780,207 +1922,234 @@ app.delete('/api/v1/admin/tasks/:id', (req, res) => {
 
 /**
  * POST /api/v1/admin/tasks/:id/assign
- * Assign a task to a user/computer
+ * Assign a task to a user/computer in database
  */
-app.post('/api/v1/admin/tasks/:id/assign', (req, res) => {
-    const { clientId, hostname, userId, userName } = req.body;
+app.post('/api/v1/admin/tasks/:id/assign', async (req, res) => {
+    try {
+        const { clientId, hostname, userId, userName } = req.body;
 
-    const idx = tasks.findIndex(t => t.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            {
+                $set: {
+                    status: 'assigned',
+                    assignedTo: { clientId, hostname, userId, userName },
+                    assignedAt: new Date().toISOString()
+                }
+            },
+            { new: true }
+        );
 
-    tasks[idx].status = 'assigned';
-    tasks[idx].assignedTo = { clientId, hostname, userId, userName };
-    tasks[idx].assignedAt = new Date().toISOString();
+        if (!updatedTask) return res.status(404).json({ error: 'Task not found' });
 
-    // Notify the assigned computer
-    io.emit('task-assigned', {
-        targetClientId: clientId,
-        task: {
-            id: tasks[idx].id,
-            title: tasks[idx].title,
-            price: tasks[idx].price,
-            priority: tasks[idx].priority,
-            dueAt: tasks[idx].dueAt
-        }
-    });
+        // Notify the assigned computer
+        io.emit('task-assigned', {
+            targetClientId: clientId,
+            task: {
+                id: updatedTask.id,
+                title: updatedTask.title,
+                price: updatedTask.price,
+                priority: updatedTask.priority,
+                dueAt: updatedTask.dueAt
+            }
+        });
 
-    res.json({ success: true, task: tasks[idx] });
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to assign task' });
+    }
 });
 
 // ==================== USER TASKS (for user portal) ====================
 
 /**
  * GET /api/v1/user/tasks
- * Get tasks for a specific user/computer
+ * Get tasks for a specific user/computer from database
  */
-app.get('/api/v1/user/tasks', requireUserAuth, (req, res) => {
-    const { clientId, userId, status, period } = req.query;
+app.get('/api/v1/user/tasks', requireUserAuth, async (req, res) => {
+    try {
+        const { clientId, userId, status, period } = req.query;
 
-    let filtered = tasks;
-
-    // Filter by assignment (clientId or userId)
-    if (clientId || userId) {
-        filtered = filtered.filter(t =>
-            t.assignedTo?.clientId === clientId ||
-            t.assignedTo?.userId === userId
-        );
-    }
-
-    // Filter by status
-    if (status) {
-        filtered = filtered.filter(t => t.status === status);
-    }
-
-    // Filter by period
-    if (period) {
-        const now = new Date();
-        let startDate;
-        switch (period) {
-            case 'today':
-                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                break;
-            case 'week':
-                startDate = new Date(now.setDate(now.getDate() - 7));
-                break;
-            case 'month':
-                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-                break;
+        const query = {};
+        if (clientId || userId) {
+            query.$or = [
+                { 'assignedTo.clientId': clientId },
+                { 'assignedTo.userId': userId }
+            ];
         }
-        if (startDate) {
-            filtered = filtered.filter(t => new Date(t.createdAt) >= startDate);
-        }
-    }
 
-    res.json(filtered);
+        if (status) query.status = status;
+
+        if (period) {
+            const now = new Date();
+            let startDate;
+            switch (period) {
+                case 'today':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'week':
+                    startDate = new Date(now);
+                    startDate.setDate(startDate.getDate() - 7);
+                    break;
+                case 'month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    break;
+            }
+            if (startDate) {
+                query.createdAt = { $gte: startDate };
+            }
+        }
+
+        const taskDocs = await Task.find(query).sort({ createdAt: -1 });
+        res.json(taskDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch user tasks' });
+    }
 });
 
 /**
  * PUT /api/v1/user/tasks/:id/status
- * Update task status (for user to mark as completed, etc.)
+ * Update task status in database
  */
-app.put('/api/v1/user/tasks/:id/status', requireUserAuth, (req, res) => {
-    const { status } = req.body;
-    const idx = tasks.findIndex(t => t.id === req.params.id);
+app.put('/api/v1/user/tasks/:id/status', requireUserAuth, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const task = await Task.findOne({ id: req.params.id });
 
-    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+        if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    tasks[idx].status = status;
-    if (status === 'in-progress' && !tasks[idx].startedAt) {
-        tasks[idx].startedAt = new Date().toISOString();
+        const oldStatus = task.status;
+        const updates = { status, updatedAt: new Date().toISOString() };
+
+        if (status === 'in-progress' && !task.startedAt) {
+            updates.startedAt = new Date().toISOString();
+        }
+
+        if (status === 'completed' && oldStatus !== 'completed') {
+            updates.completedAt = new Date().toISOString();
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: updates },
+            { new: true }
+        );
+
+        if (status === 'completed' && oldStatus !== 'completed') {
+            // Create transaction in DB
+            const transaction = await Transaction.create({
+                id: 'txn-' + Date.now(),
+                type: 'task_completion',
+                taskId: updatedTask.id,
+                description: updatedTask.title,
+                amount: updatedTask.price,
+                clientId: updatedTask.assignedTo?.clientId,
+                userId: updatedTask.assignedTo?.userId,
+                createdAt: new Date().toISOString()
+            });
+            io.emit('transaction-created', transaction);
+        }
+
+        io.emit('task-updated', updatedTask);
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update task status' });
     }
-    if (status === 'completed') {
-        tasks[idx].completedAt = new Date().toISOString();
-
-        // Create transaction
-        const transaction = {
-            id: 'txn-' + Date.now(),
-            type: 'task_completion',
-            taskId: tasks[idx].id,
-            description: tasks[idx].title,
-            amount: tasks[idx].price,
-            clientId: tasks[idx].assignedTo?.clientId,
-            createdAt: new Date().toISOString()
-        };
-        transactions.unshift(transaction);
-        io.emit('transaction-created', transaction);
-    }
-
-    io.emit('task-updated', tasks[idx]);
-    res.json({ success: true, task: tasks[idx] });
 });
 
 // ==================== TRANSACTIONS ====================
 
 /**
  * GET /api/v1/admin/transactions
- * List all transactions
+ * List all transactions from database
  */
-app.get('/api/v1/admin/transactions', (req, res) => {
-    const { type, clientId, limit = 100, period } = req.query;
+app.get('/api/v1/admin/transactions', async (req, res) => {
+    try {
+        const { type, clientId, limit = 100, period } = req.query;
 
-    let filtered = transactions;
-    if (type) filtered = filtered.filter(t => t.type === type);
-    if (clientId) filtered = filtered.filter(t => t.clientId === clientId);
+        const query = {};
+        if (type) query.type = type;
+        if (clientId) query.clientId = clientId;
 
-    // Filter by period
-    if (period) {
-        const now = new Date();
-        let startDate;
-        switch (period) {
-            case 'today':
-                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                break;
-            case 'week':
-                startDate = new Date(now.setDate(now.getDate() - 7));
-                break;
-            case 'month':
-                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-                break;
+        // Filter by period
+        if (period) {
+            const now = new Date();
+            let startDate;
+            switch (period) {
+                case 'today':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'week':
+                    startDate = new Date(now);
+                    startDate.setDate(startDate.getDate() - 7);
+                    break;
+                case 'month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    break;
+            }
+            if (startDate) {
+                query.createdAt = { $gte: startDate };
+            }
         }
-        if (startDate) {
-            filtered = filtered.filter(t => new Date(t.createdAt) >= startDate);
-        }
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch transactions' });
     }
-
-    res.json(filtered.slice(0, parseInt(limit)));
 });
 
 /**
  * GET /api/v1/admin/transactions/summary
  * Get transaction summary/totals
  */
-app.get('/api/v1/admin/transactions/summary', (req, res) => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const weekStart = new Date(now.setDate(now.getDate() - now.getDay()));
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+/**
+ * GET /api/v1/admin/transactions/summary
+ * Get transaction summary/totals from database
+ */
+app.get('/api/v1/admin/transactions/summary', async (req, res) => {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(now);
+        weekStart.setDate(weekStart.getDate() - 7);
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const todayTxns = transactions.filter(t => new Date(t.createdAt) >= todayStart);
-    const weekTxns = transactions.filter(t => new Date(t.createdAt) >= weekStart);
-    const monthTxns = transactions.filter(t => new Date(t.createdAt) >= monthStart);
+        const [
+            todayTxns, weekTxns, monthTxns,
+            todaySessions, weekSessions, monthSessions
+        ] = await Promise.all([
+            Transaction.find({ createdAt: { $gte: todayStart } }),
+            Transaction.find({ createdAt: { $gte: weekStart } }),
+            Transaction.find({ createdAt: { $gte: monthStart } }),
+            Session.find({ receivedAt: { $gte: todayStart }, type: 'LOGOUT' }),
+            Session.find({ receivedAt: { $gte: weekStart }, type: 'LOGOUT' }),
+            Session.find({ receivedAt: { $gte: monthStart }, type: 'LOGOUT' })
+        ]);
 
-    // Also include session charges
-    const todaySessions = sessions.filter(s =>
-        new Date(s.receivedAt) >= todayStart && s.type === 'LOGOUT' && s.charges
-    );
-    const weekSessions = sessions.filter(s =>
-        new Date(s.receivedAt) >= weekStart && s.type === 'LOGOUT' && s.charges
-    );
-    const monthSessions = sessions.filter(s =>
-        new Date(s.receivedAt) >= monthStart && s.type === 'LOGOUT' && s.charges
-    );
+        const calculateRevenue = (txns, sessions) => {
+            const txnTotal = txns.reduce((sum, t) => sum + (t.amount || 0), 0);
+            const sessionTotal = sessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
+            return {
+                sessions: sessions.length,
+                sessionRevenue: sessionTotal,
+                tasks: txns.length,
+                taskRevenue: txnTotal,
+                totalRevenue: txnTotal + sessionTotal
+            };
+        };
 
-    const todaySessionRevenue = todaySessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
-    const weekSessionRevenue = weekSessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
-    const monthSessionRevenue = monthSessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
-
-    const todayTaskRevenue = todayTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
-    const weekTaskRevenue = weekTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
-    const monthTaskRevenue = monthTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
-
-    res.json({
-        today: {
-            sessions: todaySessions.length,
-            sessionRevenue: todaySessionRevenue,
-            tasks: todayTxns.length,
-            taskRevenue: todayTaskRevenue,
-            totalRevenue: todaySessionRevenue + todayTaskRevenue
-        },
-        week: {
-            sessions: weekSessions.length,
-            sessionRevenue: weekSessionRevenue,
-            tasks: weekTxns.length,
-            taskRevenue: weekTaskRevenue,
-            totalRevenue: weekSessionRevenue + weekTaskRevenue
-        },
-        month: {
-            sessions: monthSessions.length,
-            sessionRevenue: monthSessionRevenue,
-            tasks: monthTxns.length,
-            taskRevenue: monthTaskRevenue,
-            totalRevenue: monthSessionRevenue + monthTaskRevenue
-        }
-    });
+        res.json({
+            today: calculateRevenue(todayTxns, todaySessions),
+            week: calculateRevenue(weekTxns, weekSessions),
+            month: calculateRevenue(monthTxns, monthSessions)
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch transaction summary' });
+    }
 });
 
 
@@ -2329,6 +2498,137 @@ app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
     console.log(`[PUBLIC] Order ${orderId} status updated to: ${status}`);
 
     res.json({ success: true, request });
+});
+
+// ==================== USER MANAGEMENT ====================
+
+/**
+ * GET /api/v1/auth/agent/users
+ * Returns list of all agent users
+ */
+app.get('/api/v1/auth/agent/users', async (req, res) => {
+    try {
+        const users = await User.find({ type: 'agent' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch agent users' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/agent/users
+ * Create a new agent user
+ */
+app.post('/api/v1/auth/agent/users', async (req, res) => {
+    try {
+        const { username, password, name, email } = req.body;
+
+        const existing = await User.findOne({ username });
+        if (existing) return res.status(400).json({ error: 'Username already exists' });
+
+        const newUser = await User.create({
+            username,
+            passwordHash: hashPassword(password),
+            name,
+            email,
+            type: 'agent',
+            active: true
+        });
+
+        res.json({ success: true, user: newUser });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create user' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/agent/users/:username
+ * Update an agent user
+ */
+app.put('/api/v1/auth/agent/users/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        const updates = { ...req.body };
+
+        if (updates.password) {
+            updates.passwordHash = hashPassword(updates.password);
+            delete updates.password;
+        }
+
+        const updated = await User.findOneAndUpdate(
+            { username, type: 'agent' },
+            { $set: updates },
+            { new: true }
+        );
+
+        if (!updated) return res.status(404).json({ error: 'User not found' });
+        res.json({ success: true, user: updated });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/agent/users/:username
+ * Delete an agent user
+ */
+app.delete('/api/v1/auth/agent/users/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        await User.deleteOne({ username, type: 'agent' });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+// Portal User Routes
+app.get('/api/v1/auth/portal/users', async (req, res) => {
+    try {
+        const users = await User.find({ type: 'portal' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch portal users' });
+    }
+});
+
+app.post('/api/v1/auth/portal/users', async (req, res) => {
+    try {
+        const { username, password, name, email } = req.body;
+        const newUser = await User.create({
+            username,
+            passwordHash: hashPassword(password),
+            name,
+            email,
+            type: 'portal',
+            active: true
+        });
+        res.json({ success: true, user: newUser });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create portal user' });
+    }
+});
+
+app.put('/api/v1/auth/portal/users/:username', async (req, res) => {
+    try {
+        const updated = await User.findOneAndUpdate(
+            { username: req.params.username, type: 'portal' },
+            { $set: req.body },
+            { new: true }
+        );
+        res.json({ success: true, user: updated });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update portal user' });
+    }
+});
+
+app.delete('/api/v1/auth/portal/users/:username', async (req, res) => {
+    try {
+        await User.deleteOne({ username: req.params.username, type: 'portal' });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete portal user' });
+    }
 });
 
 

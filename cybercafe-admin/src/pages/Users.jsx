@@ -27,11 +27,12 @@ const { Text, Title } = Typography;
 const { Search } = Input;
 
 function Users() {
-    const [userType, setUserType] = useState('agent'); // 'agent' or 'portal'
+    const [userType, setUserType] = useState(localStorage.getItem('hawknine_user_type') || 'agent'); // 'agent' or 'portal'
     const [showPassword, setShowPassword] = useState(false);
     const [users, setUsers] = useState([]);
     const [sessions, setSessions] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [initialLoading, setInitialLoading] = useState(true);
     const [modalVisible, setModalVisible] = useState(false);
     const [editingUser, setEditingUser] = useState(null);
     const [searchText, setSearchText] = useState('');
@@ -53,10 +54,12 @@ function Users() {
             message.error('Failed to load users');
         }
         setLoading(false);
+        setInitialLoading(false);
     };
 
     useEffect(() => {
         fetchData();
+        localStorage.setItem('hawknine_user_type', userType);
     }, [userType]);
 
     // Calculate user stats from sessions
@@ -164,19 +167,25 @@ function Users() {
 
     // Stats
     const stats = {
-        totalUsers: users.length,
-        activeUsers: users.filter(u => u.active).length,
-        inactiveUsers: users.filter(u => !u.active).length,
-        totalRevenue: sessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0),
+        totalUsers: (users || []).length,
+        activeUsers: (users || []).filter(u => u && u.active).length,
+        inactiveUsers: (users || []).filter(u => u && !u.active).length,
+        totalRevenue: (sessions || []).reduce((sum, s) => sum + (s?.charges?.grandTotal || 0), 0),
     };
 
     // Filter users
-    const filteredUsers = users.filter(user => {
-        const matchesSearch = user.username?.toLowerCase().includes(searchText.toLowerCase()) ||
-            user.name?.toLowerCase().includes(searchText.toLowerCase());
+    const filteredUsers = (users || []).filter(user => {
+        if (!user) return false;
+        const usernameMatch = (user.username || '').toLowerCase();
+        const nameMatch = (user.name || '').toLowerCase();
+        const search = (searchText || '').toLowerCase();
+
+        const matchesSearch = usernameMatch.includes(search) || nameMatch.includes(search);
+
         const matchesStatus = filterStatus === 'all' ||
             (filterStatus === 'active' && user.active) ||
             (filterStatus === 'inactive' && !user.active);
+
         return matchesSearch && matchesStatus;
     });
 
@@ -298,6 +307,14 @@ function Users() {
             ),
         },
     ];
+
+    if (initialLoading) {
+        return (
+            <div style={{ padding: '100px 0', textAlign: 'center' }}>
+                <Spin size="large" tip="Loading users..." />
+            </div>
+        );
+    }
 
     return (
         <div>
