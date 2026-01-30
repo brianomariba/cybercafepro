@@ -51,17 +51,36 @@ function Reports() {
                 getTasks().catch(() => []),
             ]);
 
-            setTransactions(txnData || []);
-            setSummary(summaryData || { today: 0, week: 0, month: 0 });
-            setSessions(sessionData || []);
-            setComputers(computerData || []);
-            setPrintJobs(printData || []);
-            setTasks(taskData || []);
+            // Helper to ensure we always have an array
+            const ensureArray = (data) => {
+                if (Array.isArray(data)) return data;
+                if (data && Array.isArray(data.data)) return data.data;
+                if (data && Array.isArray(data.transactions)) return data.transactions;
+                if (data && Array.isArray(data.sessions)) return data.sessions;
+                if (data && Array.isArray(data.computers)) return data.computers;
+                if (data && Array.isArray(data.printJobs)) return data.printJobs;
+                if (data && Array.isArray(data.tasks)) return data.tasks;
+                return [];
+            };
+
+            setTransactions(ensureArray(txnData));
+            setSummary(summaryData && typeof summaryData === 'object' && !Array.isArray(summaryData) ? summaryData : { today: 0, week: 0, month: 0 });
+            setSessions(ensureArray(sessionData));
+            setComputers(ensureArray(computerData));
+            setPrintJobs(ensureArray(printData));
+            setTasks(ensureArray(taskData));
         } catch (error) {
             console.error('Failed to fetch report data:', error);
+            // Ensure we have empty arrays even on error
+            setTransactions([]);
+            setSessions([]);
+            setComputers([]);
+            setPrintJobs([]);
+            setTasks([]);
         }
         setLoading(false);
     };
+
 
     useEffect(() => {
         fetchData();
@@ -69,6 +88,7 @@ function Reports() {
 
     // Filter data by date range
     const filterByDateRange = (items, dateField = 'createdAt') => {
+        if (!Array.isArray(items)) return [];
         if (!dateRange[0] || !dateRange[1]) return items;
         return items.filter(item => {
             const itemDate = dayjs(item[dateField] || item.receivedAt || item.timestamp);
@@ -76,11 +96,18 @@ function Reports() {
         });
     };
 
+    // Ensure arrays are arrays before filtering
+    const safeTransactions = Array.isArray(transactions) ? transactions : [];
+    const safeSessions = Array.isArray(sessions) ? sessions : [];
+    const safePrintJobs = Array.isArray(printJobs) ? printJobs : [];
+    const safeTasks = Array.isArray(tasks) ? tasks : [];
+    const safeComputers = Array.isArray(computers) ? computers : [];
+
     // Calculate stats
-    const filteredTransactions = filterByDateRange(transactions);
-    const filteredSessions = filterByDateRange(sessions.filter(s => s.type === 'LOGOUT'), 'receivedAt');
-    const filteredPrintJobs = filterByDateRange(printJobs, 'receivedAt');
-    const completedTasks = filterByDateRange(tasks.filter(t => t.status === 'completed'), 'completedAt');
+    const filteredTransactions = filterByDateRange(safeTransactions);
+    const filteredSessions = filterByDateRange(safeSessions.filter(s => s && s.type === 'LOGOUT'), 'receivedAt');
+    const filteredPrintJobs = filterByDateRange(safePrintJobs, 'receivedAt');
+    const completedTasks = filterByDateRange(safeTasks.filter(t => t && t.status === 'completed'), 'completedAt');
 
     const totalRevenue = filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
     const totalSessions = filteredSessions.length;
@@ -91,14 +118,14 @@ function Reports() {
     const weeklyData = [];
     for (let i = 6; i >= 0; i--) {
         const day = dayjs().subtract(i, 'day');
-        const dayTransactions = transactions.filter(t =>
-            dayjs(t.createdAt).isSame(day, 'day')
+        const dayTransactions = safeTransactions.filter(t =>
+            t && dayjs(t.createdAt).isSame(day, 'day')
         );
-        const daySessions = sessions.filter(s =>
-            s.type === 'LOGOUT' && dayjs(s.receivedAt || s.endTime).isSame(day, 'day')
+        const daySessions = safeSessions.filter(s =>
+            s && s.type === 'LOGOUT' && dayjs(s.receivedAt || s.endTime).isSame(day, 'day')
         );
-        const dayPrinting = printJobs.filter(p =>
-            dayjs(p.receivedAt || p.timestamp).isSame(day, 'day')
+        const dayPrinting = safePrintJobs.filter(p =>
+            p && dayjs(p.receivedAt || p.timestamp).isSame(day, 'day')
         );
 
         weeklyData.push({
@@ -113,11 +140,11 @@ function Reports() {
     const maxRevenue = Math.max(...weeklyData.map(d => d.revenue), 1);
 
     // Calculate computer performance
-    const computerPerformance = computers.map(computer => {
-        const computerSessions = sessions.filter(s =>
-            s.type === 'LOGOUT' && s.clientId === computer.clientId
+    const computerPerformance = safeComputers.map(computer => {
+        const computerSessions = safeSessions.filter(s =>
+            s && s.type === 'LOGOUT' && s.clientId === computer.clientId
         );
-        const computerTxns = transactions.filter(t => t.clientId === computer.clientId);
+        const computerTxns = safeTransactions.filter(t => t && t.clientId === computer.clientId);
 
         const totalSessions = computerSessions.length;
         const totalHours = computerSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60;
@@ -137,10 +164,10 @@ function Reports() {
     }).sort((a, b) => b.revenue - a.revenue);
 
     // Service breakdown
-    const sessionRevenue = transactions.filter(t => t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const taskRevenue = transactions.filter(t => t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const printingRevenue = transactions.reduce((sum, t) => {
-        if (t.breakdown) {
+    const sessionRevenue = safeTransactions.filter(t => t && t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0);
+    const taskRevenue = safeTransactions.filter(t => t && t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0);
+    const printingRevenue = safeTransactions.reduce((sum, t) => {
+        if (t && t.breakdown) {
             return sum + (t.breakdown.printBW || 0) + (t.breakdown.printColor || 0);
         }
         return sum;
@@ -173,7 +200,7 @@ function Reports() {
 
     // Peak hours calculation from sessions
     const hourlyActivity = {};
-    sessions.filter(s => s.type === 'LOGIN').forEach(session => {
+    safeSessions.filter(s => s && s.type === 'LOGIN').forEach(session => {
         const hour = dayjs(session.timestamp || session.startTime).hour();
         hourlyActivity[hour] = (hourlyActivity[hour] || 0) + 1;
     });
@@ -190,7 +217,7 @@ function Reports() {
 
     // Top users from sessions
     const userStats = {};
-    sessions.filter(s => s.type === 'LOGOUT' && s.user).forEach(session => {
+    safeSessions.filter(s => s && s.type === 'LOGOUT' && s.user).forEach(session => {
         if (!userStats[session.user]) {
             userStats[session.user] = { name: session.user, sessions: 0, spent: 0, hours: 0 };
         }
