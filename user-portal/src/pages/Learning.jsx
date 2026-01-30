@@ -27,116 +27,19 @@ const { Text, Title, Paragraph } = Typography;
 
 // Course categories
 const categories = [
-    { key: 'all', label: 'All Courses', count: 24 },
-    { key: 'getting-started', label: 'Getting Started', count: 5 },
-    { key: 'computer', label: 'Computer Skills', count: 8 },
-    { key: 'printing', label: 'Printing & Scanning', count: 6 },
-    { key: 'office', label: 'Office Applications', count: 5 },
+    { key: 'all', label: 'All Courses', count: 0 },
+    { key: 'getting-started', label: 'Getting Started', count: 0 },
+    { key: 'computer', label: 'Computer Skills', count: 0 },
+    { key: 'printing', label: 'Printing & Scanning', count: 0 },
+    { key: 'office', label: 'Office Applications', count: 0 },
 ];
 
-// Mock courses data
-const courses = [
-    {
-        id: 1,
-        title: 'Introduction to Computer Services',
-        description: 'Learn the basics of using cybercafe computer services efficiently.',
-        category: 'getting-started',
-        duration: '15 min',
-        lessons: 5,
-        progress: 80,
-        level: 'Beginner',
-        rating: 4.8,
-        students: 1250,
-        icon: <RocketOutlined />,
-        color: '#00B4D8',
-        locked: false,
-    },
-    {
-        id: 2,
-        title: 'Document Printing Mastery',
-        description: 'Master all aspects of document printing, from basic to advanced settings.',
-        category: 'printing',
-        duration: '25 min',
-        lessons: 8,
-        progress: 45,
-        level: 'Intermediate',
-        rating: 4.7,
-        students: 890,
-        icon: <PrinterOutlined />,
-        color: '#FFB703',
-        locked: false,
-    },
-    {
-        id: 3,
-        title: 'Computer Basics for Everyone',
-        description: 'Essential computer skills for everyday tasks and productivity.',
-        category: 'computer',
-        duration: '40 min',
-        lessons: 12,
-        progress: 20,
-        level: 'Beginner',
-        rating: 4.9,
-        students: 2100,
-        icon: <DesktopOutlined />,
-        color: '#00C853',
-        locked: false,
-    },
-    {
-        id: 4,
-        title: 'Scanning & Digital Documents',
-        description: 'Learn how to scan, edit, and manage digital documents professionally.',
-        category: 'printing',
-        duration: '20 min',
-        lessons: 6,
-        progress: 0,
-        level: 'Beginner',
-        rating: 4.6,
-        students: 560,
-        icon: <ScanOutlined />,
-        color: '#FB8500',
-        locked: false,
-    },
-    {
-        id: 5,
-        title: 'Microsoft Word Essentials',
-        description: 'Create professional documents with Microsoft Word like a pro.',
-        category: 'office',
-        duration: '45 min',
-        lessons: 15,
-        progress: 0,
-        level: 'Intermediate',
-        rating: 4.8,
-        students: 1800,
-        icon: <FileTextOutlined />,
-        color: '#8B5CF6',
-    },
-    {
-        id: 6,
-        title: 'Internet Safety & Security',
-        description: 'Stay safe online with essential security practices and awareness.',
-        category: 'computer',
-        duration: '30 min',
-        lessons: 10,
-        progress: 0,
-        level: 'Beginner',
-        rating: 4.9,
-        students: 3200,
-        icon: <SafetyOutlined />,
-        color: '#00B4D8',
-    },
-];
+// Courses would be fetched from API
+const courses = [];
 
 // Featured course
-const featuredCourse = {
-    title: 'Complete Cybercafe User Guide',
-    description: 'Everything you need to know about using HawkNine cybercafe services effectively. From computer usage to printing, scanning, and more.',
-    duration: '2 hours',
-    lessons: 24,
-    level: 'All Levels',
-    rating: 4.9,
-    students: 5400,
-    instructor: 'HawkNine Team',
-};
+// Featured course
+const featuredCourse = null;
 
 function Learning({ isDarkMode }) {
     const [activeCategory, setActiveCategory] = useState('all');
@@ -201,53 +104,55 @@ function Learning({ isDarkMode }) {
                             <ClockCircleOutlined />
                         </div>
                     </div>
-                    <div className="stat-value">4.5h</div>
+                    <div className="stat-value">0h</div>
                     <div className="stat-label">Learning Time</div>
                 </div>
             </div>
 
             {/* Featured Course */}
-            <Card
-                style={{
-                    marginBottom: 24,
-                    background: 'linear-gradient(135deg, rgba(0, 180, 216, 0.15) 0%, rgba(0, 200, 83, 0.1) 100%)',
-                    border: '1px solid rgba(0, 180, 216, 0.2)',
-                }}
-            >
-                <Row gutter={24} align="middle">
-                    <Col xs={24} md={16}>
-                        <Tag color="gold" style={{ marginBottom: 12 }}>
-                            <StarFilled /> Featured Course
-                        </Tag>
-                        <Title level={3} style={{ margin: 0, color: isDarkMode ? '#fff' : '#1e293b' }}>
-                            {featuredCourse.title}
-                        </Title>
-                        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 16, maxWidth: 600 }}>
-                            {featuredCourse.description}
-                        </Paragraph>
-                        <Space wrap>
-                            <Tag icon={<ClockCircleOutlined />} color="default">{featuredCourse.duration}</Tag>
-                            <Tag icon={<BookOutlined />} color="default">{featuredCourse.lessons} Lessons</Tag>
-                            <Tag icon={<ThunderboltOutlined />} color="default">{featuredCourse.level}</Tag>
-                            <Tag icon={<StarFilled />} color="gold">{featuredCourse.rating}</Tag>
-                            <Tag icon={<TeamOutlined />} color="default">{featuredCourse.students} students</Tag>
-                        </Space>
-                    </Col>
-                    <Col xs={24} md={8} style={{ textAlign: 'right' }}>
-                        <div style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'flex-end',
-                            gap: 12,
-                        }}>
-                            <Button type="primary" size="large" icon={<PlayCircleOutlined />}>
-                                Start Learning
-                            </Button>
-                            <Text type="secondary">By {featuredCourse.instructor}</Text>
-                        </div>
-                    </Col>
-                </Row>
-            </Card>
+            {featuredCourse && (
+                <Card
+                    style={{
+                        marginBottom: 24,
+                        background: 'linear-gradient(135deg, rgba(0, 180, 216, 0.15) 0%, rgba(0, 200, 83, 0.1) 100%)',
+                        border: '1px solid rgba(0, 180, 216, 0.2)',
+                    }}
+                >
+                    <Row gutter={24} align="middle">
+                        <Col xs={24} md={16}>
+                            <Tag color="gold" style={{ marginBottom: 12 }}>
+                                <StarFilled /> Featured Course
+                            </Tag>
+                            <Title level={3} style={{ margin: 0, color: isDarkMode ? '#fff' : '#1e293b' }}>
+                                {featuredCourse.title}
+                            </Title>
+                            <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 16, maxWidth: 600 }}>
+                                {featuredCourse.description}
+                            </Paragraph>
+                            <Space wrap>
+                                <Tag icon={<ClockCircleOutlined />} color="default">{featuredCourse.duration}</Tag>
+                                <Tag icon={<BookOutlined />} color="default">{featuredCourse.lessons} Lessons</Tag>
+                                <Tag icon={<ThunderboltOutlined />} color="default">{featuredCourse.level}</Tag>
+                                <Tag icon={<StarFilled />} color="gold">{featuredCourse.rating}</Tag>
+                                <Tag icon={<TeamOutlined />} color="default">{featuredCourse.students} students</Tag>
+                            </Space>
+                        </Col>
+                        <Col xs={24} md={8} style={{ textAlign: 'right' }}>
+                            <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-end',
+                                gap: 12,
+                            }}>
+                                <Button type="primary" size="large" icon={<PlayCircleOutlined />}>
+                                    Start Learning
+                                </Button>
+                                <Text type="secondary">By {featuredCourse.instructor}</Text>
+                            </div>
+                        </Col>
+                    </Row>
+                </Card>
+            )}
 
             {/* Search and Filter */}
             <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>

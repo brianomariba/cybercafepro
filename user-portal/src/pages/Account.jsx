@@ -90,21 +90,6 @@ function Account({ user, onUpdateUser, isDarkMode }) {
                                         strokeColor={{ '0%': '#00B4D8', '100%': '#00C853' }}
                                     />
                                 </div>
-
-                                <div style={{ marginTop: 20, display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-                                    <div style={{ textAlign: 'center', padding: '12px 20px', background: 'rgba(0, 180, 216, 0.1)', borderRadius: 12 }}>
-                                        <Text style={{ fontSize: 24, fontWeight: 700, color: '#00B4D8', display: 'block' }}>12</Text>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>Lessons</Text>
-                                    </div>
-                                    <div style={{ textAlign: 'center', padding: '12px 20px', background: 'rgba(0, 200, 83, 0.1)', borderRadius: 12 }}>
-                                        <Text style={{ fontSize: 24, fontWeight: 700, color: '#00C853', display: 'block' }}>8</Text>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>Templates</Text>
-                                    </div>
-                                    <div style={{ textAlign: 'center', padding: '12px 20px', background: 'rgba(255, 183, 3, 0.1)', borderRadius: 12 }}>
-                                        <Text style={{ fontSize: 24, fontWeight: 700, color: '#FFB703', display: 'block' }}>5</Text>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>Guides Read</Text>
-                                    </div>
-                                </div>
                             </div>
                         </Card>
                     </Col>
@@ -384,10 +369,7 @@ function Account({ user, onUpdateUser, isDarkMode }) {
                             style={{ marginTop: 24 }}
                         >
                             <List
-                                dataSource={[
-                                    { device: 'Chrome on Windows', location: 'Nairobi, KE', current: true },
-                                    { device: 'Safari on iPhone', location: 'Nairobi, KE', current: false },
-                                ]}
+                                dataSource={[]}
                                 renderItem={(item) => (
                                     <List.Item
                                         actions={item.current ? [
@@ -403,6 +385,9 @@ function Account({ user, onUpdateUser, isDarkMode }) {
                                     </List.Item>
                                 )}
                             />
+                            <div style={{ padding: 20, textAlign: 'center' }}>
+                                <Text type="secondary">No active session details available.</Text>
+                            </div>
                         </Card>
                     </Col>
                 </Row>
