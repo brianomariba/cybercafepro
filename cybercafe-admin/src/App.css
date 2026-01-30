@@ -44,10 +44,34 @@
 
 /* Sidebar Status */
 .sidebar-status {
-  position: absolute;
-  bottom: 24px;
-  left: 16px;
-  right: 16px;
+  padding: 16px;
+  margin-top: auto;
+}
+
+.ant-layout-sider-children {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+
+.ant-menu.ant-menu-root {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbar for menu */
+.ant-menu.ant-menu-root::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ant-menu.ant-menu-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ant-menu.ant-menu-root::-webkit-scrollbar-thumb {
+  background: rgba(0, 180, 216, 0.2);
+  border-radius: 10px;
 }
 
 .status-card {
