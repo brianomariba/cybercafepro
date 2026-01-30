@@ -31,7 +31,6 @@ import {
   FileOutlined,
   FolderOutlined,
   OrderedListOutlined,
-  OrderedListOutlined,
   DownloadOutlined,
   ReadOutlined,
   CompassOutlined,
