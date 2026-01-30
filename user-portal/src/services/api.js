@@ -20,19 +20,19 @@ const api = axios.create({
 
 // Attach token for authenticated user requests
 api.interceptors.request.use((config) => {
-  try {
-    const token = localStorage.getItem('hawknine_user_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    try {
+        const token = localStorage.getItem('hawknine_user_token');
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+    } catch (e) {
+        // ignore storage errors
     }
-  } catch (e) {
-    // ignore storage errors
-  }
-  return config;
+    return config;
 });
 
 export const setUserToken = (token) => {
-  localStorage.setItem('hawknine_user_token', token);
+    localStorage.setItem('hawknine_user_token', token);
 };
 
 // ==================== TASKS ====================
@@ -64,6 +64,13 @@ export const getDocuments = async (params = {}) => {
 export const downloadDocument = (documentId) => {
     return `${API_BASE_URL}/documents/${documentId}/download`;
 };
+
+// ==================== CONTENT ====================
+
+export const getTemplates = async () => (await api.get('/templates')).data;
+export const getCourses = async () => (await api.get('/courses')).data;
+export const getGuides = async () => (await api.get('/guides')).data;
+
 
 // ==================== USER AUTHENDPOINTS (OTP-BASED) ====================
 export const loginUserStep1 = async (username, password) => {

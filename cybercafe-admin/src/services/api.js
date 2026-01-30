@@ -382,6 +382,20 @@ export const disconnectSocket = () => {
     }
 };
 
+
+// Content Management
+export const getTemplates = async () => (await api.get('/templates')).data;
+export const createTemplate = async (data) => (await api.post('/admin/templates', data)).data;
+export const deleteTemplate = async (id) => (await api.delete(`/admin/templates/${id}`)).data;
+
+export const getCourses = async () => (await api.get('/courses')).data;
+export const createCourse = async (data) => (await api.post('/admin/courses', data)).data;
+export const deleteCourse = async (id) => (await api.delete(`/admin/courses/${id}`)).data;
+
+export const getGuides = async () => (await api.get('/guides')).data;
+export const createGuide = async (data) => (await api.post('/admin/guides', data)).data;
+export const deleteGuide = async (id) => (await api.delete(`/admin/guides/${id}`)).data;
+
 // Default export
 export default {
     // Auth
@@ -401,6 +415,11 @@ export default {
     updatePortalUser,
     deletePortalUser,
     cleanupDemoUsers,
+
+    // Content Management
+    getTemplates, createTemplate, deleteTemplate,
+    getCourses, createCourse, deleteCourse,
+    getGuides, createGuide, deleteGuide,
 
     // Computers
     getComputers,

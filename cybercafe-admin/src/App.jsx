@@ -31,7 +31,10 @@ import {
   FileOutlined,
   FolderOutlined,
   OrderedListOutlined,
+  OrderedListOutlined,
   DownloadOutlined,
+  ReadOutlined,
+  CompassOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -46,6 +49,9 @@ import Settings from './pages/Settings';
 import BrowserHistory from './pages/BrowserHistory';
 import Documents from './pages/Documents';
 import Tasks from './pages/Tasks';
+import Templates from './pages/Templates';
+import Learning from './pages/Learning';
+import Guidance from './pages/Guidance';
 import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats } from './services/api';
 
 import './App.css';
@@ -143,6 +149,16 @@ const menuItems = [
     key: 'documents',
     icon: <FolderOutlined />,
     label: 'Documents',
+  },
+  {
+    key: 'content',
+    icon: <FileTextOutlined />,
+    label: 'Content',
+    children: [
+      { key: 'admin-templates', icon: <FileOutlined />, label: 'Templates' },
+      { key: 'admin-learning', icon: <ReadOutlined />, label: 'Learning' },
+      { key: 'admin-guidance', icon: <CompassOutlined />, label: 'Guidance' },
+    ]
   },
   {
     key: 'reports',
@@ -363,6 +379,12 @@ function App() {
         return <Tasks />;
       case 'documents':
         return <Documents />;
+      case 'admin-templates':
+        return <Templates />;
+      case 'admin-learning':
+        return <Learning />;
+      case 'admin-guidance':
+        return <Guidance />;
       case 'reports':
         return <Reports />;
       case 'settings':

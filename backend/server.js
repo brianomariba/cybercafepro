@@ -35,6 +35,9 @@ const SharedDocument = require('./models/SharedDocument');
 const Log = require('./models/Log');
 const AuthSession = require('./models/AuthSession');
 const VerificationCode = require('./models/VerificationCode');
+const Template = require('./models/Template');
+const Course = require('./models/Course');
+const Guide = require('./models/Guide');
 
 
 
@@ -2595,6 +2598,84 @@ app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
 
 // NOTE: User management routes are defined earlier with requireAdminAuth protection (lines 805-971)
 // Do NOT add unprotected user routes here
+
+// ==================== TEMPLATES MANAGEMENT ====================
+
+// GET /api/v1/templates (Public)
+app.get('/api/v1/templates', async (req, res) => {
+    try {
+        const templates = await Template.find().sort({ createdAt: -1 });
+        res.json(templates);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/templates (Admin)
+app.post('/api/v1/admin/templates', async (req, res) => {
+    try {
+        const template = await Template.create(req.body);
+        res.json(template);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/templates/:id (Admin)
+app.delete('/api/v1/admin/templates/:id', async (req, res) => {
+    try {
+        await Template.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== LEARNING / COURSES MANAGEMENT ====================
+
+// GET /api/v1/courses (Public)
+app.get('/api/v1/courses', async (req, res) => {
+    try {
+        const courses = await Course.find().sort({ createdAt: -1 });
+        res.json(courses);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/courses (Admin)
+app.post('/api/v1/admin/courses', async (req, res) => {
+    try {
+        const course = await Course.create(req.body);
+        res.json(course);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/courses/:id (Admin)
+app.delete('/api/v1/admin/courses/:id', async (req, res) => {
+    try {
+        await Course.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== GUIDANCE / GUIDES MANAGEMENT ====================
+
+// GET /api/v1/guides (Public)
+app.get('/api/v1/guides', async (req, res) => {
+    try {
+        const guides = await Guide.find().sort({ createdAt: -1 });
+        res.json(guides);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/guides (Admin)
+app.post('/api/v1/admin/guides', async (req, res) => {
+    try {
+        const guide = await Guide.create(req.body);
+        res.json(guide);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/guides/:id (Admin)
+app.delete('/api/v1/admin/guides/:id', async (req, res) => {
+    try {
+        await Guide.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ==================== SOCKET.IO ====================
 
