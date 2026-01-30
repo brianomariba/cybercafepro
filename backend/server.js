@@ -1832,6 +1832,36 @@ app.delete('/api/v1/admin/services/:id', async (req, res) => {
 });
 
 
+
+/**
+ * GET /api/v1/admin/browser-history
+ * Fetch browser history logs
+ */
+app.get('/api/v1/admin/browser-history', requireAdminAuth, async (req, res) => {
+    try {
+        const { limit = 100 } = req.query;
+        const logs = await Log.find({ type: 'browser' })
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        const history = logs.map(log => ({
+            id: log._id,
+            hostname: log.hostname,
+            user: log.sessionUser,
+            url: log.data?.url || '',
+            title: log.data?.title || '',
+            category: log.data?.category || 'other',
+            timestamp: log.receivedAt,
+            blocked: log.data?.blocked || false
+        }));
+
+        res.json(history);
+    } catch (error) {
+        console.error('Fetch browser history error:', error);
+        res.status(500).json({ error: 'Failed to fetch browser history' });
+    }
+});
+
 // ==================== TASK MANAGEMENT ====================
 
 /**
