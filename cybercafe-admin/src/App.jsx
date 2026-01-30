@@ -250,6 +250,40 @@ function App() {
     localStorage.setItem('hawknine_theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
 
+  // Inactivity Timeout (10 minutes)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let timeoutId;
+    const TIMEOUT_DURATION = 10 * 60 * 1000; // 10 minutes
+
+    const resetTimer = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        handleLogout();
+        message.warning('Logged out due to inactivity');
+      }, TIMEOUT_DURATION);
+    };
+
+    // Events to track activity
+    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+
+    // Set initial timer
+    resetTimer();
+
+    // Add listeners
+    events.forEach(event => {
+      document.addEventListener(event, resetTimer);
+    });
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      events.forEach(event => {
+        document.removeEventListener(event, resetTimer);
+      });
+    };
+  }, [isAuthenticated]);
+
   // Persist selected key
   useEffect(() => {
     localStorage.setItem('hawknine_selected_key', selectedKey);
