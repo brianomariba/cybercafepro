@@ -133,46 +133,53 @@
 
         /* === WIDGET STYLES (Session Active) === */
         #widget-screen {
-            background-color: var(--bg-dark);
-            border: 1px solid var(--primary);
+            background: linear-gradient(160deg, #011627 0%, #022b42 100%);
+            border: 2px solid var(--primary);
             flex-direction: column;
-            padding: 15px;
+            padding: 20px;
             box-sizing: border-box;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
         }
 
         .widget-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid rgba(0, 180, 216, 0.3);
-            padding-bottom: 10px;
-            margin-bottom: 12px;
+            border-bottom: 1px solid rgba(0, 180, 216, 0.2);
+            padding-bottom: 12px;
+            margin-bottom: 15px;
             width: 100%;
         }
 
         .widget-logo {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
         }
 
         .widget-logo-img {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
             object-fit: cover;
+            border: 1px solid rgba(0, 180, 216, 0.3);
         }
 
         .widget-title {
-            font-size: 13px;
-            font-weight: 700;
+            font-size: 14px;
+            font-weight: 800;
             color: var(--primary);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
         }
 
         .status-indicator {
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
+            background: rgba(0, 200, 83, 0.1);
+            padding: 4px 8px;
+            border-radius: 20px;
         }
 
         .status-dot {
@@ -180,48 +187,58 @@
             height: 8px;
             background-color: #00C853;
             border-radius: 50%;
-            box-shadow: 0 0 5px #00C853;
-            animation: pulse 2s infinite;
+            box-shadow: 0 0 8px #00C853;
+            animation: pulse-dot 2s infinite;
         }
 
-        @keyframes pulse {
-
-            0%,
-            100% {
+        @keyframes pulse-dot {
+            0% {
                 opacity: 1;
             }
 
             50% {
-                opacity: 0.5;
+                opacity: 0.4;
+            }
+
+            100% {
+                opacity: 1;
             }
         }
 
         .status-text {
             font-size: 10px;
             color: #00C853;
+            font-weight: 700;
         }
 
         .info-row {
             display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            margin-bottom: 6px;
+            flex-direction: column;
+            align-items: flex-start;
+            font-size: 13px;
+            margin-bottom: 10px;
             width: 100%;
         }
 
         .label {
-            color: #64748B;
+            color: #94A3B8;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 2px;
         }
 
         .value {
-            color: var(--primary);
-            font-family: monospace;
+            color: #FFFFFF;
+            font-family: 'Segoe UI', sans-serif;
+            font-weight: 600;
+            font-size: 14px;
         }
 
         .session-status {
-            background: rgba(0, 200, 83, 0.1);
-            border: 1px solid rgba(0, 200, 83, 0.3);
-            border-radius: 8px;
+            background: rgba(0, 180, 216, 0.1);
+            border: 1px solid rgba(0, 180, 216, 0.2);
+            border-radius: 10px;
             padding: 10px;
             text-align: center;
             margin-top: 10px;
@@ -230,19 +247,20 @@
         }
 
         .session-active-text {
-            color: #00C853;
-            font-size: 11px;
-            font-weight: 600;
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
         }
 
         .btn-logout {
-            margin-top: 12px;
-            background: transparent;
-            border: 1px solid #ef4444;
+            margin-top: 14px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
             color: #ef4444;
-            font-size: 11px;
-            padding: 8px 10px;
-            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 10px;
+            border-radius: 8px;
             cursor: pointer;
             width: 100%;
             transition: all 0.2s;
@@ -336,20 +354,20 @@
         </div>
 
         <div class="info-row">
-            <span class="label">PC Name</span>
-            <span class="value" id="pcName">PC-01</span>
+            <span class="label">Computer</span>
+            <span class="value" id="pcName">Syncing...</span>
         </div>
         <div class="info-row">
-            <span class="label">IP Address</span>
-            <span class="value" id="ipAddress">192.168.1.5</span>
+            <span class="label">Address</span>
+            <span class="value" id="ipAddress">0.0.0.0</span>
         </div>
         <div class="info-row">
-            <span class="label">User</span>
-            <span class="value" id="sessionUser">Guest</span>
+            <span class="label">Operator</span>
+            <span class="value" id="sessionUser">Connecting...</span>
         </div>
 
         <div class="session-status">
-            <span class="session-active-text">✓ SESSION ACTIVE</span>
+            <span class="session-active-text">✓ SESSION SECURED</span>
         </div>
 
         <button class="btn-logout" id="logoutBtn">END SESSION & LOCK</button>
@@ -404,7 +422,7 @@
                 // Switch to Widget View
                 document.getElementById('lock-screen').classList.remove('active');
                 document.getElementById('widget-screen').classList.add('active');
-                document.getElementById('sessionUser').innerText = response.user || 'User';
+                document.getElementById('sessionUser').innerText = response.name || response.user || 'User';
             } else {
                 errorMsg.innerText = response.message || "Authentication failed";
                 document.getElementById('username').focus();
@@ -420,11 +438,25 @@
             }
         });
 
+        // Secondary Lock signal (for non-primary monitors)
+        ipcRenderer.on('secondary-lock', () => {
+            document.getElementById('lock-screen').innerHTML = `
+                <div style="text-align:center; opacity: 0.5;">
+                    <img src="logo.jpg" style="width:120px; filter: grayscale(1); margin-bottom: 20px;">
+                    <h2 style="color: #64748B; letter-spacing: 2px;">STATION LOCKED</h2>
+                    <p style="color: #475569;">Access this PC from the primary monitor</p>
+                </div>
+            `;
+            document.getElementById('lock-screen').classList.add('active');
+            document.getElementById('widget-screen').classList.remove('active');
+        });
+
         // Logout/Lock signal from server or menu
         ipcRenderer.on('lock-session', () => {
             document.getElementById('widget-screen').classList.remove('active');
             document.getElementById('lock-screen').classList.add('active');
             document.getElementById('password').value = '';
+            document.getElementById('username').focus();
         });
     </script>
 </body>

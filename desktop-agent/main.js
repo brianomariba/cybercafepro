@@ -3,7 +3,7 @@
  * Production-ready Windows monitoring client
  */
 
-const { app, BrowserWindow, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu } = require('electron');
 const path = require('path');
 const si = require('systeminformation');
 const axios = require('axios');
@@ -11,6 +11,19 @@ const os = require('os');
 const fs = require('fs');
 const { exec } = require('child_process');
 const { randomUUID: uuidv4 } = require('crypto');
+
+// SINGLE INSTANCE LOCK
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+}
 
 // Custom Modules
 const FileMonitor = require('./file-monitor');
@@ -64,7 +77,9 @@ try {
 }
 
 // State
-let mainWindow;
+let windows = []; // Support multiple monitors
+let tray = null;
+let mainWindow = null;
 let isLocked = true;
 let currentSession = null;
 let fileMonitor = null;
@@ -78,78 +93,166 @@ console.log(`HawkNine Agent Starting - Client ID: ${CLIENT_ID}`);
 
 // ==================== WINDOW CREATION ====================
 
-async function createWindow() {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.bounds;
+async function createWindows() {
+    const displays = screen.getAllDisplays();
+    windows = [];
 
-    mainWindow = new BrowserWindow({
-        x: 0,
-        y: 0,
-        width: width,
-        height: height,
-        kiosk: true,
-        fullscreen: true,
-        alwaysOnTop: true,
-        frame: false,
-        transparent: false,
-        resizable: false,
-        skipTaskbar: true,
-        webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
-        },
+    // Initialize System Tray
+    setupTray();
+
+    displays.forEach((display, index) => {
+        const isPrimary = index === 0;
+
+        let win = new BrowserWindow({
+            x: display.bounds.x,
+            y: display.bounds.y,
+            width: display.bounds.width,
+            height: display.bounds.height,
+            kiosk: true,
+            fullscreen: true,
+            alwaysOnTop: true,
+            frame: false,
+            transparent: false,
+            resizable: false,
+            skipTaskbar: true,
+            type: 'toolbar', // Helps hide from task switcher on some systems
+            webPreferences: {
+                nodeIntegration: true,
+                contextIsolation: false,
+            },
+        });
+
+        win.loadFile(path.join(__dirname, 'src/index.html'));
+
+        // Only the primary window handles logic/IPC
+        if (isPrimary) {
+            mainWindow = win;
+        } else {
+            // Secondary windows just show a blank lock screen or logo
+            win.webContents.on('did-finish-load', () => {
+                win.webContents.send('secondary-lock');
+            });
+        }
+
+        win.on('close', (e) => {
+            if (isLocked) e.preventDefault();
+        });
+
+        windows.push(win);
     });
 
-    mainWindow.loadFile(path.join(__dirname, 'src/index.html'));
+    // --- AUTO-LAUNCH ---
+    setupAutoLaunch();
 
-    // --- PERSISTENCE: AUTO-LAUNCH ---
+    // --- SECURITY: PERSISTENT FOCUS ---
+    setInterval(() => {
+        if (!isLocked) return;
+
+        windows.forEach(win => {
+            if (win && !win.isDestroyed()) {
+                if (!win.isFocused()) win.focus();
+                win.setAlwaysOnTop(true, 'screen-saver', 1);
+                if (win.isMinimized()) win.restore();
+            }
+        });
+    }, 500);
+
+    mainWindow.webContents.on('did-finish-load', async () => {
+        sendUpdateInfo();
+        if (isLocked) mainWindow.webContents.send('lock-session');
+    });
+}
+
+function setupTray() {
+    const iconPath = path.join(__dirname, 'src/logo.jpg');
+    try {
+        tray = new Tray(iconPath);
+
+        const updateTrayMenu = () => {
+            const contextMenu = Menu.buildFromTemplate([
+                { label: `HawkNine Agent (${CLIENT_ID})`, enabled: false },
+                { type: 'separator' },
+                {
+                    label: isLocked ? 'Station Locked' : `Active: ${currentSession ? currentSession.user : 'User'}`,
+                    enabled: false
+                },
+                {
+                    label: 'Show/Hide Info Widget',
+                    visible: !isLocked,
+                    click: () => {
+                        if (mainWindow) {
+                            if (mainWindow.isVisible()) mainWindow.hide();
+                            else {
+                                mainWindow.show();
+                                mainWindow.focus();
+                            }
+                        }
+                    }
+                },
+                { type: 'separator' },
+                {
+                    label: 'End Session & Lock',
+                    visible: !isLocked,
+                    click: async () => {
+                        await endSession();
+                        lockSession();
+                    }
+                },
+                {
+                    label: 'Restart Station',
+                    click: () => {
+                        exec('shutdown /r /t 0');
+                    }
+                }
+            ]);
+            tray.setContextMenu(contextMenu);
+        };
+
+        tray.setToolTip('HawkNine Security Agent');
+        updateTrayMenu();
+
+        tray.on('double-click', () => {
+            if (!isLocked && mainWindow) {
+                if (mainWindow.isVisible()) mainWindow.hide();
+                else mainWindow.show();
+            }
+        });
+
+        // Listen for internal state changes to update menu
+        ipcMain.on('update-tray', updateTrayMenu);
+    } catch (e) {
+        console.error('Tray initialization failed:', e);
+    }
+}
+
+function setupAutoLaunch() {
     try {
         const AutoLaunch = require('auto-launch');
         const hawkNineLauncher = new AutoLaunch({
             name: 'HawkNine Agent',
-            path: app.getPath('exe'),
+            path: process.execPath,
         });
-
         hawkNineLauncher.isEnabled().then((isEnabled) => {
             if (!isEnabled) hawkNineLauncher.enable();
         });
     } catch (e) {
-        // Fallback: Add to registry manually if auto-launch package fails
         if (process.platform === 'win32') {
             const regPath = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-            const appPath = app.getPath('exe');
+            const appPath = process.execPath;
             exec(`reg add "${regPath}" /v "HawkNineAgent" /t REG_SZ /d "${appPath}" /f`, (err) => {
                 if (err) console.error('Manual auto-launch failed:', err);
             });
         }
     }
+}
 
-    // --- SECURITY: FOCUS ENFORCEMENT ---
-    setInterval(() => {
-        if (isLocked && mainWindow) {
-            // Keep on top and in focus if locked
-            if (!mainWindow.isFocused()) {
-                mainWindow.focus();
-            }
-            mainWindow.setAlwaysOnTop(true, 'screen-saver');
-            // Prevent minimizing
-            if (mainWindow.isMinimized()) {
-                mainWindow.restore();
-            }
-        }
-    }, 1000);
-
-    // Prevent closing
-    mainWindow.on('close', (e) => e.preventDefault());
-
-    mainWindow.webContents.on('did-finish-load', async () => {
-        const ip = getLocalIP();
-        mainWindow.webContents.send('update-info', {
-            hostname: os.hostname(),
-            ip: ip,
-            clientId: CLIENT_ID
-        });
-        if (isLocked) mainWindow.webContents.send('lock-session');
+function sendUpdateInfo() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const ip = getLocalIP();
+    mainWindow.webContents.send('update-info', {
+        hostname: os.hostname(),
+        ip: ip,
+        clientId: CLIENT_ID
     });
 }
 
@@ -276,11 +379,28 @@ async function startSession(username) {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
 
+    // Transition to Background Mode
     mainWindow.setKiosk(false);
     mainWindow.setFullScreen(false);
-    mainWindow.setAlwaysOnTop(true, 'screen-saver');
-    mainWindow.setSize(260, 240);
-    mainWindow.setPosition(width - 280, height - 260);
+    mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+    // Hide the window completely as requested - user will use Tray
+    mainWindow.hide();
+
+    // Hide secondary windows
+    windows.forEach(win => {
+        if (win !== mainWindow && win && !win.isDestroyed()) {
+            win.hide();
+        }
+    });
+
+    // Ensure info is populated for whenever it's shown
+    sendUpdateInfo();
+
+    // Update Tray Menu to show "Active" state
+    if (ipcMain.emit) {
+        ipcMain.emit('update-tray');
+    }
 
     console.log(`Session Started: ${username} (${currentSession.id})`);
 }
@@ -329,16 +449,27 @@ async function endSession() {
 
 function lockSession() {
     isLocked = true;
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.bounds;
+    const displays = screen.getAllDisplays();
 
-    mainWindow.setSize(width, height);
-    mainWindow.setPosition(0, 0);
-    mainWindow.setKiosk(true);
-    mainWindow.setAlwaysOnTop(true, 'screen-saver');
-    mainWindow.focus();
+    displays.forEach((display, index) => {
+        const win = windows[index];
+        if (!win || win.isDestroyed()) return;
 
-    mainWindow.webContents.send('lock-session');
+        win.show();
+        win.setKiosk(true);
+        win.setFullScreen(true);
+        win.setBounds(display.bounds);
+        win.setAlwaysOnTop(true, 'screen-saver', 1);
+        win.focus();
+    });
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('lock-session');
+        sendUpdateInfo();
+    }
+
+    // Update Tray
+    ipcMain.emit('update-tray');
 }
 
 // ==================== DATA COLLECTION ====================
@@ -479,7 +610,7 @@ async function sendToServer(url, data) {
 // ==================== APP LIFECYCLE ====================
 
 app.whenReady().then(() => {
-    createWindow();
+    createWindows();
     startDataCollection();
 
     // Periodically retry queued data

@@ -340,7 +340,25 @@ async function seedDatabase() {
     }
 }
 // Run seed after connection
-mongoose.connection.once('open', seedDatabase);
+mongoose.connection.once('open', async () => {
+    await seedDatabase();
+
+    // Sync in-memory computer Map from Database on startup
+    try {
+        const computerDocs = await Computer.find();
+        computerDocs.forEach(c => {
+            const doc = c.toObject();
+            const now = new Date();
+            computers.set(doc.clientId, {
+                ...doc,
+                isOnline: (now - new Date(doc.lastSeen)) < 45000
+            });
+        });
+        console.log(`📡 Synced ${computers.size} computers from DB to real-time store`);
+    } catch (e) {
+        console.error('Failed to sync in-memory stores:', e);
+    }
+});
 
 
 // ==================== AUTHENTICATION ENDPOINTS ====================
@@ -1220,6 +1238,12 @@ app.post('/api/v1/agent/sync', async (req, res) => {
             { upsert: true, new: true }
         );
 
+        // SYNC IN-MEMORY MAP (Fixes Dashboard & Socket Stats)
+        computers.set(data.clientId, {
+            ...computer.toObject(),
+            isOnline: true
+        });
+
         // Store activity log in MongoDB
         await Log.create({
             type: 'activity',
@@ -1235,7 +1259,10 @@ app.post('/api/v1/agent/sync', async (req, res) => {
         });
 
         // Broadcast to admin dashboards
-        io.emit('computer-update', computer);
+        io.emit('computer-update', {
+            ...computer.toObject(),
+            isOnline: true
+        });
 
         // Emit screenshot separately if included
         if (data.activity?.screenshot) {
@@ -1452,7 +1479,7 @@ app.get('/api/v1/admin/computers', async (req, res) => {
             const doc = c.toObject();
             return {
                 ...doc,
-                isOnline: (now - new Date(doc.lastSeen)) < 30000
+                isOnline: (now - new Date(doc.lastSeen)) < 45000
             };
         });
         res.json(computerList);
@@ -1830,8 +1857,14 @@ app.get('/api/v1/admin/activity', async (req, res) => {
  */
 app.get('/api/v1/admin/stats', async (req, res) => {
     try {
-        const allComputers = Array.from(computers.values());
+        // Fetch real-time count from DB for reliability
+        const computerDocs = await Computer.find();
         const now = new Date();
+        const allComputers = computerDocs.map(c => ({
+            ...c.toObject(),
+            isOnline: (now - new Date(c.lastSeen)) < 45000 // 45s grace period
+        }));
+
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
         // Fetch statistics from DB
@@ -2838,15 +2871,21 @@ io.on('connection', async (socket) => {
     try {
         console.log(`[SOCKET] Admin connected: ${socket.id}`);
 
-        // Fetch recent data for initial state
-        const recentSessions = await Session.find()
-            .sort({ receivedAt: -1 })
-            .limit(20)
-            .catch(() => []); // Fallback to empty if DB fails
+        // Fetch all computers from DB for initial state
+        const [computerDocs, recentSessions] = await Promise.all([
+            Computer.find(),
+            Session.find().sort({ receivedAt: -1 }).limit(20)
+        ]).catch(() => [[], []]);
+
+        const now = new Date();
+        const initialComputers = computerDocs.map(c => ({
+            ...c.toObject(),
+            isOnline: (now - new Date(c.lastSeen)) < 45000
+        }));
 
         // Send current state on connect
         socket.emit('init-data', {
-            computers: Array.from(computers.values()),
+            computers: initialComputers,
             recentSessions: recentSessions,
             pricing: pricing
         });
