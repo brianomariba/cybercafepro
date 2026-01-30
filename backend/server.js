@@ -44,6 +44,9 @@ const io = new Server(server, {
     cors: { origin: '*' }
 });
 
+// Trust Nginx Proxy
+app.set('trust proxy', 1);
+
 // ==================== SECURITY: RATE LIMITING ====================
 
 // Simple in-memory rate limiter
