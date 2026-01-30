@@ -136,6 +136,27 @@ export const cleanupDemoUsers = async () => {
     return response.data;
 };
 
+// ==================== STAFF MANAGEMENT ====================
+
+export const getStaff = async () => {
+    const response = await api.get('/auth/admin/staff');
+    return response.data;
+};
+
+export const createStaff = async (userData) => {
+    const response = await api.post('/auth/admin/staff', userData);
+    return response.data;
+};
+
+export const updateStaff = async (username, userData) => {
+    const response = await api.put(`/auth/admin/staff/${username}`, userData);
+    return response.data;
+};
+
+export const deleteStaff = async (username) => {
+    const response = await api.delete(`/auth/admin/staff/${username}`);
+    return response.data;
+};
 
 // ==================== COMPUTERS ====================
 

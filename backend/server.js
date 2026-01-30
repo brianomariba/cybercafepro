@@ -185,6 +185,15 @@ const requireAdminAuth = async (req, res, next) => {
     }
 };
 
+const requireSuperAdminAuth = async (req, res, next) => {
+    await requireAdminAuth(req, res, () => {
+        if (req.admin.role !== 'Super Admin') {
+            return res.status(403).json({ error: 'Super Admin privileges required' });
+        }
+        next();
+    });
+};
+
 
 // Ensure uploads and downloads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -349,12 +358,36 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
         }
 
         // 1. Verify Credentials
-        const isValid = (
+        let adminUser = null;
+        const isSuperAdmin = (
             username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase() &&
             verifyPassword(password, ADMIN_CONFIG.passwordHash)
         );
 
-        if (!isValid) {
+        if (isSuperAdmin) {
+            adminUser = {
+                username: ADMIN_CONFIG.username,
+                email: ADMIN_CONFIG.email,
+                role: 'Super Admin'
+            };
+        } else {
+            // Check DB for admin users
+            const dbAdmin = await User.findOne({
+                username: username,
+                type: 'admin',
+                active: true
+            });
+
+            if (dbAdmin && verifyPassword(password, dbAdmin.passwordHash)) {
+                adminUser = {
+                    username: dbAdmin.username,
+                    email: dbAdmin.email,
+                    role: dbAdmin.role || 'Admin'
+                };
+            }
+        }
+
+        if (!adminUser) {
             // Delay to prevent timing attacks
             await new Promise(resolve => setTimeout(resolve, 800));
             return res.status(401).json({ error: 'Invalid username or password' });
@@ -387,7 +420,7 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
         });
 
         // Send to registered admin email
-        const sent = await sendOTPEmail(ADMIN_CONFIG.email, otp, username);
+        const sent = await sendOTPEmail(adminUser.email, otp, username);
 
 
         if (sent) {
@@ -395,7 +428,7 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
                 success: true,
                 message: '2FA Code sent to email',
                 tempToken,
-                emailMask: ADMIN_CONFIG.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+                emailMask: adminUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
             });
         } else {
             res.status(500).json({ error: 'Failed to send verification code' });
@@ -459,17 +492,28 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
             ]
         });
 
-
         const token = generateToken();
         const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // 24 hours
 
+        // Determine user info for session
+        let sessionInfo = {
+            username: username,
+            type: 'admin',
+            expiresAt
+        };
+
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            sessionInfo.email = ADMIN_CONFIG.email;
+            sessionInfo.role = 'Super Admin';
+        } else {
+            const dbUser = await User.findOne({ username, type: 'admin' });
+            sessionInfo.email = dbUser.email;
+            sessionInfo.role = dbUser.role || 'Admin';
+        }
+
         const session = await AuthSession.create({
             token,
-            username: username,
-            email: ADMIN_CONFIG.email,
-            type: 'admin',
-            role: 'Super Admin',
-            expiresAt
+            ...sessionInfo
         });
 
         console.log(`Admin login success: ${username}`);
@@ -867,6 +911,117 @@ app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, r
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+/**
+ * ==================== STAFF/ADMIN MANAGEMENTUS ====================
+ * Manage other administrators (Super Admin only)
+ */
+
+/**
+ * GET /api/v1/auth/admin/staff
+ * List all admin users
+ */
+app.get('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const admins = await User.find({ type: 'admin' }).sort({ createdAt: -1 });
+        res.json(admins);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch staff' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/admin/staff
+ * Create new admin user
+ */
+app.post('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username, password, name, email, role } = req.body;
+
+        if (!username || !password || !email) {
+            return res.status(400).json({ error: 'Username, password and email required' });
+        }
+
+        const existing = await User.findOne({
+            $or: [{ username }, { email }]
+        });
+
+        if (existing) {
+            return res.status(409).json({ error: 'Username or email already exists' });
+        }
+
+        const newUser = await User.create({
+            username,
+            passwordHash: hashPassword(password),
+            email,
+            name: name || username,
+            type: 'admin',
+            role: role || 'Staff',
+            active: true
+        });
+
+        res.json({
+            success: true,
+            user: { username: newUser.username, name: newUser.name, role: newUser.role }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create staff member' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/admin/staff/:username
+ * Update admin user
+ */
+app.put('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, name, active, email, role } = req.body;
+
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+        if (email !== undefined) updateData.email = email;
+        if (role !== undefined) updateData.role = role;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'admin' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'Staff member not found' });
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, name: user.name, role: user.role, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update staff member' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/admin/staff/:username
+ * Delete admin user
+ */
+app.delete('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'admin' });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'Staff member not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete staff member' });
     }
 });
 

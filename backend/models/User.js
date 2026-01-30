@@ -5,7 +5,8 @@ const UserSchema = new mongoose.Schema({
     passwordHash: { type: String, required: true },
     email: { type: String },
     name: { type: String },
-    type: { type: String, enum: ['agent', 'portal'], required: true },
+    type: { type: String, enum: ['agent', 'portal', 'admin'], required: true },
+    role: { type: String, enum: ['Super Admin', 'Admin', 'Staff'], default: 'Staff' },
     active: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now },
     lastLogin: { type: Date }

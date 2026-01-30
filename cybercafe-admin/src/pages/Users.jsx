@@ -22,13 +22,16 @@ import {
     ClearOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions, getPortalUsers, createPortalUser, updatePortalUser, deletePortalUser, cleanupDemoUsers } from '../services/api';
+import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions, getPortalUsers, createPortalUser, updatePortalUser, deletePortalUser, cleanupDemoUsers, getStaff, createStaff, updateStaff, deleteStaff } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
 
 function Users() {
-    const [userType, setUserType] = useState(localStorage.getItem('hawknine_user_type') || 'agent'); // 'agent' or 'portal'
+    const [userType, setUserType] = useState(localStorage.getItem('hawknine_user_type') || 'agent'); // 'agent', 'portal', or 'staff'
+    const currentUser = JSON.parse(localStorage.getItem('cybercafe_user') || '{}');
+    const isSuperAdmin = currentUser.role === 'Super Admin';
+
     const [showPassword, setShowPassword] = useState(false);
     const [users, setUsers] = useState([]);
     const [sessions, setSessions] = useState([]);
@@ -44,10 +47,17 @@ function Users() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [userData, sessionData] = await Promise.all([
-                userType === 'agent' ? getAgentUsers().catch(() => []) : getPortalUsers().catch(() => []),
-                getSessions({ limit: 200, type: 'LOGOUT' }).catch(() => []),
-            ]);
+            let userData = [];
+            if (userType === 'agent') {
+                userData = await getAgentUsers().catch(() => []);
+            } else if (userType === 'portal') {
+                userData = await getPortalUsers().catch(() => []);
+            } else if (userType === 'staff') {
+                userData = await getStaff().catch(() => []);
+            }
+
+            const sessionData = await getSessions({ limit: 200, type: 'LOGOUT' }).catch(() => []);
+
             setUsers(userData || []);
             setSessions(sessionData || []);
         } catch (error) {
@@ -92,6 +102,7 @@ function Users() {
             name: user.name,
             email: user.email,
             active: user.active,
+            role: user.role
         });
         setModalVisible(true);
     };
@@ -100,8 +111,10 @@ function Users() {
         try {
             if (userType === 'agent') {
                 await deleteAgentUser(username);
-            } else {
+            } else if (userType === 'portal') {
                 await deletePortalUser(username);
+            } else if (userType === 'staff') {
+                await deleteStaff(username);
             }
             message.success(`User ${username} deleted`);
             fetchData();
@@ -114,8 +127,10 @@ function Users() {
         try {
             if (userType === 'agent') {
                 await updateAgentUser(username, { active: !currentStatus });
-            } else {
+            } else if (userType === 'portal') {
                 await updatePortalUser(username, { active: !currentStatus });
+            } else if (userType === 'staff') {
+                await updateStaff(username, { active: !currentStatus });
             }
             message.success(`User ${username} ${currentStatus ? 'disabled' : 'enabled'}`);
             fetchData();
@@ -128,15 +143,17 @@ function Users() {
         try {
             if (editingUser) {
                 // Update existing user
-                const updateData = { name: values.name, active: values.active, email: values.email };
+                const updateData = { name: values.name, active: values.active, email: values.email, role: values.role };
                 if (values.password) {
                     updateData.password = values.password;
                 }
 
                 if (userType === 'agent') {
                     await updateAgentUser(editingUser.username, updateData);
-                } else {
+                } else if (userType === 'portal') {
                     await updatePortalUser(editingUser.username, updateData);
+                } else if (userType === 'staff') {
+                    await updateStaff(editingUser.username, updateData);
                 }
                 message.success('User updated successfully');
             } else {
@@ -148,12 +165,20 @@ function Users() {
                         name: values.name,
                         email: values.email,
                     });
-                } else {
+                } else if (userType === 'portal') {
                     await createPortalUser({
                         username: values.username,
                         password: values.password,
                         email: values.email,
                         name: values.name,
+                    });
+                } else if (userType === 'staff') {
+                    await createStaff({
+                        username: values.username,
+                        password: values.password,
+                        email: values.email,
+                        name: values.name,
+                        role: values.role
                     });
                 }
                 message.success('User created successfully');
@@ -294,6 +319,16 @@ function Users() {
                 </Text>
             ),
         },
+        ...(userType === 'staff' ? [{
+            title: 'Role',
+            dataIndex: 'role',
+            key: 'role',
+            render: (role) => (
+                <Tag color={role === 'Super Admin' ? 'purple' : 'blue'}>
+                    {role || 'Admin'}
+                </Tag>
+            ),
+        }] : []),
         {
             title: 'Actions',
             key: 'actions',
@@ -345,9 +380,9 @@ function Users() {
             <div className="page-header">
                 <div className="page-title">
                     <TeamOutlined className="icon" />
-                    <h1>Users</h1>
+                    <h1>Users & Staff</h1>
                 </div>
-                <p className="page-subtitle">Manage agent users and portal customers</p>
+                <p className="page-subtitle">Manage agent users, portal customers, and administrative staff</p>
             </div>
 
             {/* Stats */}
@@ -449,15 +484,35 @@ function Users() {
                             </span>
                         ),
                     },
+                    ...(isSuperAdmin ? [{
+                        key: 'staff',
+                        label: (
+                            <span>
+                                <TeamOutlined />
+                                Admin Staff
+                            </span>
+                        ),
+                    }] : []),
                 ]}
             />
 
             <Card
                 title={
                     <Space>
-                        {userType === 'agent' ? <DesktopOutlined style={{ color: '#00B4D8' }} /> : <GlobalOutlined style={{ color: '#FFB703' }} />}
-                        <span>{userType === 'agent' ? 'Agent Users' : 'Portal Users'}</span>
-                        <Badge count={users.length} style={{ backgroundColor: userType === 'agent' ? '#00B4D8' : '#FFB703' }} />
+                        {userType === 'agent' && <DesktopOutlined style={{ color: '#00B4D8' }} />}
+                        {userType === 'portal' && <GlobalOutlined style={{ color: '#FFB703' }} />}
+                        {userType === 'staff' && <TeamOutlined style={{ color: '#7209B7' }} />}
+                        <span>
+                            {userType === 'agent' && 'Agent Users'}
+                            {userType === 'portal' && 'Portal Users'}
+                            {userType === 'staff' && 'Admin Staff'}
+                        </span>
+                        <Badge
+                            count={users.length}
+                            style={{
+                                backgroundColor: userType === 'agent' ? '#00B4D8' : userType === 'portal' ? '#FFB703' : '#7209B7'
+                            }}
+                        />
                     </Space>
                 }
             >
@@ -554,6 +609,22 @@ function Users() {
                             placeholder={editingUser ? "••••••••" : "Enter password"}
                         />
                     </Form.Item>
+
+                    {userType === 'staff' && (
+                        <Form.Item
+                            name="role"
+                            label="Staff Role"
+                            rules={[{ required: true, message: 'Role is required' }]}
+                        >
+                            <Select
+                                options={[
+                                    { value: 'Admin', label: 'Admin (Standard)' },
+                                    { value: 'Staff', label: 'Staff (Limited)' },
+                                    { value: 'Super Admin', label: 'Super Admin (Full Control)' },
+                                ]}
+                            />
+                        </Form.Item>
+                    )}
 
                     {editingUser && (
                         <Form.Item
