@@ -129,6 +129,13 @@ export const deletePortalUser = async (username) => {
     return response.data;
 };
 
+// ==================== CLEANUP ====================
+
+export const cleanupDemoUsers = async () => {
+    const response = await api.post('/admin/cleanup-demo-users');
+    return response.data;
+};
+
 
 // ==================== COMPUTERS ====================
 
@@ -393,6 +400,7 @@ export default {
     createPortalUser,
     updatePortalUser,
     deletePortalUser,
+    cleanupDemoUsers,
 
     // Computers
     getComputers,

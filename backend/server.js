@@ -971,6 +971,55 @@ app.delete('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, 
 });
 
 
+/**
+ * POST /api/v1/admin/cleanup-demo-users
+ * Remove all demo/test users (Admin only)
+ * This is a protected bulk cleanup endpoint
+ */
+app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) => {
+    try {
+        console.log('[ADMIN] Starting demo user cleanup...');
+
+        // Pattern matching for demo data
+        const demoPatterns = {
+            $or: [
+                { username: /^agent\d+$/i },           // agent1, agent2, etc.
+                { username: 'demo' },
+                { username: /test/i },
+                { name: 'Demo User' },
+                { name: /^Agent User \d+$/i },         // Agent User 1, Agent User 2, etc.
+                { email: /example\.com$/i },           // demo@example.com
+                { email: /test@/i }
+            ]
+        };
+
+        // Get users to be deleted for logging
+        const usersToDelete = await User.find(demoPatterns);
+        const usernames = usersToDelete.map(u => u.username);
+
+        console.log(`[ADMIN] Found ${usersToDelete.length} demo users to delete:`, usernames);
+
+        // Delete demo users
+        const deleteResult = await User.deleteMany(demoPatterns);
+
+        // Clean up orphaned sessions
+        const sessionDeleteResult = await Session.deleteMany({
+            user: { $in: usernames }
+        });
+
+        console.log(`[ADMIN] Deleted ${deleteResult.deletedCount} demo users and ${sessionDeleteResult.deletedCount} sessions`);
+
+        res.json({
+            success: true,
+            deletedUsers: deleteResult.deletedCount,
+            deletedSessions: sessionDeleteResult.deletedCount,
+            deletedUsernames: usernames
+        });
+    } catch (error) {
+        console.error('[ADMIN] Cleanup failed:', error);
+        res.status(500).json({ error: 'Failed to cleanup demo users' });
+    }
+});
 
 
 // ==================== AGENT API ENDPOINTS ====================
@@ -2511,137 +2560,8 @@ app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
     res.json({ success: true, request });
 });
 
-// ==================== USER MANAGEMENT ====================
-
-/**
- * GET /api/v1/auth/agent/users
- * Returns list of all agent users
- */
-app.get('/api/v1/auth/agent/users', async (req, res) => {
-    try {
-        const users = await User.find({ type: 'agent' }).sort({ createdAt: -1 });
-        res.json(users);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch agent users' });
-    }
-});
-
-/**
- * POST /api/v1/auth/agent/users
- * Create a new agent user
- */
-app.post('/api/v1/auth/agent/users', async (req, res) => {
-    try {
-        const { username, password, name, email } = req.body;
-
-        const existing = await User.findOne({ username });
-        if (existing) return res.status(400).json({ error: 'Username already exists' });
-
-        const newUser = await User.create({
-            username,
-            passwordHash: hashPassword(password),
-            name,
-            email,
-            type: 'agent',
-            active: true
-        });
-
-        res.json({ success: true, user: newUser });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to create user' });
-    }
-});
-
-/**
- * PUT /api/v1/auth/agent/users/:username
- * Update an agent user
- */
-app.put('/api/v1/auth/agent/users/:username', async (req, res) => {
-    try {
-        const { username } = req.params;
-        const updates = { ...req.body };
-
-        if (updates.password) {
-            updates.passwordHash = hashPassword(updates.password);
-            delete updates.password;
-        }
-
-        const updated = await User.findOneAndUpdate(
-            { username, type: 'agent' },
-            { $set: updates },
-            { new: true }
-        );
-
-        if (!updated) return res.status(404).json({ error: 'User not found' });
-        res.json({ success: true, user: updated });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update user' });
-    }
-});
-
-/**
- * DELETE /api/v1/auth/agent/users/:username
- * Delete an agent user
- */
-app.delete('/api/v1/auth/agent/users/:username', async (req, res) => {
-    try {
-        const { username } = req.params;
-        await User.deleteOne({ username, type: 'agent' });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to delete user' });
-    }
-});
-
-// Portal User Routes
-app.get('/api/v1/auth/portal/users', async (req, res) => {
-    try {
-        const users = await User.find({ type: 'portal' }).sort({ createdAt: -1 });
-        res.json(users);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch portal users' });
-    }
-});
-
-app.post('/api/v1/auth/portal/users', async (req, res) => {
-    try {
-        const { username, password, name, email } = req.body;
-        const newUser = await User.create({
-            username,
-            passwordHash: hashPassword(password),
-            name,
-            email,
-            type: 'portal',
-            active: true
-        });
-        res.json({ success: true, user: newUser });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to create portal user' });
-    }
-});
-
-app.put('/api/v1/auth/portal/users/:username', async (req, res) => {
-    try {
-        const updated = await User.findOneAndUpdate(
-            { username: req.params.username, type: 'portal' },
-            { $set: req.body },
-            { new: true }
-        );
-        res.json({ success: true, user: updated });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update portal user' });
-    }
-});
-
-app.delete('/api/v1/auth/portal/users/:username', async (req, res) => {
-    try {
-        await User.deleteOne({ username: req.params.username, type: 'portal' });
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to delete portal user' });
-    }
-});
-
+// NOTE: User management routes are defined earlier with requireAdminAuth protection (lines 805-971)
+// Do NOT add unprotected user routes here
 
 // ==================== SOCKET.IO ====================
 

@@ -19,9 +19,10 @@ import {
     EyeInvisibleOutlined,
     KeyOutlined,
     GlobalOutlined,
+    ClearOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions, getPortalUsers, createPortalUser, updatePortalUser, deletePortalUser } from '../services/api';
+import { getAgentUsers, createAgentUser, updateAgentUser, deleteAgentUser, getSessions, getPortalUsers, createPortalUser, updatePortalUser, deletePortalUser, cleanupDemoUsers } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -162,6 +163,28 @@ function Users() {
         } catch (error) {
             const errorMessage = error.response?.data?.error || 'Operation failed';
             message.error(errorMessage);
+        }
+    };
+
+    // Cleanup demo users handler
+    const handleCleanupDemoUsers = async () => {
+        try {
+            setLoading(true);
+            const result = await cleanupDemoUsers();
+            if (result.success) {
+                message.success(`Cleaned ${result.deletedUsers} demo users and ${result.deletedSessions} sessions`);
+                if (result.deletedUsernames?.length > 0) {
+                    console.log('Deleted usernames:', result.deletedUsernames);
+                }
+                fetchData();
+            } else {
+                message.warning('No demo users found to cleanup');
+            }
+        } catch (error) {
+            console.error('Cleanup failed:', error);
+            message.error('Failed to cleanup demo users');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -384,6 +407,20 @@ function Users() {
                 <Button type="primary" icon={<PlusOutlined />} onClick={handleAddUser}>
                     Add User
                 </Button>
+                <Popconfirm
+                    title="Cleanup Demo Users"
+                    description="This will delete all demo/test users (agent1, demo, test, etc.). Continue?"
+                    onConfirm={handleCleanupDemoUsers}
+                    okButtonProps={{ danger: true }}
+                >
+                    <Button
+                        icon={<ClearOutlined />}
+                        danger
+                        loading={loading}
+                    >
+                        Cleanup Demo Users
+                    </Button>
+                </Popconfirm>
                 <Search
                     placeholder="Search users..."
                     style={{ width: 300 }}
