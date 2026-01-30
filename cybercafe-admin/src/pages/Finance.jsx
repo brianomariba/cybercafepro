@@ -29,7 +29,10 @@ const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
 
 // Currency formatter for KSH
-const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
+const formatKSH = (amount) => {
+    const num = Number(amount);
+    return `KSH ${(!isNaN(num) ? num : 0).toLocaleString()}`;
+};
 
 function Finance() {
     const [transactions, setTransactions] = useState([]);
@@ -51,12 +54,36 @@ function Finance() {
                 getComputers().catch(() => []),
             ]);
 
-            setTransactions(txnData || []);
-            setSummary(summaryData || { today: 0, week: 0, month: 0 });
-            setSessions(sessionData || []);
-            setComputers(computerData || []);
+            // Helper to ensure arrays
+            const ensureArray = (data) => {
+                if (Array.isArray(data)) return data;
+                if (data && Array.isArray(data.data)) return data.data;
+                if (data && Array.isArray(data.transactions)) return data.transactions;
+                if (data && Array.isArray(data.sessions)) return data.sessions;
+                if (data && Array.isArray(data.computers)) return data.computers;
+                return [];
+            };
+
+            // Helper to ensure summary numbers
+            const parseSummary = (data) => {
+                const s = data && typeof data === 'object' ? data : {};
+                return {
+                    today: Number(s.today) || 0,
+                    week: Number(s.week) || 0,
+                    month: Number(s.month) || 0
+                };
+            };
+
+            setTransactions(ensureArray(txnData));
+            setSummary(parseSummary(summaryData));
+            setSessions(ensureArray(sessionData));
+            setComputers(ensureArray(computerData));
         } catch (error) {
             console.error('Failed to fetch finance data:', error);
+            setTransactions([]);
+            setSummary({ today: 0, week: 0, month: 0 });
+            setSessions([]);
+            setComputers([]);
         }
         setLoading(false);
     };

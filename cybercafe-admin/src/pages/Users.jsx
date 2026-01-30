@@ -407,20 +407,6 @@ function Users() {
                 <Button type="primary" icon={<PlusOutlined />} onClick={handleAddUser}>
                     Add User
                 </Button>
-                <Popconfirm
-                    title="Cleanup Demo Users"
-                    description="This will delete all demo/test users (agent1, demo, test, etc.). Continue?"
-                    onConfirm={handleCleanupDemoUsers}
-                    okButtonProps={{ danger: true }}
-                >
-                    <Button
-                        icon={<ClearOutlined />}
-                        danger
-                        loading={loading}
-                    >
-                        Cleanup Demo Users
-                    </Button>
-                </Popconfirm>
                 <Search
                     placeholder="Search users..."
                     style={{ width: 300 }}
