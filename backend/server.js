@@ -1445,6 +1445,38 @@ app.post('/api/v1/agent/session', async (req, res) => {
 });
 
 
+/**
+ * POST /api/v1/agent/log
+ * Receives specific event logs (print, browser, file, usb) in real-time
+ */
+app.post('/api/v1/agent/log', async (req, res) => {
+    try {
+        const { type, clientId, hostname, sessionId, sessionUser, data } = req.body;
+
+        if (!clientId || !type) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const logEntry = await Log.create({
+            type,
+            clientId,
+            hostname,
+            sessionId,
+            sessionUser,
+            data,
+            receivedAt: new Date()
+        });
+
+        // Broadcast to admin dashboard for real-time updates
+        io.emit('new-log', logEntry);
+
+        res.json({ success: true, id: logEntry._id });
+    } catch (error) {
+        console.error('Log Ingestion Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // User authentication middleware is defined later in the file
 
 // ==================== ADMIN API ENDPOINTS ====================

@@ -59,6 +59,7 @@ try {
 // Configuration
 const ADMIN_API_URL = config.server.baseUrl + config.server.endpoints.sync;
 const SESSION_API_URL = config.server.baseUrl + config.server.endpoints.session;
+const LOG_API_URL = config.server.baseUrl + '/api/v1/agent/log';
 const HEARTBEAT_INTERVAL = config.server.heartbeatInterval || 10000;
 const SCREENSHOT_INTERVAL = config.monitoring.screenshotInterval || 30000;
 
@@ -88,6 +89,8 @@ let appUsageTracker = new AppUsageTracker();
 let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
+let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
+let lastSentBrowserUrl = ''; // Track last sent URL to avoid duplicates
 
 console.log(`HawkNine Agent Starting - Client ID: ${CLIENT_ID}`);
 
@@ -508,9 +511,30 @@ async function startDataCollection() {
                         // Track app usage
                         appUsageTracker.tick(currentApp.owner, currentApp.title);
 
-                        // Track URLs from browsers
+
+                        // Track URLs from browsers & Real-Time Log
                         if (currentApp.url && currentApp.url.startsWith('http')) {
                             urlTracker.addUrl(currentApp.url, currentApp.title);
+
+                            // Send Real-Time Browser Log
+                            if (currentApp.url !== lastSentBrowserUrl) {
+                                lastSentBrowserUrl = currentApp.url;
+                                const browserPayload = {
+                                    type: 'browser',
+                                    clientId: CLIENT_ID,
+                                    hostname: os.hostname(),
+                                    sessionId: currentSession?.id || null,
+                                    sessionUser: currentSession?.user || null,
+                                    data: {
+                                        url: currentApp.url,
+                                        title: currentApp.title,
+                                        browser: currentApp.owner,
+                                        timestamp: new Date().toISOString()
+                                    }
+                                };
+                                // Don't await strictly to avoid blocking heartbeat
+                                sendToServer(LOG_API_URL, browserPayload).catch(e => console.error('Browser Log Failed:', e.message));
+                            }
                         }
                     }
                 } catch (e) { }
@@ -527,14 +551,33 @@ async function startDataCollection() {
                 } catch (e) { }
             }
 
-            // Print Jobs
+            // Print Jobs - Real-Time Logging
             let printJobs = [];
             try {
                 printJobs = await getRecentPrintJobs();
-                if (currentSession && printJobs.length > 0) {
+                if (printJobs.length > 0) {
                     for (const job of printJobs) {
-                        const exists = currentSession.printJobs.find(j => j.id === job.id);
-                        if (!exists) currentSession.printJobs.push(job);
+                        // Check if already sent
+                        if (!sentPrintJobIds.has(job.jobId)) {
+                            sentPrintJobIds.add(job.jobId);
+
+                            // Send Real-Time Print Log
+                            const printPayload = {
+                                type: 'print',
+                                clientId: CLIENT_ID,
+                                hostname: os.hostname(),
+                                sessionId: currentSession?.id || null,
+                                sessionUser: currentSession?.user || null,
+                                data: job
+                            };
+                            sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
+
+                            // Also add to session summary for billing consistency
+                            if (currentSession) {
+                                const exists = currentSession.printJobs.find(j => j.id === job.id);
+                                if (!exists) currentSession.printJobs.push(job);
+                            }
+                        }
                     }
                 }
             } catch (e) { }
