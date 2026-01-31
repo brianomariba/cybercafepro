@@ -14,7 +14,11 @@ const ComputerSchema = new mongoose.Schema({
         disk: Number
     },
     activity: {
-        window: String,
+        window: {
+            title: { type: String },
+            owner: { type: String },
+            url: { type: String }
+        },
         printJobsActive: Number,
         hasScreenshot: Boolean
     },
