@@ -596,13 +596,17 @@ async function startDataCollection() {
 
 async function sendToServer(url, data) {
     try {
-        await axios.post(url, data, { timeout: 10000 });
+        const response = await axios.post(url, data, { timeout: 10000 });
+        if (url.includes('/sync')) {
+            console.log(`[SYNC] Success - Client: ${data.clientId}, Status: ${data.status}`);
+        }
     } catch (error) {
         if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
             // Queue for retry
             dataQueue.enqueue(url, data);
+            console.log(`[SYNC] Queued for retry - ${error.code}`);
         } else {
-            console.error('API Error:', error.message);
+            console.error('API Error:', error.message, error.response?.data);
         }
     }
 }

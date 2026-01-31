@@ -1238,6 +1238,8 @@ app.post('/api/v1/agent/sync', async (req, res) => {
             { upsert: true, new: true }
         );
 
+        console.log(`[SYNC] Computer updated: ${data.hostname} (${data.clientId}) - Status: ${data.status}`);
+
         // SYNC IN-MEMORY MAP (Fixes Dashboard & Socket Stats)
         computers.set(data.clientId, {
             ...computer.toObject(),
