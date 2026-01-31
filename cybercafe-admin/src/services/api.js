@@ -393,6 +393,10 @@ export const connectSocket = (callbacks = {}) => {
         if (callbacks.onDocumentDeleted) callbacks.onDocumentDeleted(data);
     });
 
+    socket.on('new-log', (data) => {
+        if (callbacks.onNewLog) callbacks.onNewLog(data);
+    });
+
     return socket;
 };
 

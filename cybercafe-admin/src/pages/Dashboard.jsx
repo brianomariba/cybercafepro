@@ -87,6 +87,11 @@ function Dashboard() {
             onSessionEvent: (data) => {
                 setSessions(prev => [data, ...prev.slice(0, 9)]);
             },
+            onNewLog: (log) => {
+                if (log.type === 'print') {
+                    setPrintJobs(prev => [log.data, ...prev.slice(0, 9)]);
+                }
+            },
         });
 
         // Refresh every 30 seconds
