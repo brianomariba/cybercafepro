@@ -7,11 +7,15 @@ const ComputerSchema = new mongoose.Schema({
     status: { type: String, enum: ['locked', 'unlocked', 'active', 'offline'], default: 'offline' },
     sessionId: { type: String },
     sessionUser: { type: String },
-    uptime: { type: String },
+    uptime: { type: mongoose.Schema.Types.Mixed }, // Can be number or string
     metrics: {
-        cpu: Number,
-        memory: Number,
-        disk: Number
+        cpu: { type: mongoose.Schema.Types.Mixed }, // Can be number or object
+        memory: { type: mongoose.Schema.Types.Mixed }, // Can be number or object
+        disk: {
+            used: { type: Number },
+            total: { type: Number },
+            percentUsed: { type: Number }
+        }
     },
     activity: {
         window: {
@@ -26,3 +30,4 @@ const ComputerSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('Computer', ComputerSchema);
+
