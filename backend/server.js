@@ -256,8 +256,8 @@ app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
 
 // Stricter rate limit for auth endpoints
 const authRateLimit = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 30,
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 1000,               // Increased limit to handle multiple agents sharing one IP
     message: 'Too many login attempts, please try again later'
 });
 
