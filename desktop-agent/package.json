@@ -34,7 +34,9 @@
     "axios": "1.7.9",
     "dotenv": "16.4.7",
     "electron-store": "8.1.0",
+    "ref-wchar-napi": "^1.0.3",
     "screenshot-desktop": "1.15.3",
+    "socket.io-client": "^4.8.3",
     "systeminformation": "5.30.1"
   },
   "devDependencies": {

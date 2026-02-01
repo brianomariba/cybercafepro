@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer } from 'antd';
 import {
     DesktopOutlined,
@@ -31,9 +32,10 @@ const { Search } = Input;
 const { Panel } = Collapse;
 
 // Format KSH
-const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
+const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()} `;
 
 function Computers() {
+    const navigate = useNavigate();
     const [computers, setComputers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [selectedComputer, setSelectedComputer] = useState(null);
@@ -99,7 +101,7 @@ function Computers() {
     const handleCommand = async (computer, command) => {
         try {
             await sendCommand(computer.clientId, command);
-            message.success(`Command "${command}" sent to ${computer.hostname}`);
+            message.success(`Command "${command}" sent to ${computer.hostname} `);
         } catch (error) {
             message.error('Failed to send command');
         }
@@ -223,13 +225,13 @@ function Computers() {
                         filteredComputers.map(computer => (
                             <div
                                 key={computer.clientId}
-                                className={`computer-card ${computer.isOnline ? (computer.status === 'active' ? 'online' : 'busy') : 'offline'}`}
+                                className={`computer - card ${computer.isOnline ? (computer.status === 'active' ? 'online' : 'busy') : 'offline'} `}
                             >
                                 <DesktopOutlined
                                     className="computer-icon"
                                     style={{
                                         color: getStatusColor(computer.status),
-                                        filter: computer.isOnline ? `drop-shadow(0 0 10px ${getStatusColor(computer.status)}50)` : 'none'
+                                        filter: computer.isOnline ? `drop - shadow(0 0 10px ${getStatusColor(computer.status)}50)` : 'none'
                                     }}
                                 />
                                 <div className="computer-name">{computer.hostname}</div>
@@ -381,7 +383,7 @@ function Computers() {
                             <Button icon={<ReloadOutlined />} onClick={() => handleCommand(selectedComputer, 'restart')}>
                                 Restart
                             </Button>
-                            <Button icon={<SendOutlined />} onClick={() => message.info('Open Documents page to send files')}>
+                            <Button icon={<SendOutlined />} onClick={() => navigate('/documents')}>
                                 Send File
                             </Button>
                         </Space>

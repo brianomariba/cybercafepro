@@ -11,6 +11,7 @@ const os = require('os');
 const fs = require('fs');
 const { exec } = require('child_process');
 const { randomUUID: uuidv4 } = require('crypto');
+const io = require('socket.io-client');
 
 // SINGLE INSTANCE LOCK
 const gotTheLock = app.requestSingleInstanceLock();
@@ -91,6 +92,7 @@ let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 let lastSentBrowserUrl = ''; // Track last sent URL to avoid duplicates
+let socket = null; // Socket.io connection for real-time commands
 
 console.log(`HawkNine Agent Starting - Client ID: ${CLIENT_ID}`);
 
@@ -373,7 +375,22 @@ async function startSession(username) {
     // Start File Monitoring
     if (!fileMonitor) {
         fileMonitor = new FileMonitor((fileInfo) => {
-            if (currentSession) currentSession.filesCreated.push(fileInfo);
+            if (currentSession) {
+                currentSession.filesCreated.push(fileInfo);
+
+                // Real-Time Log
+                const filePayload = {
+                    type: 'file',
+                    clientId: CLIENT_ID,
+                    hostname: os.hostname(),
+                    sessionId: currentSession.id,
+                    sessionUser: currentSession.user,
+                    receivedAt: new Date(),
+                    data: fileInfo
+                };
+                // Fire and forget
+                sendToServer(LOG_API_URL, filePayload).catch(e => console.error('RT Log Error:', e.message));
+            }
         });
     }
     fileMonitor.start();
@@ -634,7 +651,162 @@ async function startDataCollection() {
     }, HEARTBEAT_INTERVAL);
 }
 
-// ==================== SERVER COMMUNICATION ====================
+// ==================== SERVER COMMUNICATION & SOCKETS ====================
+
+function setupSocket() {
+    if (!config || !config.server || !config.server.baseUrl) return;
+
+    // Connect to server
+    socket = io(config.server.baseUrl);
+
+    socket.on('connect', () => {
+        console.log('Connected to HawkNine Socket Server');
+        socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+    });
+
+    socket.on('agent-command', (data) => {
+        if (data.clientId && data.clientId !== CLIENT_ID && data.clientId !== 'all') return;
+        console.log(`Received Command: ${data.command}`);
+        handleSocketCommand(data);
+    });
+
+    socket.on('document-for-agent', (data) => {
+        if (data.targetClientId && data.targetClientId !== CLIENT_ID) return;
+        console.log(`Received Document: ${data.document.filename}`);
+        if (data.document && data.document.downloadUrl) {
+            downloadFile(data.document.downloadUrl, data.document.filename, data.document.message);
+        }
+    });
+}
+
+async function handleSocketCommand(data) {
+    const { command, params } = data;
+    const { dialog } = require('electron');
+
+    switch (command) {
+        case 'lock':
+            // End current session gracefully before locking
+            if (currentSession) {
+                await endSession();
+            }
+            lockSession();
+            console.log('[COMMAND] Lock executed');
+            break;
+
+        case 'unlock':
+            unlockSession();
+            console.log('[COMMAND] Unlock executed');
+            break;
+
+        case 'restart':
+            console.log('[COMMAND] Restarting...');
+            // Show brief notification
+            dialog.showMessageBox(null, {
+                type: 'info',
+                title: 'Admin Command',
+                message: 'This computer will restart in 5 seconds.',
+                buttons: ['OK']
+            }).then(() => {
+                exec('shutdown /r /t 5');
+            });
+            // Fallback if dialog not closed
+            setTimeout(() => exec('shutdown /r /t 0'), 6000);
+            break;
+
+        case 'shutdown':
+            console.log('[COMMAND] Shutting down...');
+            dialog.showMessageBox(null, {
+                type: 'info',
+                title: 'Admin Command',
+                message: 'This computer will shut down in 5 seconds.',
+                buttons: ['OK']
+            }).then(() => {
+                exec('shutdown /s /t 5');
+            });
+            setTimeout(() => exec('shutdown /s /t 0'), 6000);
+            break;
+
+        case 'message':
+            if (params && params.text) {
+                dialog.showMessageBox(null, {
+                    type: 'info',
+                    title: 'Message from Admin',
+                    message: params.text,
+                    buttons: ['OK']
+                });
+            }
+            break;
+
+        case 'sendFile':
+            // Handle direct file send command (alternative to socket event)
+            if (params && params.url && params.filename) {
+                downloadFile(params.url, params.filename, params.message || 'File from Admin');
+            }
+            break;
+
+        default:
+            console.log(`[COMMAND] Unknown command: ${command}`);
+    }
+}
+
+function unlockSession() {
+    isLocked = false;
+    windows.forEach(win => {
+        if (!win || win.isDestroyed()) return;
+        win.hide();
+        win.setAlwaysOnTop(false);
+        // Reset flags
+        win.setKiosk(false);
+        win.setFullScreen(false);
+    });
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('unlock-session');
+    }
+
+    // Update tray to show "Active"
+    ipcMain.emit('update-tray');
+}
+
+async function downloadFile(url, filename, messageText) {
+    try {
+        const desktopPath = path.join(os.homedir(), 'Desktop');
+        if (!fs.existsSync(desktopPath)) {
+            try { fs.mkdirSync(desktopPath); } catch (e) { }
+        }
+
+        const destPath = path.join(desktopPath, filename);
+        console.log(`Downloading to ${destPath}...`);
+
+        const writer = fs.createWriteStream(destPath);
+
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
+
+        response.data.pipe(writer);
+
+        writer.on('finish', () => {
+            console.log('Download complete');
+            const { dialog } = require('electron');
+            dialog.showMessageBox(null, {
+                type: 'info',
+                title: 'New Document Received',
+                message: messageText || 'File received from Admin',
+                detail: `File "${filename}" has been saved to your Desktop.`,
+                buttons: ['OK']
+            });
+        });
+
+        writer.on('error', (err) => {
+            console.error('File write error:', err);
+        });
+    } catch (e) {
+        console.error('Download failed:', e.message);
+    }
+}
 
 
 async function sendToServer(url, data) {
@@ -658,6 +830,7 @@ async function sendToServer(url, data) {
 
 app.whenReady().then(() => {
     createWindows();
+    setupSocket(); // Establish socket connection for receiving commands
     startDataCollection();
 
     // Periodically retry queued data

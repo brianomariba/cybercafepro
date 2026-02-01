@@ -2061,34 +2061,7 @@ app.delete('/api/v1/admin/services/:id', async (req, res) => {
 
 
 
-/**
- * GET /api/v1/admin/browser-history
- * Fetch browser history logs
- */
-app.get('/api/v1/admin/browser-history', requireAdminAuth, async (req, res) => {
-    try {
-        const { limit = 100 } = req.query;
-        const logs = await Log.find({ type: 'browser' })
-            .sort({ receivedAt: -1 })
-            .limit(parseInt(limit));
 
-        const history = logs.map(log => ({
-            id: log._id,
-            hostname: log.hostname,
-            user: log.sessionUser,
-            url: log.data?.url || '',
-            title: log.data?.title || '',
-            category: log.data?.category || 'other',
-            timestamp: log.receivedAt,
-            blocked: log.data?.blocked || false
-        }));
-
-        res.json(history);
-    } catch (error) {
-        console.error('Fetch browser history error:', error);
-        res.status(500).json({ error: 'Failed to fetch browser history' });
-    }
-});
 
 // ==================== TASK MANAGEMENT ====================
 
@@ -2821,6 +2794,232 @@ app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
 // NOTE: User management routes are defined earlier with requireAdminAuth protection (lines 805-971)
 // Do NOT add unprotected user routes here
 
+// ==================== DOCUMENT SHARING ====================
+
+// Helper: Format bytes
+const formatFileSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
+/**
+ * GET /api/v1/documents
+ * List all shared documents
+ */
+app.get('/api/v1/documents', async (req, res) => {
+    try {
+        const { clientId, limit = 100 } = req.query;
+
+        const query = {};
+        if (clientId) {
+            query.$or = [
+                { 'from.clientId': clientId },
+                { 'to.clientId': clientId }
+            ];
+        }
+
+        const docs = await SharedDocument.find(query)
+            .sort({ uploadedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(docs);
+    } catch (error) {
+        console.error('Get documents error:', error);
+        res.status(500).json({ error: 'Failed to fetch documents' });
+    }
+});
+
+/**
+ * GET /api/v1/documents/stats
+ * Get document sharing statistics
+ */
+app.get('/api/v1/documents/stats', async (req, res) => {
+    try {
+        const totalDocs = await SharedDocument.countDocuments();
+        const pendingDocs = await SharedDocument.countDocuments({ status: 'pending' });
+        const downloadedDocs = await SharedDocument.countDocuments({ status: 'downloaded' });
+
+        // Get total size
+        const docs = await SharedDocument.find({}, { size: 1 });
+        const totalSize = docs.reduce((sum, d) => sum + (d.size || 0), 0);
+
+        res.json({
+            total: totalDocs,
+            pending: pendingDocs,
+            downloaded: downloadedDocs,
+            totalSize: formatFileSize(totalSize),
+            totalSizeBytes: totalSize
+        });
+    } catch (error) {
+        console.error('Get document stats error:', error);
+        res.status(500).json({ error: 'Failed to fetch document stats' });
+    }
+});
+
+/**
+ * POST /api/v1/documents/upload
+ * Upload a document to the server
+ */
+app.post('/api/v1/documents/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const { message, fromUser, fromClientId } = req.body;
+
+        const doc = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: formatFileSize(req.file.size),
+            mimetype: req.file.mimetype,
+            from: {
+                user: fromUser || 'Admin',
+                clientId: fromClientId || null
+            },
+            message: message || '',
+            status: 'uploaded'
+        });
+
+        console.log(`[DOCUMENT] Uploaded: ${doc.filename} (${doc.sizeFormatted})`);
+
+        res.json({ success: true, document: doc });
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: 'Failed to upload document' });
+    }
+});
+
+/**
+ * POST /api/v1/documents/send-to-computer
+ * Send a document directly to a computer
+ */
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const { targetClientId, message } = req.body;
+
+        if (!targetClientId) {
+            return res.status(400).json({ error: 'Target computer (clientId) is required' });
+        }
+
+        // Create document record
+        const doc = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: formatFileSize(req.file.size),
+            mimetype: req.file.mimetype,
+            from: {
+                user: 'Admin',
+                clientId: null
+            },
+            to: {
+                clientId: targetClientId
+            },
+            message: message || 'File from Admin',
+            status: 'pending'
+        });
+
+        // Construct download URL
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+        const downloadUrl = `${baseUrl}/api/v1/documents/${doc.id}/download`;
+
+        // Send to agent via socket
+        io.emit('document-for-agent', {
+            targetClientId,
+            document: {
+                id: doc.id,
+                filename: doc.filename,
+                size: doc.sizeFormatted,
+                downloadUrl: downloadUrl,
+                message: doc.message
+            }
+        });
+
+        console.log(`[DOCUMENT] Sent to ${targetClientId}: ${doc.filename}`);
+
+        res.json({ success: true, document: doc, message: 'Document sent to computer' });
+    } catch (error) {
+        console.error('Send to computer error:', error);
+        res.status(500).json({ error: 'Failed to send document' });
+    }
+});
+
+/**
+ * GET /api/v1/documents/:id/download
+ * Download a document
+ */
+app.get('/api/v1/documents/:id/download', async (req, res) => {
+    try {
+        const doc = await SharedDocument.findOne({ id: req.params.id });
+
+        if (!doc) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        // Check if file exists
+        if (!fs.existsSync(doc.path)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Mark as downloaded
+        doc.status = 'downloaded';
+        doc.downloadedAt = new Date();
+        await doc.save();
+
+        // Emit event
+        io.emit('document-downloaded', { id: doc.id, downloadedAt: doc.downloadedAt });
+
+        res.download(doc.path, doc.filename);
+    } catch (error) {
+        console.error('Download error:', error);
+        res.status(500).json({ error: 'Failed to download document' });
+    }
+});
+
+/**
+ * DELETE /api/v1/documents/:id
+ * Delete a document
+ */
+app.delete('/api/v1/documents/:id', async (req, res) => {
+    try {
+        const doc = await SharedDocument.findOne({ id: req.params.id });
+
+        if (!doc) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        // Delete file from disk
+        if (fs.existsSync(doc.path)) {
+            fs.unlinkSync(doc.path);
+        }
+
+        // Delete from database
+        await SharedDocument.deleteOne({ id: req.params.id });
+
+        // Emit event
+        io.emit('document-deleted', { id: req.params.id });
+
+        console.log(`[DOCUMENT] Deleted: ${doc.filename}`);
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete error:', error);
+        res.status(500).json({ error: 'Failed to delete document' });
+    }
+});
+
 // ==================== TEMPLATES MANAGEMENT ====================
 
 // GET /api/v1/templates (Public)
@@ -2901,34 +3100,59 @@ app.delete('/api/v1/admin/guides/:id', async (req, res) => {
 
 // ==================== SOCKET.IO ====================
 
+// Track connected agents by clientId
+const connectedAgents = new Map(); // clientId -> socket.id
+
 io.on('connection', async (socket) => {
     try {
-        console.log(`[SOCKET] Admin connected: ${socket.id}`);
+        console.log(`[SOCKET] Client connected: ${socket.id}`);
 
-        // Fetch all computers from DB for initial state
-        const [computerDocs, recentSessions] = await Promise.all([
-            Computer.find(),
-            Session.find().sort({ receivedAt: -1 }).limit(20)
-        ]).catch(() => [[], []]);
+        // Handle agent registration
+        socket.on('agent-register', (data) => {
+            const { clientId, hostname } = data;
+            connectedAgents.set(clientId, socket.id);
+            socket.clientId = clientId;
+            socket.isAgent = true;
+            console.log(`[SOCKET] Agent registered: ${clientId} (${hostname}) -> ${socket.id}`);
 
-        const now = new Date();
-        const initialComputers = computerDocs.map(c => ({
-            ...c.toObject(),
-            isOnline: (now - new Date(c.lastSeen)) < 45000
-        }));
-
-        // Send current state on connect
-        socket.emit('init-data', {
-            computers: initialComputers,
-            recentSessions: recentSessions,
-            pricing: pricing
+            // Notify admin dashboard
+            io.emit('agent-connected', { clientId, hostname, socketId: socket.id });
         });
+
+        // If not an agent, treat as admin dashboard
+        if (!socket.isAgent) {
+            // Fetch all computers from DB for initial state
+            const [computerDocs, recentSessions] = await Promise.all([
+                Computer.find(),
+                Session.find().sort({ receivedAt: -1 }).limit(20)
+            ]).catch(() => [[], []]);
+
+            const now = new Date();
+            const initialComputers = computerDocs.map(c => ({
+                ...c.toObject(),
+                isOnline: (now - new Date(c.lastSeen)) < 45000
+            }));
+
+            // Send current state on connect
+            socket.emit('init-data', {
+                computers: initialComputers,
+                recentSessions: recentSessions,
+                pricing: pricing,
+                connectedAgents: Array.from(connectedAgents.keys())
+            });
+        }
     } catch (error) {
         console.error('[SOCKET ERROR] Initialization failed:', error);
     }
 
     socket.on('disconnect', () => {
-        console.log(`[SOCKET] Admin disconnected: ${socket.id}`);
+        if (socket.isAgent && socket.clientId) {
+            connectedAgents.delete(socket.clientId);
+            console.log(`[SOCKET] Agent disconnected: ${socket.clientId}`);
+            io.emit('agent-disconnected', { clientId: socket.clientId });
+        } else {
+            console.log(`[SOCKET] Admin disconnected: ${socket.id}`);
+        }
     });
 });
 
