@@ -337,6 +337,23 @@ export const deleteDocument = async (documentId) => {
     return response.data;
 };
 
+// ==================== DOCUMENT REQUESTS (From Landing Page) ====================
+
+export const getDocumentRequests = async (params = {}) => {
+    const response = await api.get('/admin/document-requests', { params });
+    return response.data;
+};
+
+export const getDocumentRequestStats = async () => {
+    const response = await api.get('/admin/document-requests/stats');
+    return response.data;
+};
+
+export const updateDocumentRequestStatus = async (orderId, status, notes = '') => {
+    const response = await api.put(`/admin/document-requests/${orderId}/status`, { status, notes });
+    return response.data;
+};
+
 // ==================== WEBSOCKET ====================
 
 let socket = null;
@@ -395,6 +412,15 @@ export const connectSocket = (callbacks = {}) => {
 
     socket.on('new-log', (data) => {
         if (callbacks.onNewLog) callbacks.onNewLog(data);
+    });
+
+    // Document request events (from landing page uploads)
+    socket.on('new-document-request', (data) => {
+        if (callbacks.onNewDocumentRequest) callbacks.onNewDocumentRequest(data);
+    });
+
+    socket.on('document-request-updated', (data) => {
+        if (callbacks.onDocumentRequestUpdated) callbacks.onDocumentRequestUpdated(data);
     });
 
     return socket;
@@ -476,6 +502,9 @@ export default {
     sendDocumentToComputer,
     downloadDocument,
     deleteDocument,
+    getDocumentRequests,
+    getDocumentRequestStats,
+    updateDocumentRequestStatus,
     connectSocket,
     disconnectSocket
 };

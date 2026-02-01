@@ -2664,6 +2664,25 @@ app.get('/api/v1/documents/stats', (req, res) => {
 
 // Store for public document requests (Already declared at top)
 
+// Allowed file types for document uploads
+const ALLOWED_DOC_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
+const ALLOWED_DOC_MIMETYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+];
+
+// Helper to categorize files by document type
+const categorizeDocumentType = (filename, mimetype) => {
+    const ext = path.extname(filename).toLowerCase();
+    if (ext === '.pdf' || mimetype === 'application/pdf') return 'pdf';
+    if (['.doc', '.docx'].includes(ext) || mimetype?.includes('word')) return 'word';
+    if (['.xls', '.xlsx'].includes(ext) || mimetype?.includes('excel') || mimetype?.includes('spreadsheet')) return 'excel';
+    return 'other';
+};
+
 /**
  * POST /api/v1/public/document-request
  * Public endpoint for customers to submit document work requests
@@ -2681,8 +2700,45 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
             return res.status(400).json({ error: 'Please upload at least one file' });
         }
 
+        // Validate file types (server-side)
+        const invalidFiles = [];
+        for (const file of files) {
+            const ext = path.extname(file.originalname).toLowerCase();
+            const isAllowed = ALLOWED_DOC_EXTENSIONS.includes(ext) || ALLOWED_DOC_MIMETYPES.includes(file.mimetype);
+            if (!isAllowed) {
+                invalidFiles.push(file.originalname);
+            }
+        }
+
+        if (invalidFiles.length > 0) {
+            return res.status(400).json({
+                error: `Invalid file type(s): ${invalidFiles.join(', ')}. Only PDF, Word (.doc, .docx), and Excel (.xls, .xlsx) files are allowed.`
+            });
+        }
+
         // Generate order ID
         const orderId = 'HN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 5).toUpperCase();
+
+        // Categorize files by type and add metadata
+        const categorizedFiles = files.map(f => {
+            const docType = categorizeDocumentType(f.originalname, f.mimetype);
+            return {
+                originalName: f.originalname,
+                filename: f.filename,
+                size: f.size,
+                sizeFormatted: formatBytes(f.size),
+                mimetype: f.mimetype,
+                path: f.path,
+                docType: docType // pdf, word, excel
+            };
+        });
+
+        // Count by type for summary
+        const typeSummary = {
+            pdf: categorizedFiles.filter(f => f.docType === 'pdf').length,
+            word: categorizedFiles.filter(f => f.docType === 'word').length,
+            excel: categorizedFiles.filter(f => f.docType === 'excel').length
+        };
 
         // Create request record
         const request = {
@@ -2692,13 +2748,11 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
             customerPhone: customerPhone.replace(/\s/g, ''),
             instructions: instructions || '',
             source: source || 'landing_page',
-            files: files.map(f => ({
-                originalName: f.originalname,
-                filename: f.filename,
-                size: f.size,
-                mimetype: f.mimetype,
-                path: f.path
-            })),
+            files: categorizedFiles,
+            typeSummary,
+            totalFiles: files.length,
+            totalSize: files.reduce((sum, f) => sum + f.size, 0),
+            totalSizeFormatted: formatBytes(files.reduce((sum, f) => sum + f.size, 0)),
             status: 'pending', // pending, processing, ready, completed, cancelled
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
@@ -2707,10 +2761,38 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
         documentRequests.unshift(request);
         if (documentRequests.length > 500) documentRequests.pop();
 
-        // Emit to admin dashboard
-        io.emit('new-document-request', request);
+        // =============================================
+        // NOTIFICATIONS
+        // =============================================
 
-        console.log(`[PUBLIC] New document request: ${orderId} from ${customerName} (${customerPhone})`);
+        // 1. Emit to admin dashboard (new document request notification)
+        io.emit('new-document-request', {
+            ...request,
+            notification: {
+                title: 'New Document Upload',
+                message: `${customerName} uploaded ${files.length} file(s) for ${serviceType}`,
+                type: 'document',
+                timestamp: new Date().toISOString()
+            }
+        });
+
+        // 2. Emit to user portal (all users get notified about new work available)
+        io.emit('new-document-for-users', {
+            orderId: request.orderId,
+            serviceType: request.serviceType,
+            fileCount: request.totalFiles,
+            typeSummary: request.typeSummary,
+            instructions: request.instructions,
+            status: 'pending',
+            createdAt: request.createdAt,
+            notification: {
+                title: 'New Document Request',
+                message: `New ${serviceType} job: ${files.length} file(s) awaiting processing`,
+                type: 'work_available'
+            }
+        });
+
+        console.log(`[PUBLIC] New document request: ${orderId} from ${customerName} (${customerPhone}) - PDF:${typeSummary.pdf} Word:${typeSummary.word} Excel:${typeSummary.excel}`);
 
         res.json({
             success: true,
@@ -2789,6 +2871,87 @@ app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
     console.log(`[PUBLIC] Order ${orderId} status updated to: ${status}`);
 
     res.json({ success: true, request });
+});
+
+/**
+ * GET /api/v1/admin/document-requests/stats
+ * Document request statistics grouped by file type
+ */
+app.get('/api/v1/admin/document-requests/stats', (req, res) => {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(now);
+        weekStart.setDate(weekStart.getDate() - 7);
+
+        // Filter by time periods
+        const allRequests = documentRequests;
+        const todayRequests = documentRequests.filter(r => new Date(r.createdAt) >= todayStart);
+        const weekRequests = documentRequests.filter(r => new Date(r.createdAt) >= weekStart);
+
+        // Calculate totals by document type
+        const calculateTypeTotals = (requests) => {
+            let pdf = 0, word = 0, excel = 0, totalFiles = 0, totalSize = 0;
+
+            for (const request of requests) {
+                if (request.typeSummary) {
+                    pdf += request.typeSummary.pdf || 0;
+                    word += request.typeSummary.word || 0;
+                    excel += request.typeSummary.excel || 0;
+                }
+                totalFiles += request.totalFiles || request.files?.length || 0;
+                totalSize += request.totalSize || 0;
+            }
+
+            return { pdf, word, excel, totalFiles, totalSize, totalSizeFormatted: formatBytes(totalSize) };
+        };
+
+        // Status breakdown
+        const statusBreakdown = {
+            pending: allRequests.filter(r => r.status === 'pending').length,
+            processing: allRequests.filter(r => r.status === 'processing').length,
+            ready: allRequests.filter(r => r.status === 'ready').length,
+            completed: allRequests.filter(r => r.status === 'completed').length,
+            cancelled: allRequests.filter(r => r.status === 'cancelled').length
+        };
+
+        // Service type breakdown
+        const serviceBreakdown = {};
+        for (const request of allRequests) {
+            const svc = request.serviceType || 'other';
+            serviceBreakdown[svc] = (serviceBreakdown[svc] || 0) + 1;
+        }
+
+        res.json({
+            totalRequests: allRequests.length,
+            today: {
+                requests: todayRequests.length,
+                ...calculateTypeTotals(todayRequests)
+            },
+            week: {
+                requests: weekRequests.length,
+                ...calculateTypeTotals(weekRequests)
+            },
+            all: {
+                requests: allRequests.length,
+                ...calculateTypeTotals(allRequests)
+            },
+            byStatus: statusBreakdown,
+            byService: serviceBreakdown,
+            // Quick summary for dashboard cards
+            summary: {
+                totalPdf: calculateTypeTotals(allRequests).pdf,
+                totalWord: calculateTypeTotals(allRequests).word,
+                totalExcel: calculateTypeTotals(allRequests).excel,
+                pendingJobs: statusBreakdown.pending,
+                processingJobs: statusBreakdown.processing,
+                completedToday: todayRequests.filter(r => r.status === 'completed').length
+            }
+        });
+    } catch (error) {
+        console.error('Document stats error:', error);
+        res.status(500).json({ error: 'Failed to fetch document stats' });
+    }
 });
 
 // NOTE: User management routes are defined earlier with requireAdminAuth protection (lines 805-971)

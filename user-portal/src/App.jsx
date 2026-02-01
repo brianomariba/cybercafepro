@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ConfigProvider, Layout, Menu, Badge, Avatar, Dropdown, Space, Typography, Button, Input, Tooltip, message, Switch } from 'antd';
+import { ConfigProvider, Layout, Menu, Badge, Avatar, Dropdown, Space, Typography, Button, Input, Tooltip, message, Switch, notification } from 'antd';
 import {
   DashboardOutlined,
   BookOutlined,
@@ -19,6 +19,10 @@ import {
   HeartOutlined,
   QuestionCircleOutlined,
   DollarOutlined,
+  InboxOutlined,
+  FilePdfOutlined,
+  FileWordOutlined,
+  FileExcelOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -28,6 +32,7 @@ import Learning from './pages/Learning';
 import Templates from './pages/Templates';
 import Guidance from './pages/Guidance';
 import Services from './pages/Services';
+import { connectSocket, disconnectSocket } from './services/api';
 
 import './index.css';
 
@@ -123,6 +128,96 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [documentNotifications, setDocumentNotifications] = useState([]);
+  const [notificationCount, setNotificationCount] = useState(0);
+
+  // WebSocket connection for real-time document notifications
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const socket = connectSocket({
+      onNewDocumentRequest: (data) => {
+        const { typeSummary, serviceType, fileCount, notification: notif, orderId, createdAt } = data;
+
+        // Add to notifications list
+        const newNotification = {
+          key: orderId || Date.now().toString(),
+          title: notif?.title || 'New Document Request',
+          message: notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`,
+          typeSummary,
+          createdAt: createdAt || new Date().toISOString(),
+        };
+
+        setDocumentNotifications(prev => [newNotification, ...prev.slice(0, 9)]); // Keep last 10
+        setNotificationCount(prev => prev + 1);
+
+        // Show popup notification
+        notification.info({
+          message: (
+            <Space>
+              <InboxOutlined style={{ color: '#00B4D8', fontSize: 18 }} />
+              <span>{newNotification.title}</span>
+            </Space>
+          ),
+          description: (
+            <div>
+              <div style={{ marginBottom: 8 }}>{newNotification.message}</div>
+              <Space size={4}>
+                {typeSummary?.pdf > 0 && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: 'rgba(255, 59, 92, 0.15)',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    color: '#ff3b5c',
+                    fontSize: 12
+                  }}>
+                    <FilePdfOutlined /> {typeSummary.pdf}
+                  </span>
+                )}
+                {typeSummary?.word > 0 && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: 'rgba(0, 212, 255, 0.15)',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    color: '#00d4ff',
+                    fontSize: 12
+                  }}>
+                    <FileWordOutlined /> {typeSummary.word}
+                  </span>
+                )}
+                {typeSummary?.excel > 0 && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: 'rgba(0, 255, 136, 0.15)',
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    color: '#00ff88',
+                    fontSize: 12
+                  }}>
+                    <FileExcelOutlined /> {typeSummary.excel}
+                  </span>
+                )}
+              </Space>
+            </div>
+          ),
+          placement: 'topRight',
+          duration: 8,
+        });
+      },
+    });
+
+    return () => {
+      if (socket) socket.disconnect();
+    };
+  }, [isAuthenticated]);
 
   // Handle window resize for responsive behavior
   useEffect(() => {
@@ -234,50 +329,93 @@ function App() {
     message.success(`Switched to ${!isDarkMode ? 'dark' : 'light'} mode`);
   };
 
-  // Notification dropdown items
+  // Notification dropdown items - Include real-time document notifications
+  const getRelativeTime = (isoDate) => {
+    const now = new Date();
+    const date = new Date(isoDate);
+    const diff = Math.floor((now - date) / 1000);
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+    return `${Math.floor(diff / 86400)} days ago`;
+  };
+
   const notificationItems = [
-    {
-      key: '1',
+    // Document notifications from landing page
+    ...documentNotifications.map((notif) => ({
+      key: notif.key,
       label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>New guide available!</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>"Document Printing Best Practices" is now live</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>2 hours ago</Text>
+        <div style={{ maxWidth: 300, padding: '4px 0' }}>
+          <Space align="start">
+            <InboxOutlined style={{ color: '#00B4D8', fontSize: 16, marginTop: 3 }} />
+            <div>
+              <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b', display: 'block' }}>
+                {notif.title}
+              </Text>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                {notif.message}
+              </Text>
+              <Space size={4}>
+                {notif.typeSummary?.pdf > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    background: 'rgba(255, 59, 92, 0.15)', padding: '1px 6px',
+                    borderRadius: 3, color: '#ff3b5c', fontSize: 11
+                  }}>
+                    <FilePdfOutlined /> {notif.typeSummary.pdf}
+                  </span>
+                )}
+                {notif.typeSummary?.word > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    background: 'rgba(0, 212, 255, 0.15)', padding: '1px 6px',
+                    borderRadius: 3, color: '#00d4ff', fontSize: 11
+                  }}>
+                    <FileWordOutlined /> {notif.typeSummary.word}
+                  </span>
+                )}
+                {notif.typeSummary?.excel > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    background: 'rgba(0, 255, 136, 0.15)', padding: '1px 6px',
+                    borderRadius: 3, color: '#00ff88', fontSize: 11
+                  }}>
+                    <FileExcelOutlined /> {notif.typeSummary.excel}
+                  </span>
+                )}
+              </Space>
+              <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4 }}>
+                {getRelativeTime(notif.createdAt)}
+              </Text>
+            </div>
+          </Space>
         </div>
       ),
-    },
+    })),
+    // Default notifications when no document notifications
+    ...(documentNotifications.length === 0 ? [
+      {
+        key: 'default-1',
+        label: (
+          <div style={{ maxWidth: 280 }}>
+            <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>Welcome to HawkNine!</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>Start by exploring our services and templates</Text>
+          </div>
+        ),
+      },
+    ] : []),
+    { type: 'divider' },
     {
-      key: '2',
+      key: 'clear-all',
       label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>New templates added</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>Check out 5 new professional templates</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>Yesterday</Text>
-        </div>
+        <Text
+          style={{ color: '#00B4D8', cursor: 'pointer' }}
+          onClick={() => { setDocumentNotifications([]); setNotificationCount(0); }}
+        >
+          Clear all notifications
+        </Text>
       ),
-    },
-    {
-      key: '3',
-      label: (
-        <div style={{ maxWidth: 280 }}>
-          <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>New learning content</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>Computer basics course updated</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 11 }}>3 days ago</Text>
-        </div>
-      ),
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'view-all',
-      label: <Text style={{ color: '#00B4D8' }}>View all notifications</Text>,
     },
   ];
 
@@ -476,8 +614,9 @@ function App() {
                 menu={{ items: notificationItems }}
                 placement="bottomRight"
                 trigger={['click']}
+                onOpenChange={(open) => { if (open) setNotificationCount(0); }}
               >
-                <Badge count={3} size="small" offset={[-3, 3]}>
+                <Badge count={notificationCount} size="small" offset={[-3, 3]}>
                   <Button
                     type="text"
                     icon={<BellOutlined />}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Card, Progress, Tag, Avatar, Space, Typography, Button, Badge, Tooltip, List, Empty, Spin, message } from 'antd';
+import { Row, Col, Card, Progress, Tag, Avatar, Space, Typography, Button, Badge, Tooltip, List, Empty, Spin, message, notification } from 'antd';
 import {
     UserOutlined,
     BookOutlined,
@@ -18,6 +18,10 @@ import {
     CoffeeOutlined,
     SyncOutlined,
     ReloadOutlined,
+    InboxOutlined,
+    FilePdfOutlined,
+    FileWordOutlined,
+    FileExcelOutlined,
 } from '@ant-design/icons';
 import { getUserTasks, updateTaskStatus, connectSocket } from '../services/api';
 
@@ -98,6 +102,45 @@ function Dashboard({ user, onNavigate }) {
         const socket = connectSocket({
             onTaskAssigned: () => fetchTasks(),
             onTaskUpdated: () => fetchTasks(),
+            onNewDocumentRequest: (data) => {
+                // Show notification for new document uploads from landing page
+                const { typeSummary, serviceType, fileCount, notification: notif } = data;
+
+                // Build file type description
+                const fileTypes = [];
+                if (typeSummary?.pdf > 0) fileTypes.push(`${typeSummary.pdf} PDF`);
+                if (typeSummary?.word > 0) fileTypes.push(`${typeSummary.word} Word`);
+                if (typeSummary?.excel > 0) fileTypes.push(`${typeSummary.excel} Excel`);
+
+                notification.info({
+                    message: (
+                        <Space>
+                            <InboxOutlined style={{ color: '#00B4D8', fontSize: 18 }} />
+                            <span>{notif?.title || 'New Document Request'}</span>
+                        </Space>
+                    ),
+                    description: (
+                        <div>
+                            <div style={{ marginBottom: 8 }}>
+                                {notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`}
+                            </div>
+                            <Space size={4}>
+                                {typeSummary?.pdf > 0 && (
+                                    <Tag icon={<FilePdfOutlined />} color="#ff3b5c">{typeSummary.pdf}</Tag>
+                                )}
+                                {typeSummary?.word > 0 && (
+                                    <Tag icon={<FileWordOutlined />} color="#00d4ff">{typeSummary.word}</Tag>
+                                )}
+                                {typeSummary?.excel > 0 && (
+                                    <Tag icon={<FileExcelOutlined />} color="#00ff88">{typeSummary.excel}</Tag>
+                                )}
+                            </Space>
+                        </div>
+                    ),
+                    placement: 'topRight',
+                    duration: 8,
+                });
+            },
         });
 
         return () => {
@@ -349,10 +392,10 @@ function Dashboard({ user, onNavigate }) {
                                                 borderRadius: 10,
                                                 marginBottom: 8,
                                                 border: `1px solid ${activity.status === 'completed'
-                                                        ? 'rgba(0, 200, 83, 0.2)'
-                                                        : activity.status === 'in-progress'
-                                                            ? 'rgba(0, 180, 216, 0.2)'
-                                                            : 'rgba(255, 183, 3, 0.2)'
+                                                    ? 'rgba(0, 200, 83, 0.2)'
+                                                    : activity.status === 'in-progress'
+                                                        ? 'rgba(0, 180, 216, 0.2)'
+                                                        : 'rgba(255, 183, 3, 0.2)'
                                                     }`
                                             }}
                                             actions={

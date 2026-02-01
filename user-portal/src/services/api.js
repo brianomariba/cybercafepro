@@ -125,6 +125,16 @@ export const connectSocket = (callbacks = {}) => {
         if (callbacks.onDocumentReceived) callbacks.onDocumentReceived(data);
     });
 
+    // New document request from landing page (customer uploads)
+    socket.on('new-document-for-users', (data) => {
+        if (callbacks.onNewDocumentRequest) callbacks.onNewDocumentRequest(data);
+    });
+
+    // Document request status updates
+    socket.on('document-request-updated', (data) => {
+        if (callbacks.onDocumentRequestUpdated) callbacks.onDocumentRequestUpdated(data);
+    });
+
     return socket;
 };
 

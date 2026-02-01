@@ -3,8 +3,11 @@
  * Handles document uploads, service loading, and form submission
  */
 
-// API Configuration
-const API_BASE_URL = 'http://localhost:5000/api/v1';
+// API Configuration - Auto-detect production vs development
+const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+const API_BASE_URL = isProduction
+    ? 'https://api.hawkninegroup.com/api/v1'
+    : 'http://localhost:5000/api/v1';
 
 // DOM Elements
 let dropZone, fileInput, selectedFilesContainer, uploadForm, servicesGrid, pricingTable;
@@ -234,8 +237,28 @@ function initDropZone() {
     });
 }
 
+// Allowed file types (PDF, Word, Excel)
+const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx'];
+const ALLOWED_MIMETYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+];
+
 function handleFiles(files) {
     for (const file of files) {
+        // Check file type
+        const extension = file.name.split('.').pop().toLowerCase();
+        const isAllowedType = ALLOWED_EXTENSIONS.includes(extension) ||
+            ALLOWED_MIMETYPES.includes(file.type);
+
+        if (!isAllowedType) {
+            alert(`File "${file.name}" is not supported. Please upload only PDF, Word (.doc, .docx), or Excel (.xls, .xlsx) files.`);
+            continue;
+        }
+
         // Check file size (max 50MB)
         if (file.size > 50 * 1024 * 1024) {
             alert(`File "${file.name}" is too large. Maximum size is 50MB.`);
