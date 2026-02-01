@@ -7,8 +7,8 @@ module.exports = {
     apps: [{
         name: 'hawknine-api',
         script: 'server.js',
-        instances: 'max',           // Use all available CPU cores
-        exec_mode: 'cluster',       // Enable clustering
+        instances: 1,               // Single instance for WebSocket stability
+        exec_mode: 'fork',          // Fork mode (no clustering)
         env_production: {
             NODE_ENV: 'production',
             PORT: 5000
