@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -184,6 +185,19 @@ function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Sync selected key with URL
+  useEffect(() => {
+    const path = location.pathname.substring(1);
+    if (!path || path === '') {
+      setSelectedKey('dashboard');
+    } else {
+      setSelectedKey(path);
+    }
+  }, [location]);
+
   // Handle window resize for responsive behavior
   useEffect(() => {
     const handleResize = () => {
@@ -309,7 +323,7 @@ function App() {
   };
 
   const handleMenuClick = (e) => {
-    setSelectedKey(e.key);
+    navigate(e.key === 'dashboard' ? '/' : `/${e.key}`);
     // Auto-collapse sidebar on mobile after selecting menu item
     if (isMobile) {
       setCollapsed(true);
@@ -377,7 +391,8 @@ function App() {
       key: 'settings',
       icon: <SettingOutlined />,
       label: 'Settings',
-      onClick: () => setSelectedKey('settings'),
+      label: 'Settings',
+      onClick: () => navigate('/settings'),
     },
     {
       type: 'divider',
