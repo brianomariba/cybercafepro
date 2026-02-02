@@ -520,6 +520,14 @@ export const removeFromBlocklist = async (id) => (await api.delete(`/admin/block
 export const changeAdminPassword = async (currentPassword, newPassword) =>
     (await api.post('/admin/change-password', { currentPassword, newPassword })).data;
 
+// ==================== INVENTORY ====================
+export const getInventory = async () => (await api.get('/inventory')).data;
+export const addInventoryItem = async (data) => (await api.post('/admin/inventory', data)).data;
+export const updateInventoryItem = async (id, data) => (await api.put(`/admin/inventory/${id}`, data)).data;
+export const deleteInventoryItem = async (id) => (await api.delete(`/admin/inventory/${id}`)).data;
+export const getInventorySettings = async () => (await api.get('/inventory/settings')).data;
+export const updateInventorySettings = async (data) => (await api.put('/admin/inventory/settings', data)).data;
+
 // Default export
 export default {
     // Auth
@@ -584,6 +592,14 @@ export default {
     updateDocumentRequestStatus,
     connectSocket,
     disconnectSocket,
+
+    // Inventory
+    getInventory,
+    addInventoryItem,
+    updateInventoryItem,
+    deleteInventoryItem,
+    getInventorySettings,
+    updateInventorySettings,
 
     // Settings & Security
     getSettings,

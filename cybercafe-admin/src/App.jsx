@@ -35,6 +35,7 @@ import {
   DownloadOutlined,
   ReadOutlined,
   CompassOutlined,
+  ShoppingCartOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -52,6 +53,7 @@ import Tasks from './pages/Tasks';
 import Templates from './pages/Templates';
 import Learning from './pages/Learning';
 import Guidance from './pages/Guidance';
+import Inventory from './pages/Inventory';
 import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats } from './services/api';
 
 import './App.css';
@@ -149,6 +151,11 @@ const menuItems = [
     key: 'documents',
     icon: <FolderOutlined />,
     label: 'Documents',
+  },
+  {
+    key: 'inventory',
+    icon: <ShoppingCartOutlined />,
+    label: 'Inventory',
   },
   {
     key: 'content',
@@ -427,6 +434,8 @@ function App() {
         return <Tasks />;
       case 'documents':
         return <Documents />;
+      case 'inventory':
+        return <Inventory />;
       case 'admin-templates':
         return <Templates />;
       case 'admin-learning':

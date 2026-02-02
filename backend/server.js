@@ -41,6 +41,7 @@ const Guide = require('./models/Guide');
 const Settings = require('./models/Settings');
 const Blocklist = require('./models/Blocklist');
 const ServiceCategory = require('./models/ServiceCategory');
+const InventoryItem = require('./models/InventoryItem');
 
 
 
@@ -2094,6 +2095,120 @@ app.get('/api/v1/admin/download-agent', (req, res) => {
         res.download(filePath, agentFile);
     } catch (error) {
         res.status(500).json({ error: 'Failed to access downloads' });
+    }
+});
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+// GET /api/v1/inventory - List items
+app.get('/api/v1/inventory', async (req, res) => {
+    try {
+        const items = await InventoryItem.find().sort({ name: 1 });
+        res.json(items);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch inventory' });
+    }
+});
+
+// POST /api/v1/admin/inventory - Add item
+app.post('/api/v1/admin/inventory', async (req, res) => {
+    try {
+        const { name, price, stock, description, category, lowStockThreshold } = req.body;
+        const item = await InventoryItem.create({ name, price, stock, description, category, lowStockThreshold });
+        res.json(item);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create item' });
+    }
+});
+
+// PUT /api/v1/admin/inventory/:id - Update item
+app.put('/api/v1/admin/inventory/:id', async (req, res) => {
+    try {
+        const item = await InventoryItem.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        res.json(item);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update item' });
+    }
+});
+
+// DELETE /api/v1/admin/inventory/:id - Delete item
+app.delete('/api/v1/admin/inventory/:id', async (req, res) => {
+    try {
+        await InventoryItem.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete item' });
+    }
+});
+
+// POST /api/v1/inventory/:id/sell - Record Sale
+app.post('/api/v1/inventory/:id/sell', async (req, res) => {
+    try {
+        const { quantity = 1, sessionId, reason, clientId } = req.body;
+        const item = await InventoryItem.findById(req.params.id);
+
+        if (!item) return res.status(404).json({ error: 'Item not found' });
+        if (item.stock < quantity) return res.status(400).json({ error: 'Insufficient stock' });
+
+        // Deduct Stock
+        item.stock -= quantity;
+        await item.save();
+
+        // Create Transaction
+        const transaction = await Transaction.create({
+            id: 'txn-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+            type: 'SALE',
+            amount: item.price * quantity,
+            description: `Sale: ${item.name} (${quantity})`,
+            sessionId: sessionId || null,
+            clientId: clientId || null,
+            breakdown: {
+                item: item.name,
+                quantity: quantity
+            },
+            createdAt: new Date()
+        });
+
+        // Notify Admins
+        io.emit('inventory-update', { itemId: item._id, stock: item.stock });
+        io.emit('transaction-created', transaction);
+
+        res.json({ success: true, newStock: item.stock, transactionId: transaction.id });
+    } catch (error) {
+        console.error('Sale Error:', error);
+        res.status(500).json({ error: 'Failed to process sale' });
+    }
+});
+
+// GET /api/v1/inventory/settings
+app.get('/api/v1/inventory/settings', async (req, res) => {
+    try {
+        let settings = await Settings.findOne({ key: 'inventory_settings' });
+        if (!settings) {
+            settings = await Settings.create({
+                key: 'inventory_settings',
+                value: { showTotalItemsToUser: true }
+            });
+        }
+        res.json(settings.value);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+// PUT /api/v1/admin/inventory/settings
+app.put('/api/v1/admin/inventory/settings', async (req, res) => {
+    try {
+        const settings = await Settings.findOneAndUpdate(
+            { key: 'inventory_settings' },
+            { value: req.body, updatedAt: new Date() },
+            { new: true, upsert: true }
+        );
+        // Broadcast change to agents
+        io.emit('settings-update', { key: 'inventory_settings', value: settings.value });
+        res.json(settings.value);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update settings' });
     }
 });
 

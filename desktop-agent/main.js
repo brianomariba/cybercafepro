@@ -316,6 +316,30 @@ ipcMain.on('login-attempt', async (event, credentials) => {
     }
 });
 
+ipcMain.on('buy-item', async (event, { itemId, quantity = 1 }) => {
+    if (!currentSession) {
+        event.reply('buy-item-response', { success: false, message: 'No active session' });
+        return;
+    }
+
+    try {
+        const response = await axios.post(`${config.server.baseUrl}/api/v1/inventory/${itemId}/sell`, {
+            quantity,
+            sessionId: currentSession.id,
+            clientId: CLIENT_ID,
+            hostname: os.hostname()
+        });
+
+        if (response.data.success) {
+            event.reply('buy-item-response', { success: true, message: 'Item purchased successfully' });
+        } else {
+            event.reply('buy-item-response', { success: false, message: response.data.error || 'Purchase failed' });
+        }
+    } catch (error) {
+        event.reply('buy-item-response', { success: false, message: error.response?.data?.error || 'Network error' });
+    }
+});
+
 ipcMain.on('logout-request', async () => {
     await endSession();
     lockSession();
