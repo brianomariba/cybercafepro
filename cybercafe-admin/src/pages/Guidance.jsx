@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react'; // Force HMR update
 import { Card, Table, Button, Modal, Form, Input, Select, message, Tag, Popconfirm, Upload } from 'antd';
 import { PlusOutlined, DeleteOutlined, CompassOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icons';
 import { getGuides, createGuide, deleteGuide, downloadGuideUrl } from '../services/api';
