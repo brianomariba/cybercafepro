@@ -447,6 +447,19 @@ export const getGuides = async () => (await api.get('/guides')).data;
 export const createGuide = async (data) => (await api.post('/admin/guides', data)).data;
 export const deleteGuide = async (id) => (await api.delete(`/admin/guides/${id}`)).data;
 
+// ==================== SETTINGS ====================
+export const getSettings = async () => (await api.get('/admin/settings')).data;
+export const saveSettings = async (settings) => (await api.post('/admin/settings', { settings })).data;
+
+// ==================== BLOCKLIST ====================
+export const getBlocklist = async () => (await api.get('/admin/blocklist')).data;
+export const addToBlocklist = async (url, reason) => (await api.post('/admin/blocklist', { url, reason })).data;
+export const removeFromBlocklist = async (id) => (await api.delete(`/admin/blocklist/${id}`)).data;
+
+// ==================== PASSWORD CHANGE ====================
+export const changeAdminPassword = async (currentPassword, newPassword) =>
+    (await api.post('/admin/change-password', { currentPassword, newPassword })).data;
+
 // Default export
 export default {
     // Auth
@@ -506,5 +519,13 @@ export default {
     getDocumentRequestStats,
     updateDocumentRequestStatus,
     connectSocket,
-    disconnectSocket
+    disconnectSocket,
+
+    // Settings & Security
+    getSettings,
+    saveSettings,
+    getBlocklist,
+    addToBlocklist,
+    removeFromBlocklist,
+    changeAdminPassword
 };

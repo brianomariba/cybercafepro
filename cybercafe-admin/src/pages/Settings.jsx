@@ -25,7 +25,7 @@ import {
     DatabaseOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -45,19 +45,39 @@ function Settings() {
         autoLogoutMinutes: 5,
         sessionWarningMinutes: 10,
     });
+    const [notificationSettings, setNotificationSettings] = useState({
+        sessionAlerts: true,
+        lowPaperWarning: true,
+        lowInkWarning: true,
+        paymentNotifications: true,
+        newUserRegistration: false,
+        dailyReportEmail: false,
+    });
     const [computers, setComputers] = useState([]);
     const [loadingServices, setLoadingServices] = useState(false);
+    const [savingSettings, setSavingSettings] = useState(false);
+    const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' });
+    const [changingPassword, setChangingPassword] = useState(false);
     const [form] = Form.useForm();
 
     const loadData = async () => {
         setLoadingServices(true);
         try {
-            const [servicesData, computersData] = await Promise.all([
+            const [servicesData, computersData, settingsData] = await Promise.all([
                 getServices(),
-                getComputers()
+                getComputers(),
+                getSettings().catch(() => ({}))
             ]);
             setServices(servicesData || []);
             setComputers(computersData || []);
+
+            // Load saved settings
+            if (settingsData.generalSettings) {
+                setGeneralSettings(prev => ({ ...prev, ...settingsData.generalSettings }));
+            }
+            if (settingsData.notificationSettings) {
+                setNotificationSettings(prev => ({ ...prev, ...settingsData.notificationSettings }));
+            }
         } catch (error) {
             console.error('Failed to load data', error);
             message.error('Failed to load settings data');
@@ -69,6 +89,58 @@ function Settings() {
     useEffect(() => {
         loadData();
     }, []);
+
+    // Save general settings
+    const handleSaveGeneralSettings = async () => {
+        setSavingSettings(true);
+        try {
+            await saveSettings({ generalSettings });
+            message.success('Settings saved successfully');
+        } catch (error) {
+            console.error('Save failed', error);
+            message.error('Failed to save settings');
+        } finally {
+            setSavingSettings(false);
+        }
+    };
+
+    // Save notification settings
+    const handleSaveNotificationSettings = async (key, value) => {
+        const updated = { ...notificationSettings, [key]: value };
+        setNotificationSettings(updated);
+        try {
+            await saveSettings({ notificationSettings: updated });
+        } catch (error) {
+            console.error('Failed to save notification setting', error);
+        }
+    };
+
+    // Change admin password
+    const handleChangePassword = async () => {
+        if (!passwordForm.current || !passwordForm.new) {
+            message.error('Please fill in all password fields');
+            return;
+        }
+        if (passwordForm.new !== passwordForm.confirm) {
+            message.error('New passwords do not match');
+            return;
+        }
+        if (passwordForm.new.length < 6) {
+            message.error('Password must be at least 6 characters');
+            return;
+        }
+
+        setChangingPassword(true);
+        try {
+            await changeAdminPassword(passwordForm.current, passwordForm.new);
+            message.success('Password changed successfully');
+            setPasswordForm({ current: '', new: '', confirm: '' });
+        } catch (error) {
+            message.error(error.response?.data?.error || 'Failed to change password');
+        } finally {
+            setChangingPassword(false);
+        }
+    };
 
     const handleAddService = () => {
         setEditingService(null);
@@ -338,7 +410,12 @@ function Settings() {
                                     />
                                 </Form.Item>
                                 <Form.Item>
-                                    <Button type="primary" icon={<SaveOutlined />}>
+                                    <Button
+                                        type="primary"
+                                        icon={<SaveOutlined />}
+                                        onClick={handleSaveGeneralSettings}
+                                        loading={savingSettings}
+                                    >
                                         Save Changes
                                     </Button>
                                 </Form.Item>
@@ -471,42 +548,60 @@ function Settings() {
                                 <strong>Session Alerts</strong>
                                 <span>Notify when sessions are about to expire</span>
                             </div>
-                            <Switch defaultChecked />
+                            <Switch
+                                checked={notificationSettings.sessionAlerts}
+                                onChange={(val) => handleSaveNotificationSettings('sessionAlerts', val)}
+                            />
                         </div>
                         <div className="settings-item">
                             <div className="settings-label">
                                 <strong>Low Paper Warning</strong>
                                 <span>Alert when printer paper is running low</span>
                             </div>
-                            <Switch defaultChecked />
+                            <Switch
+                                checked={notificationSettings.lowPaperWarning}
+                                onChange={(val) => handleSaveNotificationSettings('lowPaperWarning', val)}
+                            />
                         </div>
                         <div className="settings-item">
                             <div className="settings-label">
                                 <strong>Low Ink Warning</strong>
                                 <span>Alert when printer ink/toner is running low</span>
                             </div>
-                            <Switch defaultChecked />
+                            <Switch
+                                checked={notificationSettings.lowInkWarning}
+                                onChange={(val) => handleSaveNotificationSettings('lowInkWarning', val)}
+                            />
                         </div>
                         <div className="settings-item">
                             <div className="settings-label">
                                 <strong>Payment Notifications</strong>
                                 <span>Sound alert for completed payments</span>
                             </div>
-                            <Switch defaultChecked />
+                            <Switch
+                                checked={notificationSettings.paymentNotifications}
+                                onChange={(val) => handleSaveNotificationSettings('paymentNotifications', val)}
+                            />
                         </div>
                         <div className="settings-item">
                             <div className="settings-label">
                                 <strong>New User Registration</strong>
                                 <span>Notify when new users register</span>
                             </div>
-                            <Switch />
+                            <Switch
+                                checked={notificationSettings.newUserRegistration}
+                                onChange={(val) => handleSaveNotificationSettings('newUserRegistration', val)}
+                            />
                         </div>
                         <div className="settings-item">
                             <div className="settings-label">
                                 <strong>Daily Report Email</strong>
                                 <span>Send daily summary to admin email</span>
                             </div>
-                            <Switch />
+                            <Switch
+                                checked={notificationSettings.dailyReportEmail}
+                                onChange={(val) => handleSaveNotificationSettings('dailyReportEmail', val)}
+                            />
                         </div>
                     </div>
                 </Card>
@@ -533,16 +628,34 @@ function Settings() {
                         >
                             <Form layout="vertical">
                                 <Form.Item label="Current Password">
-                                    <Input.Password placeholder="Enter current password" />
+                                    <Input.Password
+                                        placeholder="Enter current password"
+                                        value={passwordForm.current}
+                                        onChange={(e) => setPasswordForm(p => ({ ...p, current: e.target.value }))}
+                                    />
                                 </Form.Item>
                                 <Form.Item label="New Password">
-                                    <Input.Password placeholder="Enter new password" />
+                                    <Input.Password
+                                        placeholder="Enter new password"
+                                        value={passwordForm.new}
+                                        onChange={(e) => setPasswordForm(p => ({ ...p, new: e.target.value }))}
+                                    />
                                 </Form.Item>
                                 <Form.Item label="Confirm New Password">
-                                    <Input.Password placeholder="Confirm new password" />
+                                    <Input.Password
+                                        placeholder="Confirm new password"
+                                        value={passwordForm.confirm}
+                                        onChange={(e) => setPasswordForm(p => ({ ...p, confirm: e.target.value }))}
+                                    />
                                 </Form.Item>
                                 <Form.Item>
-                                    <Button type="primary" danger icon={<LockOutlined />}>
+                                    <Button
+                                        type="primary"
+                                        danger
+                                        icon={<LockOutlined />}
+                                        onClick={handleChangePassword}
+                                        loading={changingPassword}
+                                    >
                                         Change Password
                                     </Button>
                                 </Form.Item>

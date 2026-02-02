@@ -21,7 +21,7 @@ import {
     FireOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getBrowserHistory } from '../services/api';
+import { getBrowserHistory, addToBlocklist } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -103,9 +103,14 @@ function BrowserHistory() {
         return matchesSearch && matchesCategory && matchesComputer;
     });
 
-    // Block site feature (cosmetic - backend not implemented)
-    const handleBlockSite = (url) => {
-        message.warning('Site blocking feature is not yet implemented');
+    // Block site feature
+    const handleBlockSite = async (url) => {
+        try {
+            await addToBlocklist(url, 'Blocked from browser history');
+            message.success(`${url} has been added to blocklist`);
+        } catch (error) {
+            message.error(error.response?.data?.error || 'Failed to block site');
+        }
     };
 
     const columns = [

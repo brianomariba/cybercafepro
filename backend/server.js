@@ -38,6 +38,8 @@ const VerificationCode = require('./models/VerificationCode');
 const Template = require('./models/Template');
 const Course = require('./models/Course');
 const Guide = require('./models/Guide');
+const Settings = require('./models/Settings');
+const Blocklist = require('./models/Blocklist');
 
 
 
@@ -1197,6 +1199,221 @@ app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) 
     } catch (error) {
         console.error('[ADMIN] Cleanup failed:', error);
         res.status(500).json({ error: 'Failed to cleanup demo users' });
+    }
+});
+
+
+// ==================== SETTINGS API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/settings
+ * Get all admin settings
+ */
+app.get('/api/v1/admin/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = await Settings.find();
+        const settingsObj = {};
+        settings.forEach(s => {
+            settingsObj[s.key] = s.value;
+        });
+        res.json(settingsObj);
+    } catch (error) {
+        console.error('[SETTINGS] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/settings
+ * Save admin settings (key-value pairs)
+ */
+app.post('/api/v1/admin/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const { settings } = req.body;
+
+        if (!settings || typeof settings !== 'object') {
+            return res.status(400).json({ error: 'Settings object required' });
+        }
+
+        const updates = [];
+        for (const [key, value] of Object.entries(settings)) {
+            updates.push(
+                Settings.findOneAndUpdate(
+                    { key },
+                    { value, updatedAt: new Date() },
+                    { upsert: true, new: true }
+                )
+            );
+        }
+
+        await Promise.all(updates);
+        console.log('[SETTINGS] Updated:', Object.keys(settings));
+
+        res.json({ success: true, message: 'Settings saved successfully' });
+    } catch (error) {
+        console.error('[SETTINGS] Save failed:', error);
+        res.status(500).json({ error: 'Failed to save settings' });
+    }
+});
+
+
+// ==================== BLOCKLIST API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/blocklist
+ * Get all blocked sites
+ */
+app.get('/api/v1/admin/blocklist', requireAdminAuth, async (req, res) => {
+    try {
+        const blocklist = await Blocklist.find({ active: true }).sort({ createdAt: -1 });
+        res.json(blocklist);
+    } catch (error) {
+        console.error('[BLOCKLIST] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get blocklist' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/blocklist
+ * Add a site to blocklist
+ */
+app.post('/api/v1/admin/blocklist', requireAdminAuth, async (req, res) => {
+    try {
+        const { url, reason } = req.body;
+
+        if (!url) {
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
+        // Extract domain
+        let domain;
+        try {
+            const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+            domain = urlObj.hostname;
+        } catch {
+            domain = url;
+        }
+
+        // Check if already blocked
+        const existing = await Blocklist.findOne({ domain, active: true });
+        if (existing) {
+            return res.status(400).json({ error: 'This domain is already blocked' });
+        }
+
+        const blocked = await Blocklist.create({
+            url,
+            domain,
+            reason: reason || 'Blocked by admin',
+            blockedBy: req.admin.username || 'admin'
+        });
+
+        console.log(`[BLOCKLIST] Site blocked: ${domain} by ${req.admin.username}`);
+
+        // Notify all connected agents about the new block
+        io.emit('blocklist-updated', { action: 'add', domain, url });
+
+        res.json({ success: true, blocked });
+    } catch (error) {
+        console.error('[BLOCKLIST] Add failed:', error);
+        res.status(500).json({ error: 'Failed to add to blocklist' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/blocklist/:id
+ * Remove a site from blocklist
+ */
+app.delete('/api/v1/admin/blocklist/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const blocked = await Blocklist.findByIdAndUpdate(id, { active: false });
+
+        if (!blocked) {
+            return res.status(404).json({ error: 'Block entry not found' });
+        }
+
+        console.log(`[BLOCKLIST] Site unblocked: ${blocked.domain}`);
+
+        // Notify all connected agents
+        io.emit('blocklist-updated', { action: 'remove', domain: blocked.domain });
+
+        res.json({ success: true, message: 'Site removed from blocklist' });
+    } catch (error) {
+        console.error('[BLOCKLIST] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to remove from blocklist' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/blocklist
+ * Get blocklist for agents (public endpoint for agents)
+ */
+app.get('/api/v1/agent/blocklist', async (req, res) => {
+    try {
+        const blocklist = await Blocklist.find({ active: true });
+        res.json(blocklist.map(b => b.domain));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get blocklist' });
+    }
+});
+
+
+// ==================== ADMIN PASSWORD CHANGE ====================
+
+/**
+ * POST /api/v1/admin/change-password
+ * Change admin password
+ */
+app.post('/api/v1/admin/change-password', requireAdminAuth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new password required' });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        const username = req.admin.username;
+
+        // For super admin, check against env config
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            // Verify current password
+            if (!verifyPassword(currentPassword, ADMIN_CONFIG.passwordHash)) {
+                return res.status(401).json({ error: 'Current password is incorrect' });
+            }
+
+            // Super admin password is stored in env, so we save it to settings
+            await Settings.findOneAndUpdate(
+                { key: 'super_admin_password_hash' },
+                { value: hashPassword(newPassword), updatedAt: new Date() },
+                { upsert: true }
+            );
+
+            console.log('[ADMIN] Super admin password changed');
+            res.json({ success: true, message: 'Password changed successfully' });
+        } else {
+            // For DB admin users
+            const adminUser = await User.findOne({ username, type: 'admin' });
+            if (!adminUser) {
+                return res.status(404).json({ error: 'Admin user not found' });
+            }
+
+            if (!verifyPassword(currentPassword, adminUser.passwordHash)) {
+                return res.status(401).json({ error: 'Current password is incorrect' });
+            }
+
+            adminUser.passwordHash = hashPassword(newPassword);
+            await adminUser.save();
+
+            console.log(`[ADMIN] Password changed for: ${username}`);
+            res.json({ success: true, message: 'Password changed successfully' });
+        }
+    } catch (error) {
+        console.error('[ADMIN] Password change failed:', error);
+        res.status(500).json({ error: 'Failed to change password' });
     }
 });
 
