@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Card, Progress, Tag, Space, Typography, Button, Input, Tabs, Badge, Empty, Rate, Avatar } from 'antd';
+import { Row, Col, Card, Progress, Tag, Space, Typography, Button, Input, Tabs, Badge, Empty, Rate, Avatar, message } from 'antd';
 import {
     BookOutlined,
     PlayCircleOutlined,
@@ -21,9 +21,10 @@ import {
     PrinterOutlined,
     ScanOutlined,
     SafetyOutlined,
-    TeamOutlined
+    TeamOutlined,
+    DownloadOutlined
 } from '@ant-design/icons';
-import { getCourses } from '../services/api';
+import { getCourses, downloadCourseUrl } from '../services/api';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -186,6 +187,20 @@ function Learning({ isDarkMode }) {
                                         </Space>
                                         <Text type="secondary">{course.duration}</Text>
                                     </div>
+                                    {course.fileUrl && (
+                                        <Button
+                                            type="primary"
+                                            icon={<DownloadOutlined />}
+                                            style={{ marginTop: 12 }}
+                                            block
+                                            onClick={() => {
+                                                window.open(downloadCourseUrl(course.id), '_blank');
+                                                message.success(`Downloading ${course.title} resource...`);
+                                            }}
+                                        >
+                                            Download Resource
+                                        </Button>
+                                    )}
                                 </div>
                             </Card>
                         </Col>

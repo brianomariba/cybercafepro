@@ -18,7 +18,7 @@ import {
     AppstoreOutlined,
     UnorderedListOutlined,
 } from '@ant-design/icons';
-import { getTemplates } from '../services/api';
+import { getTemplates, downloadTemplateUrl } from '../services/api';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -86,7 +86,12 @@ function Templates({ isDarkMode }) {
     };
 
     const handleDownload = (template) => {
-        message.success(`Downloading ${template.title}...`);
+        if (template.fileUrl) {
+            window.open(downloadTemplateUrl(template.id), '_blank');
+            message.success(`Downloading ${template.title}...`);
+        } else {
+            message.warning('No file attached to this template');
+        }
     };
 
     const handlePreview = (template) => {

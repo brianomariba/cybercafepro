@@ -1418,7 +1418,341 @@ app.post('/api/v1/admin/change-password', requireAdminAuth, async (req, res) => 
 });
 
 
+// ==================== RESOURCE MANAGEMENT: TEMPLATES ====================
+
+/**
+ * GET /api/v1/templates
+ * Get all templates (public - for user portal)
+ */
+app.get('/api/v1/templates', async (req, res) => {
+    try {
+        const templates = await Template.find().sort({ createdAt: -1 });
+        res.json(templates);
+    } catch (error) {
+        console.error('[TEMPLATES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get templates' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/templates
+ * Create a new template with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/templates', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, type, previewUrl, featured } = req.body;
+
+        if (!title || !description || !category || !type) {
+            return res.status(400).json({ error: 'Title, description, category, and type are required' });
+        }
+
+        const templateData = {
+            title,
+            description,
+            category,
+            type,
+            previewUrl,
+            featured: featured === 'true' || featured === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            templateData.fileUrl = `/uploads/${req.file.filename}`;
+            templateData.fileOriginalName = req.file.originalname;
+            templateData.fileMimeType = req.file.mimetype;
+            templateData.fileSize = req.file.size;
+        }
+
+        const template = await Template.create(templateData);
+        console.log(`[TEMPLATES] Created: ${title}`);
+        res.json(template);
+    } catch (error) {
+        console.error('[TEMPLATES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create template' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/templates/:id
+ * Delete a template (admin only)
+ */
+app.delete('/api/v1/admin/templates/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const template = await Template.findByIdAndDelete(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        // Delete associated file if exists
+        if (template.fileUrl) {
+            const filePath = path.join(__dirname, template.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[TEMPLATES] Deleted: ${template.title}`);
+        res.json({ success: true, message: 'Template deleted' });
+    } catch (error) {
+        console.error('[TEMPLATES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
+    }
+});
+
+/**
+ * GET /api/v1/templates/:id/download
+ * Download a template file (public)
+ */
+app.get('/api/v1/templates/:id/download', async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        if (!template.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this template' });
+        }
+
+        const filePath = path.join(__dirname, template.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Increment download count
+        await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
+
+        res.download(filePath, template.fileOriginalName || 'template');
+    } catch (error) {
+        console.error('[TEMPLATES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download template' });
+    }
+});
+
+
+// ==================== RESOURCE MANAGEMENT: COURSES (LEARNING) ====================
+
+/**
+ * GET /api/v1/courses
+ * Get all courses (public - for user portal)
+ */
+app.get('/api/v1/courses', async (req, res) => {
+    try {
+        const courses = await Course.find().sort({ createdAt: -1 });
+        res.json(courses);
+    } catch (error) {
+        console.error('[COURSES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get courses' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/courses
+ * Create a new course with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/courses', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, duration, lessons, level, content, featured } = req.body;
+
+        if (!title || !description || !category || !duration) {
+            return res.status(400).json({ error: 'Title, description, category, and duration are required' });
+        }
+
+        const courseData = {
+            title,
+            description,
+            category,
+            duration,
+            lessons: parseInt(lessons) || 0,
+            level: level || 'Beginner',
+            content,
+            featured: featured === 'true' || featured === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            courseData.fileUrl = `/uploads/${req.file.filename}`;
+            courseData.fileOriginalName = req.file.originalname;
+            courseData.fileMimeType = req.file.mimetype;
+            courseData.fileSize = req.file.size;
+        }
+
+        const course = await Course.create(courseData);
+        console.log(`[COURSES] Created: ${title}`);
+        res.json(course);
+    } catch (error) {
+        console.error('[COURSES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create course' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/courses/:id
+ * Delete a course (admin only)
+ */
+app.delete('/api/v1/admin/courses/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const course = await Course.findByIdAndDelete(req.params.id);
+        if (!course) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+
+        // Delete associated file if exists
+        if (course.fileUrl) {
+            const filePath = path.join(__dirname, course.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[COURSES] Deleted: ${course.title}`);
+        res.json({ success: true, message: 'Course deleted' });
+    } catch (error) {
+        console.error('[COURSES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete course' });
+    }
+});
+
+/**
+ * GET /api/v1/courses/:id/download
+ * Download a course file (public)
+ */
+app.get('/api/v1/courses/:id/download', async (req, res) => {
+    try {
+        const course = await Course.findById(req.params.id);
+        if (!course) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+
+        if (!course.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this course' });
+        }
+
+        const filePath = path.join(__dirname, course.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        res.download(filePath, course.fileOriginalName || 'course-material');
+    } catch (error) {
+        console.error('[COURSES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download course' });
+    }
+});
+
+
+// ==================== RESOURCE MANAGEMENT: GUIDES (GUIDANCE) ====================
+
+/**
+ * GET /api/v1/guides
+ * Get all guides (public - for user portal)
+ */
+app.get('/api/v1/guides', async (req, res) => {
+    try {
+        const guides = await Guide.find().sort({ createdAt: -1 });
+        res.json(guides);
+    } catch (error) {
+        console.error('[GUIDES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get guides' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/guides
+ * Create a new guide with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/guides', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, objective, type, duration, content, popular } = req.body;
+
+        if (!title || !description || !objective || !duration) {
+            return res.status(400).json({ error: 'Title, description, objective, and duration are required' });
+        }
+
+        const guideData = {
+            title,
+            description,
+            objective,
+            type: type || 'Guide',
+            duration,
+            content,
+            popular: popular === 'true' || popular === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            guideData.fileUrl = `/uploads/${req.file.filename}`;
+            guideData.fileOriginalName = req.file.originalname;
+            guideData.fileMimeType = req.file.mimetype;
+            guideData.fileSize = req.file.size;
+        }
+
+        const guide = await Guide.create(guideData);
+        console.log(`[GUIDES] Created: ${title}`);
+        res.json(guide);
+    } catch (error) {
+        console.error('[GUIDES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create guide' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/guides/:id
+ * Delete a guide (admin only)
+ */
+app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const guide = await Guide.findByIdAndDelete(req.params.id);
+        if (!guide) {
+            return res.status(404).json({ error: 'Guide not found' });
+        }
+
+        // Delete associated file if exists
+        if (guide.fileUrl) {
+            const filePath = path.join(__dirname, guide.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[GUIDES] Deleted: ${guide.title}`);
+        res.json({ success: true, message: 'Guide deleted' });
+    } catch (error) {
+        console.error('[GUIDES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete guide' });
+    }
+});
+
+/**
+ * GET /api/v1/guides/:id/download
+ * Download a guide file (public)
+ */
+app.get('/api/v1/guides/:id/download', async (req, res) => {
+    try {
+        const guide = await Guide.findById(req.params.id);
+        if (!guide) {
+            return res.status(404).json({ error: 'Guide not found' });
+        }
+
+        if (!guide.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this guide' });
+        }
+
+        const filePath = path.join(__dirname, guide.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        res.download(filePath, guide.fileOriginalName || 'guide');
+    } catch (error) {
+        console.error('[GUIDES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download guide' });
+    }
+});
+
+
 // ==================== AGENT API ENDPOINTS ====================
+
 
 /**
  * POST /api/v1/agent/sync

@@ -71,6 +71,12 @@ export const getTemplates = async () => (await api.get('/templates')).data;
 export const getCourses = async () => (await api.get('/courses')).data;
 export const getGuides = async () => (await api.get('/guides')).data;
 
+// Download URL helpers
+export const downloadTemplateUrl = (id) => `${API_BASE_URL}/templates/${id}/download`;
+export const downloadCourseUrl = (id) => `${API_BASE_URL}/courses/${id}/download`;
+export const downloadGuideUrl = (id) => `${API_BASE_URL}/guides/${id}/download`;
+
+
 
 // ==================== USER AUTHENDPOINTS (OTP-BASED) ====================
 export const loginUserStep1 = async (username, password) => {

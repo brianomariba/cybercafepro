@@ -6,6 +6,9 @@ const TemplateSchema = new mongoose.Schema({
     category: { type: String, required: true }, // e.g., 'resume', 'business'
     type: { type: String, required: true }, // e.g., 'Word', 'Excel', 'PowerPoint'
     fileUrl: { type: String }, // Path to file or URL
+    fileOriginalName: { type: String }, // Original filename
+    fileMimeType: { type: String }, // File MIME type
+    fileSize: { type: Number }, // File size in bytes
     previewUrl: { type: String }, // Optional preview image
     icon: { type: String }, // Icon name/identifier
     downloads: { type: Number, default: 0 },

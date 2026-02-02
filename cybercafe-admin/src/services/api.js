@@ -434,20 +434,53 @@ export const disconnectSocket = () => {
 };
 
 
-// Content Management
+// Content Management - Templates
 export const getTemplates = async () => (await api.get('/templates')).data;
-export const createTemplate = async (data) => (await api.post('/admin/templates', data)).data;
+export const createTemplate = async (formData) => {
+    const response = await axios.post(`${API_BASE_URL}/admin/templates`, formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${getStoredToken()}`
+        },
+        timeout: 60000
+    });
+    return response.data;
+};
 export const deleteTemplate = async (id) => (await api.delete(`/admin/templates/${id}`)).data;
+export const downloadTemplateUrl = (id) => `${API_BASE_URL}/templates/${id}/download`;
 
+// Content Management - Courses (Learning)
 export const getCourses = async () => (await api.get('/courses')).data;
-export const createCourse = async (data) => (await api.post('/admin/courses', data)).data;
+export const createCourse = async (formData) => {
+    const response = await axios.post(`${API_BASE_URL}/admin/courses`, formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${getStoredToken()}`
+        },
+        timeout: 60000
+    });
+    return response.data;
+};
 export const deleteCourse = async (id) => (await api.delete(`/admin/courses/${id}`)).data;
+export const downloadCourseUrl = (id) => `${API_BASE_URL}/courses/${id}/download`;
 
+// Content Management - Guides (Guidance)
 export const getGuides = async () => (await api.get('/guides')).data;
-export const createGuide = async (data) => (await api.post('/admin/guides', data)).data;
+export const createGuide = async (formData) => {
+    const response = await axios.post(`${API_BASE_URL}/admin/guides`, formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${getStoredToken()}`
+        },
+        timeout: 60000
+    });
+    return response.data;
+};
 export const deleteGuide = async (id) => (await api.delete(`/admin/guides/${id}`)).data;
+export const downloadGuideUrl = (id) => `${API_BASE_URL}/guides/${id}/download`;
 
 // ==================== SETTINGS ====================
+
 export const getSettings = async () => (await api.get('/admin/settings')).data;
 export const saveSettings = async (settings) => (await api.post('/admin/settings', { settings })).data;
 
@@ -481,9 +514,9 @@ export default {
     cleanupDemoUsers,
 
     // Content Management
-    getTemplates, createTemplate, deleteTemplate,
-    getCourses, createCourse, deleteCourse,
-    getGuides, createGuide, deleteGuide,
+    getTemplates, createTemplate, deleteTemplate, downloadTemplateUrl,
+    getCourses, createCourse, deleteCourse, downloadCourseUrl,
+    getGuides, createGuide, deleteGuide, downloadGuideUrl,
 
     // Computers
     getComputers,

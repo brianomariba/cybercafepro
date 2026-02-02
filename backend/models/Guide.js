@@ -9,6 +9,11 @@ const GuideSchema = new mongoose.Schema({
     content: { type: String }, // Markdown content or HTML
     icon: { type: String }, // Icon identifier
     popular: { type: Boolean, default: false },
+    // File attachment fields
+    fileUrl: { type: String }, // Path to uploaded file
+    fileOriginalName: { type: String }, // Original filename
+    fileMimeType: { type: String }, // File MIME type (application/pdf, etc.)
+    fileSize: { type: Number }, // File size in bytes
     createdAt: { type: Date, default: Date.now }
 });
 

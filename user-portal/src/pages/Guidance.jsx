@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Card, Tag, Space, Typography, Button, Input, Collapse, Tabs, List, Avatar, Empty, Tooltip, Badge, Anchor } from 'antd';
+import { Row, Col, Card, Tag, Space, Typography, Button, Input, Collapse, Tabs, List, Avatar, Empty, Tooltip, Badge, Anchor, message } from 'antd';
 import {
     BulbOutlined,
     SearchOutlined,
@@ -23,9 +23,10 @@ import {
     MailOutlined,
     CustomerServiceOutlined,
     MessageOutlined,
-    RocketOutlined
+    RocketOutlined,
+    DownloadOutlined
 } from '@ant-design/icons';
-import { getGuides } from '../services/api';
+import { getGuides, downloadGuideUrl } from '../services/api';
 
 const { Text, Title, Paragraph } = Typography;
 const { Panel } = Collapse;
@@ -196,6 +197,20 @@ function Guidance({ isDarkMode }) {
                                                     <ClockCircleOutlined style={{ marginRight: 4 }} />
                                                     {guide.duration}
                                                 </Text>
+                                                {guide.fileUrl && (
+                                                    <Button
+                                                        type="primary"
+                                                        size="small"
+                                                        icon={<DownloadOutlined />}
+                                                        style={{ marginTop: 8 }}
+                                                        onClick={() => {
+                                                            window.open(downloadGuideUrl(guide.id), '_blank');
+                                                            message.success(`Downloading ${guide.title}...`);
+                                                        }}
+                                                    >
+                                                        Download
+                                                    </Button>
+                                                )}
                                             </div>
                                             <RightOutlined className="reference-arrow" />
                                         </div>
