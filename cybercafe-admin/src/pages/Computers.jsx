@@ -25,7 +25,7 @@ import {
     ExpandAltOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -69,9 +69,37 @@ function Computers() {
         return () => clearInterval(interval);
     }, []);
 
+    // Real-time activity updates for selected computer
+    useEffect(() => {
+        if (!selectedComputer || !activityDrawerOpen) return;
+
+        const socket = connectSocket({
+            onNewLog: (log) => {
+                // Ensure we only process logs for the currently viewed computer to prevent mixed data
+                if (log.clientId === selectedComputer.clientId) {
+                    if (log.type === 'file') {
+                        setFileActivity(prev => [log.data, ...prev].slice(0, 50));
+                    } else if (log.type === 'browser') {
+                        setBrowserHistory(prev => [{ ...log.data, id: log.id || Date.now() }, ...prev].slice(0, 50));
+                    } else if (log.type === 'print') {
+                        // Refresh to get full job details formatting
+                        getPrintJobs({ clientId: selectedComputer.clientId, limit: 20 })
+                            .then(res => setPrintJobs(res.jobs || []));
+                    }
+                }
+            }
+        });
+
+        return () => socket.disconnect();
+    }, [selectedComputer, activityDrawerOpen]);
+
     // Fetch activity for selected computer
     const fetchComputerActivity = async (computer) => {
-        if (!computer) return;
+        if (!computer || !computer.clientId) {
+            console.warn('Cannot fetch activity: Missing Client ID');
+            return;
+        }
+
         setActivityLoading(true);
         try {
             const [sessionsRes, historyRes, filesRes, printsRes] = await Promise.all([
