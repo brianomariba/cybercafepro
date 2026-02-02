@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload } from 'antd';
+import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload, Image, Spin } from 'antd';
 import {
     DesktopOutlined,
     UserOutlined,
@@ -23,7 +23,9 @@ import {
     SendOutlined,
     CaretRightOutlined,
     ExpandAltOutlined,
+
     InboxOutlined,
+    CameraOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket, sendDocumentToComputer } from '../services/api';
@@ -88,6 +90,17 @@ function Computers() {
                             .then(res => setPrintJobs(res.jobs || []));
                     }
                 }
+            },
+            onScreenshot: (data) => {
+                if (selectedComputer && data.clientId === selectedComputer.clientId) {
+                    setScreenshotData(data.screenshot);
+                    setScreenshotTimestamp(data.timestamp);
+                    setScreenshotLoading(false);
+                    if (!screenshotVisible) {
+                        setScreenshotVisible(true);
+                        message.success('Screenshot captured');
+                    }
+                }
             }
         });
 
@@ -141,6 +154,12 @@ function Computers() {
     const [uploadFile, setUploadFile] = useState(null);
     const [uploading, setUploading] = useState(false);
 
+    // Screenshot State
+    const [screenshotVisible, setScreenshotVisible] = useState(false);
+    const [screenshotData, setScreenshotData] = useState(null);
+    const [screenshotTimestamp, setScreenshotTimestamp] = useState(null);
+    const [screenshotLoading, setScreenshotLoading] = useState(false);
+
     const handleSendFileClick = () => {
         setUploadFile(null);
         setSendFileModalVisible(true);
@@ -165,6 +184,21 @@ function Computers() {
             message.error('Failed to send file');
         }
         setUploading(false);
+    };
+
+    const handleScreenshotRequest = async () => {
+        if (!selectedComputer) return;
+        setScreenshotLoading(true);
+        setScreenshotData(null);
+        setScreenshotVisible(true);
+        try {
+            await sendCommand(selectedComputer.clientId, 'screenshot');
+            // message.loading('Capturing screenshot...', 2);
+        } catch (error) {
+            message.error('Failed to request screenshot');
+            setScreenshotLoading(false);
+            setScreenshotVisible(false);
+        }
     };
 
     const getStatusColor = (status) => {
@@ -446,6 +480,9 @@ function Computers() {
                             <Button icon={<SendOutlined />} onClick={handleSendFileClick}>
                                 Send File
                             </Button>
+                            <Button icon={<CameraOutlined />} onClick={handleScreenshotRequest}>
+                                Screenshot
+                            </Button>
                         </Space>
 
                         {/* Collapsible Activity Sections */}
@@ -631,6 +668,37 @@ function Computers() {
                     <p className="ant-upload-text">Click or drag file to upload</p>
                     <p className="ant-upload-hint">Support for single file upload.</p>
                 </Upload.Dragger>
+            </Modal>
+
+            <Modal
+                title={`Screenshot: ${selectedComputer?.hostname}`}
+                open={screenshotVisible}
+                onCancel={() => setScreenshotVisible(false)}
+                footer={null}
+                width={800}
+                bodyStyle={{ textAlign: 'center', padding: 20 }}
+            >
+                {screenshotLoading ? (
+                    <div style={{ padding: 50 }}>
+                        <Spin size="large" tip="Capturing screen..." />
+                    </div>
+                ) : (
+                    screenshotData ? (
+                        <>
+                            <Image
+                                src={`data:image/jpeg;base64,${screenshotData}`}
+                                alt="Screen Capture"
+                                style={{ maxWidth: '100%', maxHeight: '600px', objectFit: 'contain' }}
+                            />
+                            <div style={{ marginTop: 10 }}>
+                                <Text type="secondary">Captured at {new Date(screenshotTimestamp).toLocaleTimeString()}</Text>
+                                <Button type="link" icon={<ReloadOutlined />} onClick={handleScreenshotRequest}>Capture Again</Button>
+                            </div>
+                        </>
+                    ) : (
+                        <Empty description="No screenshot data" />
+                    )
+                )}
             </Modal>
         </div>
     );

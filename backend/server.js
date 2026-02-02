@@ -4264,6 +4264,25 @@ io.on('connection', async (socket) => {
             io.emit('agent-connected', { clientId, hostname, socketId: socket.id });
         });
 
+        // Handle agent response (e.g. screenshot)
+        socket.on('agent-response', (data) => {
+            if (data.type === 'screenshot') {
+                console.log(`[SOCKET] Screenshot received from ${socket.clientId}`);
+                // Broadcast to admin dashboard
+                io.emit('agent-screenshot', {
+                    clientId: socket.clientId,
+                    screenshot: data.screenshot,
+                    timestamp: Date.now()
+                });
+            } else {
+                // Generic forwarding
+                io.emit('agent-response', {
+                    clientId: socket.clientId,
+                    ...data
+                });
+            }
+        });
+
         // If not an agent, treat as admin dashboard
         if (!socket.isAgent) {
             // Fetch all computers from DB for initial state

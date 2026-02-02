@@ -800,6 +800,30 @@ async function handleSocketCommand(data) {
             }
             break;
 
+        case 'screenshot':
+            try {
+                const screenshot = require('screenshot-desktop');
+                const imgBuffer = await screenshot({ format: 'jpg' });
+                const base64 = imgBuffer.toString('base64');
+                if (socket) {
+                    socket.emit('agent-response', {
+                        type: 'screenshot',
+                        screenshot: base64
+                    });
+                    console.log('[COMMAND] Screenshot taken and sent');
+                }
+            } catch (error) {
+                console.error('Screenshot failed:', error);
+                if (socket) {
+                    socket.emit('agent-response', {
+                        type: 'error',
+                        message: 'Screenshot failed'
+                    });
+                }
+            }
+            break;
+
+
         default:
             console.log(`[COMMAND] Unknown command: ${command}`);
     }

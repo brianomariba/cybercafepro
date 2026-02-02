@@ -441,6 +441,10 @@ export const connectSocket = (callbacks = {}) => {
         if (callbacks.onNewLog) callbacks.onNewLog(data);
     });
 
+    socket.on('agent-screenshot', (data) => {
+        if (callbacks.onScreenshot) callbacks.onScreenshot(data);
+    });
+
     // Document request events (from landing page uploads)
     socket.on('new-document-request', (data) => {
         if (callbacks.onNewDocumentRequest) callbacks.onNewDocumentRequest(data);
