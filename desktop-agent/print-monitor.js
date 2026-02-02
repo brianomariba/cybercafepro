@@ -2,6 +2,60 @@ const { exec } = require('child_process');
 
 // Track processed jobs to avoid duplicates
 let processedJobIds = new Set();
+// Cache printer capabilities
+let printerCache = new Map();
+
+/**
+ * Get detailed printer information with color capabilities
+ */
+async function getPrinterCapabilities(printerName) {
+    if (printerCache.has(printerName)) {
+        return printerCache.get(printerName);
+    }
+
+    return new Promise((resolve) => {
+        const psCommand = `
+            Get-Printer -Name "${printerName}" | Select-Object Name, DriverName, PortName, PrinterStatus, Type |
+            ConvertTo-Json
+        `;
+
+        exec(`powershell -Command "${psCommand}"`, (error, stdout) => {
+            if (error || !stdout) {
+                resolve({ isColor: false, capabilities: 'unknown' });
+                return;
+            }
+
+            try {
+                const info = JSON.parse(stdout);
+                const driverLower = (info.DriverName || '').toLowerCase();
+                const nameLower = (info.Name || '').toLowerCase();
+
+                const isColor =
+                    driverLower.includes('color') ||
+                    driverLower.includes('colour') ||
+                    nameLower.includes('color') ||
+                    nameLower.includes('colour') ||
+                    driverLower.includes('hp laserjet pro') ||
+                    driverLower.includes('officejet') ||
+                    driverLower.includes('photosmart') ||
+                    driverLower.includes('deskjet');
+
+                const result = {
+                    isColor,
+                    driver: info.DriverName,
+                    port: info.PortName,
+                    status: info.PrinterStatus,
+                    type: info.Type
+                };
+
+                printerCache.set(printerName, result);
+                resolve(result);
+            } catch (e) {
+                resolve({ isColor: false, capabilities: 'unknown' });
+            }
+        });
+    });
+}
 
 /**
  * Fetches detailed print jobs from the local Windows Spooler
@@ -18,6 +72,8 @@ function getRecentPrintJobs() {
                         Id = $_.Id
                         PrinterName = $printer.Name
                         PrinterType = $printer.Type
+                        PrinterStatus = $printer.PrinterStatus
+                        DriverName = $printer.DriverName
                         PortName = $printer.PortName
                         DocumentName = $_.DocumentName
                         JobStatus = $_.JobStatus
@@ -43,15 +99,34 @@ function getRecentPrintJobs() {
                 const jobs = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
 
                 const normalizedJobs = jobs.filter(job => job && job.Id).map(job => {
-                    // Detect if color based on printer name or document name heuristics
+                    // Detect if color based on printer driver and document name
+                    const driverLower = (job.DriverName || '').toLowerCase();
                     const printerNameLower = (job.PrinterName || '').toLowerCase();
                     const docNameLower = (job.DocumentName || '').toLowerCase();
 
                     let printType = 'bw'; // Default to B&W
-                    if (printerNameLower.includes('color') ||
+
+                    // Check printer capabilities
+                    const isColorPrinter =
+                        driverLower.includes('color') ||
+                        driverLower.includes('colour') ||
+                        printerNameLower.includes('color') ||
                         printerNameLower.includes('colour') ||
+                        driverLower.includes('hp laserjet pro') ||
+                        driverLower.includes('officejet') ||
+                        driverLower.includes('photosmart') ||
+                        driverLower.includes('deskjet');
+
+                    // Check document name hints
+                    const isColorDocument =
                         docNameLower.includes('color') ||
-                        docNameLower.includes('photo')) {
+                        docNameLower.includes('photo') ||
+                        docNameLower.includes('image') ||
+                        docNameLower.includes('.jpg') ||
+                        docNameLower.includes('.png') ||
+                        docNameLower.includes('.jpeg');
+
+                    if (isColorPrinter && isColorDocument) {
                         printType = 'color';
                     }
 
@@ -63,11 +138,15 @@ function getRecentPrintJobs() {
                         jobId: `${job.PrinterName}-${job.Id}`,
                         printer: job.PrinterName || 'Unknown',
                         printerType: job.PrinterType || 'Local',
+                        printerDriver: job.DriverName || 'Unknown',
+                        printerPort: job.PortName || 'Unknown',
+                        printerStatus: job.PrinterStatus || 'Unknown',
                         document: job.DocumentName || 'Untitled',
                         status: job.JobStatus || 'Spooling',
                         totalPages: job.TotalPages || 1,
                         pagesPrinted: job.PagesPrinted || 0,
                         printType: printType, // 'bw' or 'color'
+                        isColorPrinter: isColorPrinter,
                         sizeKB: sizeKB,
                         submitted: job.SubmittedTime,
                         user: job.UserName || 'Unknown',
@@ -162,7 +241,7 @@ function getPrintHistory(hoursBack = 24) {
 function getInstalledPrinters() {
     return new Promise((resolve) => {
         const psCommand = `
-            Get-Printer | Select-Object Name, Type, DriverName, PortName, Shared, Published, DeviceType |
+            Get-Printer | Select-Object Name, Type, DriverName, PortName, Shared, Published, DeviceType, PrinterStatus |
             ConvertTo-Json
         `;
 
@@ -176,15 +255,31 @@ function getInstalledPrinters() {
                 const parsed = JSON.parse(stdout);
                 const printers = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
 
-                resolve(printers.map(p => ({
-                    name: p.Name,
-                    type: p.Type,
-                    driver: p.DriverName,
-                    port: p.PortName,
-                    shared: p.Shared,
-                    isColor: (p.DriverName || '').toLowerCase().includes('color') ||
-                        (p.Name || '').toLowerCase().includes('color')
-                })));
+                resolve(printers.map(p => {
+                    const driverLower = (p.DriverName || '').toLowerCase();
+                    const nameLower = (p.Name || '').toLowerCase();
+
+                    const isColor =
+                        driverLower.includes('color') ||
+                        driverLower.includes('colour') ||
+                        nameLower.includes('color') ||
+                        nameLower.includes('colour') ||
+                        driverLower.includes('officejet') ||
+                        driverLower.includes('photosmart') ||
+                        driverLower.includes('deskjet');
+
+                    return {
+                        name: p.Name,
+                        type: p.Type,
+                        driver: p.DriverName,
+                        port: p.PortName,
+                        shared: p.Shared,
+                        status: getPrinterStatusText(p.PrinterStatus),
+                        statusCode: p.PrinterStatus,
+                        isColor: isColor,
+                        isOnline: p.PrinterStatus === 0 || p.PrinterStatus === 3
+                    };
+                }));
             } catch (e) {
                 resolve([]);
             }
@@ -192,8 +287,52 @@ function getInstalledPrinters() {
     });
 }
 
+/**
+ * Convert printer status code to text
+ */
+function getPrinterStatusText(code) {
+    const statusMap = {
+        0: 'Ready',
+        1: 'Paused',
+        2: 'Error',
+        3: 'Pending Deletion',
+        4: 'Paper Jam',
+        5: 'Paper Out',
+        6: 'Manual Feed Required',
+        7: 'Paper Problem',
+        8: 'Offline',
+        9: 'IO Active',
+        10: 'Busy',
+        11: 'Printing',
+        12: 'Output Bin Full',
+        13: 'Not Available',
+        14: 'Waiting',
+        15: 'Processing',
+        16: 'Initializing',
+        17: 'Warming Up',
+        18: 'Toner Low',
+        19: 'No Toner',
+        20: 'Page Punt',
+        21: 'User Intervention Required',
+        22: 'Out of Memory',
+        23: 'Door Open',
+        24: 'Server Unknown',
+        25: 'Power Save'
+    };
+    return statusMap[code] || 'Unknown';
+}
+
+/**
+ * Clear the printer cache (call when printers might have changed)
+ */
+function clearPrinterCache() {
+    printerCache.clear();
+}
+
 module.exports = {
     getRecentPrintJobs,
     getPrintHistory,
-    getInstalledPrinters
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    clearPrinterCache
 };

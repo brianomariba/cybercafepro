@@ -31,7 +31,7 @@ const FileMonitor = require('./file-monitor');
 const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs } = require('./print-monitor');
+const { getRecentPrintJobs, getInstalledPrinters } = require('./print-monitor');
 const { LiveUrlTracker } = require('./browser-history');
 
 // Load Configuration
@@ -611,6 +611,31 @@ async function startDataCollection() {
                 const { newDevices } = await getUsbDevices();
                 if (newDevices.length > 0) {
                     connectedUsbDevices.push(...newDevices);
+                }
+            } catch (e) { }
+
+            // Send printer information periodically (every 5 heartbeats = ~50 seconds)
+            try {
+                if (!global.printerLogCounter) global.printerLogCounter = 0;
+                global.printerLogCounter++;
+
+                if (global.printerLogCounter >= 5) {
+                    global.printerLogCounter = 0;
+                    const printers = await getInstalledPrinters();
+                    if (printers.length > 0) {
+                        const printerPayload = {
+                            type: 'printers',
+                            clientId: CLIENT_ID,
+                            hostname: os.hostname(),
+                            sessionId: currentSession?.id || null,
+                            sessionUser: currentSession?.user || null,
+                            data: {
+                                printers: printers,
+                                timestamp: new Date().toISOString()
+                            }
+                        };
+                        sendToServer(LOG_API_URL, printerPayload).catch(e => console.error('Printer Log Failed:', e.message));
+                    }
                 }
             } catch (e) { }
 

@@ -2223,6 +2223,48 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/printers
+ * Returns latest connected printers per computer
+ */
+app.get('/api/v1/admin/printers', async (req, res) => {
+    try {
+        const { clientId } = req.query;
+
+        // Find the latest printer log for each client
+        const query = { type: 'printers' };
+        if (clientId) query.clientId = clientId;
+
+        // Aggregate to get the most recent printer log per clientId
+        const printers = await Log.aggregate([
+            { $match: query },
+            { $sort: { receivedAt: -1 } },
+            {
+                $group: {
+                    _id: '$clientId',
+                    hostname: { $first: '$hostname' },
+                    printers: { $first: '$data.printers' },
+                    lastUpdated: { $first: '$receivedAt' }
+                }
+            },
+            {
+                $project: {
+                    clientId: '$_id',
+                    hostname: 1,
+                    printers: 1,
+                    lastUpdated: 1,
+                    _id: 0
+                }
+            }
+        ]);
+
+        res.json(printers);
+    } catch (error) {
+        console.error('Fetch Printers Error:', error);
+        res.status(500).json({ error: 'Failed to fetch printers' });
+    }
+});
+
+/**
  * GET /api/v1/admin/browser-history
  * Returns browser history records
  */

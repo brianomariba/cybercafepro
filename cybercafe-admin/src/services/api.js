@@ -184,6 +184,11 @@ export const getPrintJobs = async (params = {}) => {
     return response.data;
 };
 
+export const getPrinters = async (params = {}) => {
+    const response = await api.get('/admin/printers', { params });
+    return response.data;
+};
+
 // ==================== BROWSER HISTORY ====================
 
 export const getBrowserHistory = async (params = {}) => {
