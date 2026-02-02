@@ -89,7 +89,7 @@ function Reports() {
     // Filter data by date range
     const filterByDateRange = (items, dateField = 'createdAt') => {
         if (!Array.isArray(items)) return [];
-        if (!dateRange[0] || !dateRange[1]) return items;
+        if (!dateRange || !dateRange[0] || !dateRange[1]) return items;
         return items.filter(item => {
             const itemDate = dayjs(item[dateField] || item.receivedAt || item.timestamp);
             return itemDate.isAfter(dateRange[0].startOf('day')) && itemDate.isBefore(dateRange[1].endOf('day'));

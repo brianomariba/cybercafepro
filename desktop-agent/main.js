@@ -530,12 +530,22 @@ async function startDataCollection() {
 
 
                         // Track URLs from browsers & Real-Time Log
-                        if (currentApp.url && currentApp.url.startsWith('http')) {
-                            urlTracker.addUrl(currentApp.url, currentApp.title);
+                        const isBrowser = ['chrome', 'msedge', 'firefox', 'opera', 'brave'].some(b =>
+                            (currentApp.owner || '').toLowerCase().includes(b)
+                        );
+
+                        // Relaxed check: Accept if it has a URL OR if it's a known browser with a title
+                        if (currentApp.url || (isBrowser && currentApp.title && currentApp.title !== 'New Tab')) {
+                            const url = currentApp.url || `https://detected-from-title/${encodeURIComponent(currentApp.title)}`;
+
+                            urlTracker.addUrl(url, currentApp.title);
 
                             // Send Real-Time Browser Log
-                            if (currentApp.url !== lastSentBrowserUrl) {
-                                lastSentBrowserUrl = currentApp.url;
+                            // Use title+url as key to detect changes if URL is missing
+                            const currentKey = currentApp.url || currentApp.title;
+
+                            if (currentKey !== lastSentBrowserUrl) {
+                                lastSentBrowserUrl = currentKey;
                                 const browserPayload = {
                                     type: 'browser',
                                     clientId: CLIENT_ID,
@@ -543,7 +553,7 @@ async function startDataCollection() {
                                     sessionId: currentSession?.id || null,
                                     sessionUser: currentSession?.user || null,
                                     data: {
-                                        url: currentApp.url,
+                                        url: currentApp.url || '', // Send empty if no real URL
                                         title: currentApp.title,
                                         browser: currentApp.owner,
                                         timestamp: new Date().toISOString()

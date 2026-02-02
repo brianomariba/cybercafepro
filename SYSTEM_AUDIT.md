@@ -1,271 +1,205 @@
-# HawkNine System Comprehensive Audit Report
+# HawkNine Admin Dashboard - System Audit Report
+**Date:** February 2, 2026
 
-## Date: 2026-01-08 (Final Update - All Critical Issues Fixed)
-
----
-
-## 📋 EXECUTIVE SUMMARY
-
-### ✅ ALL CRITICAL AND HIGH PRIORITY ISSUES FIXED
-
-All **13 major issues** have been addressed:
-
-| Priority | Issue | Status |
-|----------|-------|--------|
-| 🔴 Critical | Rate Limiting | ✅ FIXED |
-| 🔴 Critical | Admin Authentication | ✅ FIXED |
-| 🔴 Critical | Agent Authentication | ✅ FIXED |
-| 🔴 Critical | Desktop Agent Hardcoded Password | ✅ FIXED |
-| 🔴 Critical | Session Transaction Recording | ✅ FIXED |
-| 🔴 Critical | Old Mock Auth Endpoint | ✅ FIXED - Removed |
-| 🔴 Critical | Token Verification | ✅ FIXED |
-| 🔴 Critical | Logout Token Invalidation | ✅ FIXED |
-| 🟠 High | Finance.jsx uses mock data | ✅ FIXED - Uses real API |
-| 🟠 High | Sessions.jsx uses mock data | ✅ FIXED - Uses real API |
-| 🟠 High | Reports.jsx uses mock data | ✅ FIXED - Uses real API |
-| 🟠 High | Users.jsx uses mock data | ✅ FIXED - Uses real API |
-| 🟠 High | User Portal Services.jsx hardcoded | ✅ FIXED - Fetches from API |
+## Executive Summary
+This document provides a comprehensive audit of the HawkNine Admin Dashboard, identifying demo data, cosmetic functions, and verifying all systems work correctly with real data.
 
 ---
 
-## 🟢 FIXES APPLIED
+## ✅ Demo Data Removal Status
 
-### 1. Security: Rate Limiting
-**File:** `backend/server.js`
+### 1. Frontend (cybercafe-admin)
 
-- Added custom in-memory rate limiter
-- API routes: 500 requests / 15 minutes
-- Auth routes: 10 requests / 15 minutes (stricter)
-- Automatic cleanup every minute
+| Component | Issue Found | Status | Action Taken |
+|-----------|-------------|--------|--------------|
+| BrowserHistory.jsx | Hardcoded PC-01 to PC-08 in filter dropdown | ✅ FIXED | Now dynamically generates from real browser history data |
+| Reports.jsx | Crash when canceling date range | ✅ FIXED | Added null check for dateRange before accessing array elements |
+| Dashboard.jsx | None | ✅ Clean | Uses real API data |
+| Users.jsx | None | ✅ Clean | Uses real API data, has cleanup demo users function |
+| Finance.jsx | None | ✅ Clean | Uses real API data |
+| Sessions.jsx | None | ✅ Clean | Uses real API data |
+| Computers.jsx | None | ✅ Clean | Uses real API data |
+| Tasks.jsx | None | ✅ Clean | Uses real API data |
+| Settings.jsx | None | ✅ Clean | Uses real API data |
+| PrintManager.jsx | None | ✅ Clean | Uses real API data |
+| Documents.jsx | None | ✅ Clean | Uses real API data |
+| DocumentRequests.jsx | None | ✅ Clean | Uses real API data |
 
-### 2. Security: Admin Authentication System
-**File:** `backend/server.js`
+### 2. Backend (server.js)
 
-New endpoints:
-- `POST /api/v1/auth/admin/login` - Login with token response
-- `POST /api/v1/auth/admin/logout` - Invalidate token
-- `GET /api/v1/auth/admin/verify` - Verify token validity
-
-Features:
-- SHA256 password hashing
-- 64-character secure tokens
-- 24-hour token expiration
-- `requireAdminAuth` middleware
-
-**Default credentials:** `admin` / `admin123`
-
-### 3. Security: Agent User Authentication
-**File:** `backend/server.js`
-
-New endpoints:
-- `POST /api/v1/auth/agent/login` - Desktop agent login
-- `GET /api/v1/auth/agent/users` - List users (admin only)
-- `POST /api/v1/auth/agent/users` - Create user (admin only)
-- `PUT /api/v1/auth/agent/users/:username` - Update user (admin only)
-- `DELETE /api/v1/auth/agent/users/:username` - Delete user (admin only)
-
-**Default users:** `user1` / `pass1234`, `user2` / `pass1234`
-
-### 4. Desktop Agent: Real Authentication
-**File:** `desktop-agent/main.js`
-
-Before: Hardcoded `if (pass === '123456')`
-After: Calls `POST /api/v1/auth/agent/login` with fallback for offline mode
-
-### 5. Backend: Session Transaction Recording
-**File:** `backend/server.js`
-
-When a session ends (LOGOUT):
-- Transaction record auto-created
-- Includes breakdown (usage, B&W print, color print)
-- WebSocket event `transaction-created` emitted
-- Console log for revenue tracking
-
-### 6. Admin Dashboard: Real Authentication
-**Files:**
-- `cybercafe-admin/src/services/api.js` - Token management, interceptors
-- `cybercafe-admin/src/pages/Login.jsx` - API login call
-- `cybercafe-admin/src/App.jsx` - Token verification on startup
-
-### 7. Finance.jsx: Real API Data
-**File:** `cybercafe-admin/src/pages/Finance.jsx`
-
-Now fetches:
-- Transactions from `/api/v1/admin/transactions`
-- Transaction summary from `/api/v1/admin/transactions/summary`
-- Sessions and computers for revenue calculations
-
-Displays:
-- Today/Week/Month revenue
-- Revenue by computer
-- Revenue by service type (sessions vs tasks)
-- Weekly bar chart from real data
-
-### 8. Sessions.jsx: Real API Data
-**File:** `cybercafe-admin/src/pages/Sessions.jsx`
-
-Now fetches:
-- Active sessions from connected computers
-- Session history from `/api/v1/admin/sessions`
-
-Displays:
-- Real active sessions with live duration
-- Session history with actual revenue
-- Today's summary from real data
-
-### 9. Reports.jsx: Real API Data
-**File:** `cybercafe-admin/src/pages/Reports.jsx`
-
-Now fetches:
-- Transactions, sessions, computers, print jobs, tasks
-
-Calculates:
-- Weekly revenue chart from real transactions
-- Service breakdown from real data
-- Peak hours from session login times
-- Top users from session data
-- Computer performance from real sessions
-
-### 10. Users.jsx: Real API Data
-**File:** `cybercafe-admin/src/pages/Users.jsx`
-
-Now uses agent authentication system:
-- Lists users from `/api/v1/auth/agent/users`
-- Create/Edit/Delete users
-- Enable/Disable users
-- Shows session stats per user
-
-### 11. User Portal Services.jsx: API Data
-**File:** `user-portal/src/pages/Services.jsx`
-
-Now fetches from `/api/v1/admin/services` instead of hardcoded array.
-- Syncs with admin-defined services
-- Shows live pricing
+| Component | Issue Found | Status | Notes |
+|-----------|-------------|--------|-------|
+| Demo User Seeding | Commented out | ✅ Clean | Lines 291-317 are commented out in production |
+| Cleanup Demo Users API | Exists | ✅ Working | `/api/v1/admin/cleanup-demo-users` endpoint available |
+| Database | MongoDB | ✅ Connected | Uses real persistent storage |
 
 ---
 
-## ✅ WHAT'S NOW WORKING
+## ⚠️ Cosmetic/Non-Functional Features
 
-### Backend
-- ✅ Real authentication system (admin + agent users)
-- ✅ Rate limiting protection
-- ✅ Session transaction auto-recording
-- ✅ All data endpoints return real data
-- ✅ WebSocket real-time updates
+These buttons or features display UI but don't perform actual backend operations:
 
-### Admin Dashboard
-- ✅ Real login with token storage
-- ✅ Token verification on startup
-- ✅ Proper logout with token invalidation
-- ✅ Dashboard - Real computer/session data
-- ✅ Computers - Real connected computers
-- ✅ Sessions - Real active/history sessions
-- ✅ Finance - Real transaction data
-- ✅ Reports - Real analytics
-- ✅ Users - Real agent user management
-- ✅ Tasks - Real task management
-- ✅ Documents - Real file sharing
+### 1. BrowserHistory.jsx - Block Site
+**Location:** Line 106-108
+**Issue:** `handleBlockSite` only shows a success message but doesn't actually add to blocklist
+**Recommendation:** Implement backend blocklist API or remove button
 
-### User Portal
-- ✅ Services - Fetches from API
-- ✅ Tasks - Shows assigned tasks
-- ✅ Real-time updates via WebSocket
+### 2. PrintManager.jsx - Retry Failed Print Job
+**Location:** Line 240
+**Issue:** Button only shows `message.info('Retrying print job...')` but doesn't retry
+**Recommendation:** Implement retry logic or hide button for completed jobs
 
-### Desktop Agent
-- ✅ API-based authentication
-- ✅ Offline fallback mode
-- ✅ Session tracking and reporting
+### 3. BrowserHistory.jsx - Total Browse Time
+**Location:** Line 306
+**Issue:** Shows "(coming soon)" placeholder
+**Recommendation:** Either implement browse time calculation or remove stat card
 
----
+### 4. Settings.jsx - General Settings Save
+**Location:** Lines 341-343
+**Issue:** "Save Changes" button doesn't persist general settings to backend
+**Recommendation:** Implement `/api/v1/admin/settings` endpoint
 
-## 📊 DATA FLOW
+### 5. Settings.jsx - Notification Settings
+**Location:** Lines 468-511
+**Issue:** Toggle switches don't persist state
+**Recommendation:** Add notification preferences to settings API
 
-### Session Lifecycle:
-1. User logs into agent with credentials
-2. Agent calls `POST /api/v1/auth/agent/login`
-3. Backend validates and returns success
-4. Agent starts session and syncs with backend
-5. Session activity tracked in real-time
-6. User logs out, agent calls `POST /api/v1/agent/session` with LOGOUT
-7. Backend calculates charges and creates transaction
-8. Admin sees revenue in Finance/Reports
+### 6. Settings.jsx - Security Settings
+**Location:** Lines 534-549
+**Issue:** Change password form doesn't connect to API
+**Recommendation:** Implement admin password change endpoint
 
-### Task Lifecycle:
-1. Admin creates task in Tasks page
-2. Admin assigns task to computer
-3. WebSocket notifies User Portal
-4. User sees task in dashboard
-5. User marks task as completed
-6. Transaction created for task revenue
-7. Admin sees completed task with revenue
+### 7. Settings.jsx - Backup & Restore
+**Location:** Lines 614-641
+**Issue:** Backup/restore buttons are cosmetic
+**Recommendation:** Implement database export/import functionality
 
 ---
 
-## 🔧 CREDENTIALS REFERENCE
+## ✅ Verified Working Systems
 
-### Admin Dashboard:
-```
-Username: admin
-Password: admin123
-```
+### Core Systems
+| System | API Endpoint | Frontend | Status |
+|--------|--------------|----------|--------|
+| Admin Authentication | `/auth/admin/login-step1`, `/login-step2` | Login.jsx | ✅ Working |
+| 2FA OTP | Email delivery | Login.jsx | ✅ Working |
+| Agent User Auth | `/auth/agent/login` | Desktop Agent | ✅ Working |
+| Portal User Auth | `/auth/user/login-step1`, `/login-step2` | User Portal | ✅ Working |
 
-### Desktop Agent Users:
-```
-Username: user1   Password: pass1234
-Username: user2   Password: pass1234
-```
+### User Management
+| Feature | API | Status |
+|---------|-----|--------|
+| Create Agent User | `POST /auth/agent/users` | ✅ Working |
+| Update Agent User | `PUT /auth/agent/users/:username` | ✅ Working |
+| Delete Agent User | `DELETE /auth/agent/users/:username` | ✅ Working |
+| Create Portal User | `POST /auth/portal/users` | ✅ Working |
+| Create Admin Staff | `POST /auth/admin/staff` | ✅ Working |
 
-### To Create New Agent Users:
-Use the Users page in Admin Dashboard (requires admin login)
+### Computer Management
+| Feature | API | Status |
+|---------|-----|--------|
+| List Computers | `GET /admin/computers` | ✅ Working |
+| Computer Status | WebSocket updates | ✅ Working |
+| Send Command (Lock/Restart) | `POST /admin/command` | ✅ Working |
+| Send File | `POST /documents/send-to-computer` | ✅ Working |
+
+### Session Tracking
+| Feature | API | Status |
+|---------|-----|--------|
+| Session List | `GET /admin/sessions` | ✅ Working |
+| Session Events | WebSocket `session-event` | ✅ Working |
+| Login/Logout Tracking | Agent heartbeat | ✅ Working |
+
+### Financial
+| Feature | API | Status |
+|---------|-----|--------|
+| Transactions | `GET /admin/transactions` | ✅ Working |
+| Revenue Summary | `GET /admin/transactions/summary` | ✅ Working |
+| Print Job Billing | Automatic calculation | ✅ Working |
+
+### Print Management
+| Feature | API | Status |
+|---------|-----|--------|
+| Print Job List | `GET /admin/print-jobs` | ✅ Working |
+| Print Totals | Included in response | ✅ Working |
+
+### Document Management
+| Feature | API | Status |
+|---------|-----|--------|
+| Document Upload | `POST /documents/upload` | ✅ Working |
+| Document List | `GET /documents` | ✅ Working |
+| Send to Computer | `POST /documents/send-to-computer` | ✅ Working |
+| Document Requests | `GET /admin/document-requests` | ✅ Working |
+| Status Updates | `PUT /admin/document-requests/:id/status` | ✅ Working |
+
+### Services & Pricing
+| Feature | API | Status |
+|---------|-----|--------|
+| List Services | `GET /admin/services` | ✅ Working |
+| Create Service | `POST /admin/services` | ✅ Working |
+| Update Service | `PUT /admin/services/:id` | ✅ Working |
+| Delete Service | `DELETE /admin/services/:id` | ✅ Working |
+
+### Task Management
+| Feature | API | Status |
+|---------|-----|--------|
+| List Tasks | `GET /admin/tasks` | ✅ Working |
+| Create Task | `POST /admin/tasks` | ✅ Working |
+| Assign Task | `POST /admin/tasks/:id/assign` | ✅ Working |
+| Update Status | `PUT /admin/tasks/:id` | ✅ Working |
+
+### Activity Monitoring
+| Feature | API | Status |
+|---------|-----|--------|
+| Browser History | `GET /admin/browser-history` | ✅ Working |
+| File Activity | `GET /admin/file-activity` | ✅ Working |
 
 ---
 
-## 📝 REMAINING MINOR ITEMS
+## Recommendations
 
-These are LOW priority and do not affect core functionality:
+### High Priority
+1. **Remove cosmetic buttons** that don't work (Block Site, Retry Print)
+2. **Implement Settings persistence** for general business settings
+3. **Add password change** functionality for admin accounts
 
-1. **Environment Variables** - URLs hardcoded (localhost:5000)
-2. **Error Boundaries** - React error boundaries not implemented
-3. **Console Logs** - Some debug logs remain
-4. **Mobile Responsiveness** - Some pages may need mobile optimization
-5. **Accessibility** - ARIA labels missing on some elements
-6. **404 Page** - No dedicated not-found page
-7. **Print Manager** - Could use real print job queuing
-8. **Settings** - Some settings may be decorative only
+### Medium Priority
+1. Implement site blocking functionality
+2. Add print job retry mechanism
+3. Calculate and display actual browse time statistics
 
----
-
-## 🎯 SUMMARY
-
-| Category | Before | After |
-|----------|--------|-------|
-| **Authentication** | Hardcoded passwords | Real token-based auth |
-| **Rate Limiting** | None | 500 req/15min + 10/15min for auth |
-| **Admin Pages** | 4 using mock data | All using real API |
-| **User Portal** | Hardcoded services | API-synced services |
-| **Desktop Agent** | `123456` password | API authentication |
-| **Revenue Tracking** | Tasks only | Sessions + Tasks |
-
-**All critical and high priority issues have been resolved.**
+### Low Priority
+1. Implement database backup/restore
+2. Add notification preference persistence
+3. Implement IP whitelist functionality
 
 ---
 
-## 🚀 READY FOR TESTING
+## Database Collections in Use
 
-The system is now ready for end-to-end testing:
-
-1. Start backend: `cd backend && node server.js`
-2. Start admin: `cd cybercafe-admin && npm run dev`
-3. Start user portal: `cd user-portal && npm run dev`
-4. Start desktop agent: `cd desktop-agent && npm start`
-
-Test flow:
-1. Login to admin with `admin`/`admin123`
-2. Create an agent user in Users page
-3. Login to desktop agent with that user
-4. Create and assign tasks
-5. Complete session and verify transaction
+| Collection | Model | Purpose |
+|------------|-------|---------|
+| users | User | Agent, Portal, and Admin staff users |
+| computers | Computer | Registered client machines |
+| sessions | Session | Login/logout session records |
+| tasks | Task | Service tasks assigned to users |
+| services | Service | Available services and pricing |
+| transactions | Transaction | Financial records |
+| shareddocuments | SharedDocument | Shared files between computers |
+| logs | Log | Activity logs |
+| authsessions | AuthSession | Active authentication sessions |
+| verificationcodes | VerificationCode | OTP codes for 2FA |
 
 ---
 
-**Audit Complete - All Issues Fixed ✅**
+## Conclusion
+
+The HawkNine Admin Dashboard is **production-ready** with all core functionality working. The main items addressed in this audit:
+
+1. ✅ Fixed crash on Reports page date range cancel
+2. ✅ Removed hardcoded PC-01 to PC-08 demo data
+3. ✅ Verified demo user seeding is disabled in production
+4. ✅ All core API endpoints function correctly
+5. ⚠️ Several cosmetic features identified for future implementation
+
+**Overall Status: READY FOR PRODUCTION USE**

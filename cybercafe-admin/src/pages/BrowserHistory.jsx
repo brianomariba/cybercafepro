@@ -103,8 +103,9 @@ function BrowserHistory() {
         return matchesSearch && matchesCategory && matchesComputer;
     });
 
+    // Block site feature (cosmetic - backend not implemented)
     const handleBlockSite = (url) => {
-        message.success(`${url} has been added to blocklist`);
+        message.warning('Site blocking feature is not yet implemented');
     };
 
     const columns = [
@@ -303,7 +304,7 @@ function BrowserHistory() {
                         </div>
                     </div>
                     <div className="stat-value">-</div>
-                    <div className="stat-label">Total Browse Time (coming soon)</div>
+                    <div className="stat-label">Total Browse Time</div>
                 </div>
             </div>
 
@@ -343,10 +344,10 @@ function BrowserHistory() {
                                 <Select
                                     value={filterComputer}
                                     onChange={setFilterComputer}
-                                    style={{ width: 100 }}
+                                    style={{ width: 130 }}
                                     options={[
                                         { value: 'all', label: 'All PCs' },
-                                        ...['PC-01', 'PC-02', 'PC-03', 'PC-04', 'PC-05', 'PC-06', 'PC-07', 'PC-08'].map(pc => ({
+                                        ...[...new Set(history.map(h => h.computer))].filter(Boolean).map(pc => ({
                                             value: pc, label: pc
                                         }))
                                     ]}

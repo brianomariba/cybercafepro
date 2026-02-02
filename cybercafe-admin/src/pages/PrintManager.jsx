@@ -233,11 +233,11 @@ function PrintManager() {
                         </Tooltip>
                     )}
                     {record.status === 'failed' && (
-                        <Tooltip title="Retry">
+                        <Tooltip title="Retry (not implemented)">
                             <Button
                                 type="text"
-                                icon={<ReloadOutlined style={{ color: '#00d4ff' }} />}
-                                onClick={() => message.info('Retrying print job...')}
+                                icon={<ReloadOutlined style={{ color: '#6b6b80' }} />}
+                                onClick={() => message.warning('Print job retry is not yet implemented')}
                             />
                         </Tooltip>
                     )}
@@ -375,7 +375,7 @@ function PrintManager() {
                             columns={columns}
                             dataSource={filteredJobs}
                             rowKey="id"
-                                loading={loading}
+                            loading={loading}
                             pagination={{ pageSize: 6 }}
                             size="middle"
                         />
