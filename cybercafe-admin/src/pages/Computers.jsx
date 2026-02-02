@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer } from 'antd';
+import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload } from 'antd';
 import {
     DesktopOutlined,
     UserOutlined,
@@ -23,9 +23,10 @@ import {
     SendOutlined,
     CaretRightOutlined,
     ExpandAltOutlined,
+    InboxOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket, sendDocumentToComputer } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -133,6 +134,37 @@ function Computers() {
         } catch (error) {
             message.error('Failed to send command');
         }
+    };
+
+    // Send File Modal State
+    const [sendFileModalVisible, setSendFileModalVisible] = useState(false);
+    const [uploadFile, setUploadFile] = useState(null);
+    const [uploading, setUploading] = useState(false);
+
+    const handleSendFileClick = () => {
+        setUploadFile(null);
+        setSendFileModalVisible(true);
+    };
+
+    const handleSendFileSubmit = async () => {
+        if (!uploadFile || !selectedComputer) return;
+
+        setUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', uploadFile);
+            formData.append('targetClientId', selectedComputer.clientId);
+            formData.append('targetHostname', selectedComputer.hostname);
+
+            await sendDocumentToComputer(formData);
+            message.success(`File sent successfully to ${selectedComputer.hostname}`);
+            setSendFileModalVisible(false);
+            setUploadFile(null);
+        } catch (error) {
+            console.error(error);
+            message.error('Failed to send file');
+        }
+        setUploading(false);
     };
 
     const getStatusColor = (status) => {
@@ -411,7 +443,7 @@ function Computers() {
                             <Button icon={<ReloadOutlined />} onClick={() => handleCommand(selectedComputer, 'restart')}>
                                 Restart
                             </Button>
-                            <Button icon={<SendOutlined />} onClick={() => navigate('/documents')}>
+                            <Button icon={<SendOutlined />} onClick={handleSendFileClick}>
                                 Send File
                             </Button>
                         </Space>
@@ -560,6 +592,46 @@ function Computers() {
                     </>
                 )}
             </Drawer>
+
+            <Modal
+                title={`Send File to ${selectedComputer?.hostname}`}
+                open={sendFileModalVisible}
+                onCancel={() => setSendFileModalVisible(false)}
+                footer={[
+                    <Button key="cancel" onClick={() => setSendFileModalVisible(false)}>
+                        Cancel
+                    </Button>,
+                    <Button
+                        key="send"
+                        type="primary"
+                        icon={<SendOutlined />}
+                        loading={uploading}
+                        disabled={!uploadFile}
+                        onClick={handleSendFileSubmit}
+                    >
+                        Send
+                    </Button>
+                ]}
+            >
+                <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary">The file will be saved to the user's Documents folder.</Text>
+                </div>
+                <Upload.Dragger
+                    beforeUpload={(file) => {
+                        setUploadFile(file);
+                        return false;
+                    }}
+                    maxCount={1}
+                    fileList={uploadFile ? [uploadFile] : []}
+                    onRemove={() => setUploadFile(null)}
+                >
+                    <p className="ant-upload-drag-icon">
+                        <InboxOutlined style={{ color: '#00B4D8' }} />
+                    </p>
+                    <p className="ant-upload-text">Click or drag file to upload</p>
+                    <p className="ant-upload-hint">Support for single file upload.</p>
+                </Upload.Dragger>
+            </Modal>
         </div>
     );
 }
