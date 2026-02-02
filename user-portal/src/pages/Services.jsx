@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Row, Col, Card, Tag, Space, Typography, Button, Table, Empty, Spin, message } from 'antd';
+import { useState, useEffect, useMemo } from 'react';
+import { Row, Col, Card, Tag, Space, Typography, Button, Input, Empty, Spin, message, Badge, Tooltip } from 'antd';
 import {
     DollarOutlined,
     PrinterOutlined,
@@ -9,39 +9,74 @@ import {
     ScanOutlined,
     CopyOutlined,
     FileTextOutlined,
-    InfoCircleOutlined,
-    ReloadOutlined,
+    SearchOutlined,
+    PictureOutlined,
+    FileWordOutlined,
+    FilePdfOutlined,
+    IdcardOutlined,
+    CameraOutlined,
+    WifiOutlined,
+    CustomerServiceOutlined,
+    EditOutlined,
+    BookOutlined,
+    RightOutlined,
+    LeftOutlined,
+    HomeOutlined,
+    AppstoreOutlined,
+    FolderOutlined,
+    StarOutlined,
+    ThunderboltOutlined,
 } from '@ant-design/icons';
 import { getServices } from '../services/api';
 
 const { Text, Title } = Typography;
 
+// Icon mapping for categories
+const iconMap = {
+    'printer': <PrinterOutlined />,
+    'desktop': <DesktopOutlined />,
+    'scan': <ScanOutlined />,
+    'copy': <CopyOutlined />,
+    'file': <FileTextOutlined />,
+    'picture': <PictureOutlined />,
+    'photo': <CameraOutlined />,
+    'wifi': <WifiOutlined />,
+    'support': <CustomerServiceOutlined />,
+    'edit': <EditOutlined />,
+    'book': <BookOutlined />,
+    'folder': <FolderOutlined />,
+    'document': <FileWordOutlined />,
+    'pdf': <FilePdfOutlined />,
+    'id': <IdcardOutlined />,
+    'star': <StarOutlined />,
+    'flash': <ThunderboltOutlined />,
+    'check': <CheckCircleOutlined />,
+    'default': <AppstoreOutlined />,
+};
+
+// Default category configuration with icons and colors
+const defaultCategories = {
+    printing: { name: 'Printing', icon: 'printer', color: '#FFB703', subcategories: ['a4', 'a3', 'photopaper', 'glossy'] },
+    scanning: { name: 'Scanning', icon: 'scan', color: '#00C853' },
+    photocopy: { name: 'Photocopying', icon: 'copy', color: '#FB8500' },
+    typing: { name: 'Typing', icon: 'edit', color: '#8B5CF6' },
+    computer: { name: 'Computer Usage', icon: 'desktop', color: '#00B4D8' },
+    internet: { name: 'Internet', icon: 'wifi', color: '#0077B6' },
+    documents: { name: 'Documents', icon: 'document', color: '#E91E63' },
+    photography: { name: 'Photography', icon: 'photo', color: '#FF6B6B' },
+    other: { name: 'Other Services', icon: 'folder', color: '#64748B' },
+};
+
 // Format KSH
 const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
-
-// Category configuration
-const categoryConfig = {
-    usage: { label: 'Computer Services', icon: <DesktopOutlined />, color: '#00B4D8' },
-    core: { label: 'Computer Services', icon: <DesktopOutlined />, color: '#00B4D8' },
-    printing: { label: 'Printing', icon: <PrinterOutlined />, color: '#FFB703' },
-    scanning: { label: 'Scanning', icon: <ScanOutlined />, color: '#00C853' },
-    photocopy: { label: 'Photocopying', icon: <CopyOutlined />, color: '#FB8500' },
-    typing: { label: 'Typing', icon: <FileTextOutlined />, color: '#8B5CF6' },
-    document: { label: 'Documents', icon: <FileTextOutlined />, color: '#E91E63' },
-    service: { label: 'Services', icon: <CheckCircleOutlined />, color: '#00BCD4' },
-    other: { label: 'Other Services', icon: <FileTextOutlined />, color: '#8B5CF6' },
-};
-
-// Operating hours
-const operatingHours = {
-    weekdays: { open: '7:00 AM', close: '10:00 PM' },
-    weekends: { open: '9:00 AM', close: '8:00 PM' },
-};
 
 function Services({ isDarkMode }) {
     const [services, setServices] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [activeCategory, setActiveCategory] = useState('all');
+    const [selectedCategory, setSelectedCategory] = useState(null);
+    const [selectedSubcategory, setSelectedSubcategory] = useState(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchFocused, setSearchFocused] = useState(false);
 
     // Fetch services from API
     const fetchServices = async () => {
@@ -56,432 +91,452 @@ function Services({ isDarkMode }) {
         setLoading(false);
     };
 
-    useEffect(() => {
-        fetchServices();
-    }, []);
+    useEffect(() => { fetchServices(); }, []);
 
-    const enabledServices = services.filter(s => s.isActive !== false);
+    const enabledServices = useMemo(() =>
+        services.filter(s => s.isActive !== false),
+        [services]
+    );
 
-    // Get unique categories from actual services
-    const categories = [...new Set(enabledServices.map(s => s.category))].filter(Boolean);
+    // Build category structure from services
+    const categoryStructure = useMemo(() => {
+        const structure = {};
 
-    const filteredServices = activeCategory === 'all'
-        ? enabledServices
-        : enabledServices.filter(s => s.category === activeCategory);
+        enabledServices.forEach(service => {
+            const cat = service.category?.toLowerCase() || 'other';
+            const subcat = service.subcategory?.toLowerCase();
 
-    const getCategoryIcon = (category) => {
-        return categoryConfig[category]?.icon || <FileTextOutlined />;
-    };
+            if (!structure[cat]) {
+                const defaultCat = defaultCategories[cat] || defaultCategories.other;
+                structure[cat] = {
+                    key: cat,
+                    name: defaultCat.name,
+                    icon: defaultCat.icon,
+                    color: service.color || defaultCat.color,
+                    services: [],
+                    subcategories: {}
+                };
+            }
 
-    const getCategoryColor = (category) => {
-        return categoryConfig[category]?.color || '#8B5CF6';
-    };
+            if (subcat) {
+                if (!structure[cat].subcategories[subcat]) {
+                    structure[cat].subcategories[subcat] = {
+                        key: subcat,
+                        name: subcat.charAt(0).toUpperCase() + subcat.slice(1).replace(/-/g, ' '),
+                        services: []
+                    };
+                }
+                structure[cat].subcategories[subcat].services.push(service);
+            } else {
+                structure[cat].services.push(service);
+            }
+        });
 
-    const getCategoryLabel = (category) => {
-        return categoryConfig[category]?.label || category;
-    };
+        return structure;
+    }, [enabledServices]);
 
-    // Group services by category for display
-    const servicesByCategory = categories.reduce((acc, cat) => {
-        acc[cat] = enabledServices.filter(s => s.category === cat);
-        return acc;
-    }, {});
+    const categories = Object.values(categoryStructure);
+
+    // Get icon component
+    const getIcon = (iconName) => iconMap[iconName] || iconMap.default;
+
+    // Search results
+    const searchResults = useMemo(() => {
+        if (!searchQuery.trim()) return [];
+        const query = searchQuery.toLowerCase();
+        return enabledServices.filter(s =>
+            s.name.toLowerCase().includes(query) ||
+            s.description?.toLowerCase().includes(query) ||
+            s.category?.toLowerCase().includes(query) ||
+            s.subcategory?.toLowerCase().includes(query)
+        );
+    }, [searchQuery, enabledServices]);
+
+    // Get current view services
+    const currentServices = useMemo(() => {
+        if (searchQuery.trim()) return searchResults;
+        if (!selectedCategory) return [];
+
+        const cat = categoryStructure[selectedCategory];
+        if (!cat) return [];
+
+        if (selectedSubcategory && cat.subcategories[selectedSubcategory]) {
+            return cat.subcategories[selectedSubcategory].services;
+        }
+
+        // Return all services in category if no subcategory selected
+        const allServices = [...cat.services];
+        Object.values(cat.subcategories).forEach(sub => {
+            allServices.push(...sub.services);
+        });
+        return allServices;
+    }, [selectedCategory, selectedSubcategory, categoryStructure, searchQuery, searchResults]);
 
     // Format unit display
     const formatUnit = (unit) => {
         const unitMap = {
-            'per_hour': 'per hour',
-            'per_page': 'per page',
-            'per_copy': 'per copy',
+            'per_hour': '/hour',
+            'per_page': '/page',
+            'per_copy': '/copy',
             'flat': 'flat rate',
         };
         return unitMap[unit] || unit;
     };
 
+    // Handle category click
+    const handleCategoryClick = (catKey) => {
+        setSelectedCategory(catKey);
+        setSelectedSubcategory(null);
+        setSearchQuery('');
+    };
+
+    // Handle back navigation
+    const handleBack = () => {
+        if (selectedSubcategory) {
+            setSelectedSubcategory(null);
+        } else {
+            setSelectedCategory(null);
+        }
+    };
+
+    // Current category info
+    const currentCategory = selectedCategory ? categoryStructure[selectedCategory] : null;
+
     return (
-        <div>
-            {/* Page Header */}
+        <div className="kali-services">
+            {/* Header */}
             <div className="page-header">
                 <div className="page-title">
                     <DollarOutlined className="icon" />
                     <h1>Services & Pricing</h1>
                 </div>
                 <p className="page-subtitle">
-                    View our available services and current pricing.
+                    Browse our services and pricing. Click a category to explore.
                 </p>
             </div>
 
-            {/* Quick Stats */}
-            <Spin spinning={loading}>
-                <div className="stats-row">
-                    <div className="stat-card teal">
-                        <div className="stat-header">
-                            <div className="stat-icon teal">
-                                <DesktopOutlined />
-                            </div>
-                            <Button
-                                icon={<ReloadOutlined />}
-                                size="small"
-                                type="text"
-                                onClick={fetchServices}
-                                loading={loading}
-                            />
-                        </div>
-                        <div className="stat-value">{enabledServices.length}</div>
-                        <div className="stat-label">Services Available</div>
-                    </div>
-
-                    <div className="stat-card yellow">
-                        <div className="stat-header">
-                            <div className="stat-icon yellow">
-                                <ClockCircleOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{operatingHours.weekdays.open}</div>
-                        <div className="stat-label">Opening Time</div>
-                    </div>
-
-                    <div className="stat-card green">
-                        <div className="stat-header">
-                            <div className="stat-icon green">
-                                <ClockCircleOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{operatingHours.weekdays.close}</div>
-                        <div className="stat-label">Closing Time</div>
-                    </div>
-
-                    <div className="stat-card purple">
-                        <div className="stat-header">
-                            <div className="stat-icon purple">
-                                <CheckCircleOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{categories.length}</div>
-                        <div className="stat-label">Categories</div>
-                    </div>
-                </div>
-            </Spin>
-
-            {/* Operating Hours Banner */}
-            <Card
-                style={{
-                    marginBottom: 24,
-                    background: 'linear-gradient(135deg, rgba(0, 180, 216, 0.1) 0%, rgba(0, 200, 83, 0.1) 100%)',
-                    border: '1px solid rgba(0, 180, 216, 0.2)',
-                }}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                    <div style={{
-                        width: 56,
-                        height: 56,
+            {/* Search Bar */}
+            <div style={{ marginBottom: 24 }}>
+                <Input
+                    size="large"
+                    prefix={<SearchOutlined style={{ color: searchFocused ? '#00B4D8' : undefined }} />}
+                    placeholder="Search services..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onFocus={() => setSearchFocused(true)}
+                    onBlur={() => setSearchFocused(false)}
+                    style={{
                         borderRadius: 12,
-                        background: 'rgba(0, 180, 216, 0.2)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                    }}>
-                        <ClockCircleOutlined style={{ fontSize: 28, color: '#00B4D8' }} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        <Title level={5} style={{ margin: 0, color: isDarkMode ? '#fff' : '#1e293b' }}>
-                            🕐 Operating Hours
-                        </Title>
-                        <Space wrap style={{ marginTop: 8 }}>
-                            <Tag color="blue">
-                                Mon-Sat: {operatingHours.weekdays.open} - {operatingHours.weekdays.close}
-                            </Tag>
-                            <Tag color="orange">
-                                Sunday: {operatingHours.weekends.open} - {operatingHours.weekends.close}
-                            </Tag>
-                        </Space>
-                    </div>
-                </div>
-            </Card>
-
-            {/* Category Filter */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
-                <Button
-                    type={activeCategory === 'all' ? 'primary' : 'default'}
-                    onClick={() => setActiveCategory('all')}
-                >
-                    All Services
-                </Button>
-                {categories.map(cat => {
-                    const config = categoryConfig[cat] || { label: cat, icon: <FileTextOutlined /> };
-                    const count = servicesByCategory[cat]?.length || 0;
-                    if (count === 0) return null;
-                    return (
-                        <Button
-                            key={cat}
-                            type={activeCategory === cat ? 'primary' : 'default'}
-                            icon={config.icon}
-                            onClick={() => setActiveCategory(cat)}
-                        >
-                            {config.label} ({count})
-                        </Button>
-                    );
-                })}
+                        background: isDarkMode ? 'rgba(30, 41, 59, 0.8)' : 'rgba(255, 255, 255, 0.9)',
+                        border: searchFocused ? '2px solid #00B4D8' : '1px solid rgba(0,0,0,0.1)',
+                    }}
+                    allowClear
+                />
             </div>
 
-            {/* Services Grid */}
-            {loading ? (
-                <Card>
-                    <div style={{ textAlign: 'center', padding: 48 }}>
-                        <Spin size="large" />
-                        <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>Loading services...</Text>
-                    </div>
-                </Card>
-            ) : enabledServices.length === 0 ? (
-                <Card>
-                    <Empty description="No services available" />
-                </Card>
-            ) : activeCategory === 'all' ? (
-                // Show services grouped by category
-                categories.map(cat => {
-                    const catServices = servicesByCategory[cat];
-                    if (!catServices || catServices.length === 0) return null;
-                    const config = categoryConfig[cat] || { label: cat, color: '#8B5CF6', icon: <FileTextOutlined /> };
-
-                    return (
-                        <div key={cat} style={{ marginBottom: 32 }}>
-                            <Title level={4} style={{ color: isDarkMode ? '#fff' : '#1e293b', marginBottom: 16 }}>
-                                <span style={{ color: config.color, marginRight: 8 }}>{config.icon}</span>
-                                {config.label}
+            <Spin spinning={loading}>
+                {/* Search Results or Category View */}
+                {searchQuery.trim() ? (
+                    // Search Results View
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+                            <Button
+                                icon={<LeftOutlined />}
+                                onClick={() => setSearchQuery('')}
+                                type="text"
+                            />
+                            <Title level={4} style={{ margin: 0, color: isDarkMode ? '#fff' : '#1e293b' }}>
+                                Search Results ({searchResults.length})
                             </Title>
+                        </div>
+
+                        {searchResults.length === 0 ? (
+                            <Empty description="No services found for your search" />
+                        ) : (
                             <Row gutter={[16, 16]}>
-                                {catServices.map(service => (
+                                {searchResults.map(service => (
                                     <Col xs={24} sm={12} lg={8} xl={6} key={service.id}>
-                                        <Card
-                                            hoverable
-                                            style={{
-                                                height: '100%',
-                                                background: `linear-gradient(135deg, ${config.color}10 0%, ${config.color}05 100%)`,
-                                                border: `1px solid ${config.color}30`,
-                                            }}
-                                        >
-                                            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                                                <div style={{
-                                                    width: 48,
-                                                    height: 48,
-                                                    borderRadius: 12,
-                                                    background: `${config.color}20`,
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    fontSize: 22,
-                                                    color: config.color,
-                                                    marginBottom: 12,
-                                                }}>
-                                                    {getCategoryIcon(service.category)}
-                                                </div>
-                                                <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b', fontSize: 16, display: 'block' }}>
-                                                    {service.name}
-                                                </Text>
-                                                {service.description && (
-                                                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                                                        {service.description}
-                                                    </Text>
-                                                )}
-                                                <div style={{ marginTop: 'auto' }}>
-                                                    <Text style={{
-                                                        fontFamily: 'JetBrains Mono',
-                                                        color: '#00C853',
-                                                        fontWeight: 700,
-                                                        fontSize: 20,
-                                                        display: 'block'
-                                                    }}>
-                                                        {formatKSH(service.price)}
-                                                    </Text>
-                                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                                        {formatUnit(service.unit)}
-                                                    </Text>
-                                                </div>
-                                            </div>
-                                        </Card>
+                                        <ServiceCard service={service} isDarkMode={isDarkMode} formatKSH={formatKSH} formatUnit={formatUnit} getIcon={getIcon} />
                                     </Col>
                                 ))}
                             </Row>
-                        </div>
-                    );
-                })
-            ) : (
-                // Show filtered services
-                <Row gutter={[16, 16]}>
-                    {filteredServices.length === 0 ? (
-                        <Col span={24}>
-                            <Empty description="No services found in this category" />
-                        </Col>
-                    ) : (
-                        filteredServices.map(service => {
-                            const config = categoryConfig[service.category] || { color: '#8B5CF6' };
-                            return (
-                                <Col xs={24} sm={12} lg={8} xl={6} key={service.id}>
-                                    <Card
-                                        hoverable
-                                        style={{
-                                            height: '100%',
-                                            background: `linear-gradient(135deg, ${config.color}10 0%, ${config.color}05 100%)`,
-                                            border: `1px solid ${config.color}30`,
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                                            <div style={{
-                                                width: 48,
-                                                height: 48,
-                                                borderRadius: 12,
-                                                background: `${config.color}20`,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                fontSize: 22,
-                                                color: config.color,
-                                                marginBottom: 12,
-                                            }}>
-                                                {getCategoryIcon(service.category)}
-                                            </div>
-                                            <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b', fontSize: 16, display: 'block' }}>
-                                                {service.name}
-                                            </Text>
-                                            {service.description && (
-                                                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-                                                    {service.description}
-                                                </Text>
-                                            )}
-                                            <div style={{ marginTop: 'auto' }}>
-                                                <Text style={{
-                                                    fontFamily: 'JetBrains Mono',
-                                                    color: '#00C853',
-                                                    fontWeight: 700,
-                                                    fontSize: 20,
-                                                    display: 'block'
-                                                }}>
-                                                    {formatKSH(service.price)}
-                                                </Text>
-                                                <Text type="secondary" style={{ fontSize: 12 }}>
-                                                    {formatUnit(service.unit)}
-                                                </Text>
-                                            </div>
-                                        </div>
-                                    </Card>
-                                </Col>
-                            );
-                        })
-                    )}
-                </Row>
-            )}
-
-            {/* Price Table */}
-            {enabledServices.length > 0 && (
-                <Card
-                    title={
-                        <Space>
-                            <DollarOutlined style={{ color: '#00B4D8' }} />
-                            <span>Complete Price List</span>
-                        </Space>
-                    }
-                    style={{ marginTop: 32 }}
-                >
-                    <Table
-                        dataSource={enabledServices}
-                        rowKey="id"
-                        pagination={false}
-                        columns={[
-                            {
-                                title: 'Service',
-                                dataIndex: 'name',
-                                key: 'name',
-                                render: (name, record) => (
-                                    <Space>
-                                        <div style={{
-                                            width: 32,
-                                            height: 32,
-                                            borderRadius: 8,
-                                            background: `${getCategoryColor(record.category)}20`,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: getCategoryColor(record.category),
-                                        }}>
-                                            {getCategoryIcon(record.category)}
-                                        </div>
-                                        <div>
-                                            <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>{name}</Text>
-                                            {record.description && (
-                                                <>
-                                                    <br />
-                                                    <Text type="secondary" style={{ fontSize: 11 }}>{record.description}</Text>
-                                                </>
-                                            )}
-                                        </div>
-                                    </Space>
-                                ),
-                            },
-                            {
-                                title: 'Category',
-                                dataIndex: 'category',
-                                key: 'category',
-                                render: (category) => (
-                                    <Tag color={getCategoryColor(category)} style={{ textTransform: 'capitalize' }}>
-                                        {getCategoryLabel(category)}
-                                    </Tag>
-                                ),
-                            },
-                            {
-                                title: 'Price',
-                                dataIndex: 'price',
-                                key: 'price',
-                                render: (price, record) => (
-                                    <div>
-                                        <Text style={{
-                                            fontFamily: 'JetBrains Mono',
-                                            color: '#00C853',
-                                            fontWeight: 600,
-                                            fontSize: 16
-                                        }}>
-                                            {formatKSH(price)}
-                                        </Text>
-                                        <br />
-                                        <Text type="secondary" style={{ fontSize: 11 }}>{formatUnit(record.unit)}</Text>
-                                    </div>
-                                ),
-                            },
-                        ]}
-                    />
-                </Card>
-            )}
-
-            {/* Info Banner */}
-            <Card
-                style={{
-                    marginTop: 24,
-                    background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(0, 180, 216, 0.1) 100%)',
-                    border: '1px solid rgba(139, 92, 246, 0.2)',
-                }}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <div style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 12,
-                        background: 'rgba(139, 92, 246, 0.2)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                    }}>
-                        <InfoCircleOutlined style={{ fontSize: 28, color: '#8B5CF6' }} />
+                        )}
                     </div>
-                    <div style={{ flex: 1 }}>
-                        <Title level={5} style={{ margin: 0, color: isDarkMode ? '#fff' : '#1e293b' }}>
-                            ℹ️ Need Assistance?
+                ) : !selectedCategory ? (
+                    // Category Grid View (Kali-style)
+                    <div>
+                        <Title level={4} style={{ marginBottom: 20, color: isDarkMode ? '#fff' : '#1e293b' }}>
+                            <AppstoreOutlined style={{ marginRight: 8, color: '#00B4D8' }} />
+                            Select a Category
                         </Title>
-                        <Text type="secondary">
-                            Prices are subject to change. Ask our staff for any ongoing promotions or bulk discounts!
-                        </Text>
+
+                        {categories.length === 0 ? (
+                            <Empty description="No services available" />
+                        ) : (
+                            <Row gutter={[20, 20]}>
+                                {categories.map(cat => {
+                                    const serviceCount = cat.services.length +
+                                        Object.values(cat.subcategories).reduce((acc, sub) => acc + sub.services.length, 0);
+                                    const subcatCount = Object.keys(cat.subcategories).length;
+
+                                    return (
+                                        <Col xs={12} sm={8} md={6} lg={4} key={cat.key}>
+                                            <Card
+                                                hoverable
+                                                className="category-card"
+                                                onClick={() => handleCategoryClick(cat.key)}
+                                                style={{
+                                                    background: `linear-gradient(145deg, ${cat.color}15 0%, ${cat.color}08 100%)`,
+                                                    border: `1px solid ${cat.color}40`,
+                                                    borderRadius: 16,
+                                                    transition: 'all 0.3s ease',
+                                                    cursor: 'pointer',
+                                                }}
+                                                bodyStyle={{ padding: 20, textAlign: 'center' }}
+                                            >
+                                                <div style={{
+                                                    width: 64,
+                                                    height: 64,
+                                                    borderRadius: 16,
+                                                    background: `${cat.color}25`,
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    fontSize: 28,
+                                                    color: cat.color,
+                                                    margin: '0 auto 12px',
+                                                    transition: 'transform 0.3s ease',
+                                                }}>
+                                                    {getIcon(cat.icon)}
+                                                </div>
+                                                <Text strong style={{
+                                                    display: 'block',
+                                                    color: isDarkMode ? '#fff' : '#1e293b',
+                                                    fontSize: 14,
+                                                    marginBottom: 4
+                                                }}>
+                                                    {cat.name}
+                                                </Text>
+                                                <Space size={4}>
+                                                    <Badge
+                                                        count={serviceCount}
+                                                        style={{ backgroundColor: cat.color }}
+                                                        overflowCount={99}
+                                                    />
+                                                    {subcatCount > 0 && (
+                                                        <Tag color="default" style={{ fontSize: 10 }}>
+                                                            {subcatCount} types
+                                                        </Tag>
+                                                    )}
+                                                </Space>
+                                            </Card>
+                                        </Col>
+                                    );
+                                })}
+                            </Row>
+                        )}
+                    </div>
+                ) : (
+                    // Category Detail View
+                    <div>
+                        {/* Breadcrumb Navigation */}
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            marginBottom: 20,
+                            padding: '12px 16px',
+                            background: isDarkMode ? 'rgba(30, 41, 59, 0.6)' : 'rgba(255, 255, 255, 0.8)',
+                            borderRadius: 12,
+                        }}>
+                            <Button
+                                icon={<HomeOutlined />}
+                                onClick={() => { setSelectedCategory(null); setSelectedSubcategory(null); }}
+                                type="text"
+                            />
+                            <RightOutlined style={{ fontSize: 10, color: '#94a3b8' }} />
+                            <Button
+                                type="text"
+                                onClick={() => setSelectedSubcategory(null)}
+                                style={{
+                                    color: currentCategory?.color,
+                                    fontWeight: !selectedSubcategory ? 600 : 400
+                                }}
+                            >
+                                {getIcon(currentCategory?.icon)} {currentCategory?.name}
+                            </Button>
+                            {selectedSubcategory && (
+                                <>
+                                    <RightOutlined style={{ fontSize: 10, color: '#94a3b8' }} />
+                                    <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>
+                                        {selectedSubcategory.charAt(0).toUpperCase() + selectedSubcategory.slice(1).replace(/-/g, ' ')}
+                                    </Text>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Subcategory Pills (if available) */}
+                        {!selectedSubcategory && Object.keys(currentCategory?.subcategories || {}).length > 0 && (
+                            <div style={{ marginBottom: 24 }}>
+                                <Text type="secondary" style={{ marginBottom: 12, display: 'block' }}>
+                                    Select a type:
+                                </Text>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                                    {Object.values(currentCategory.subcategories).map(subcat => (
+                                        <Card
+                                            key={subcat.key}
+                                            hoverable
+                                            onClick={() => setSelectedSubcategory(subcat.key)}
+                                            style={{
+                                                borderRadius: 12,
+                                                background: `${currentCategory.color}10`,
+                                                border: `1px solid ${currentCategory.color}30`,
+                                                cursor: 'pointer',
+                                            }}
+                                            bodyStyle={{ padding: '12px 20px' }}
+                                        >
+                                            <Space>
+                                                <FolderOutlined style={{ color: currentCategory.color }} />
+                                                <Text strong>{subcat.name}</Text>
+                                                <Badge count={subcat.services.length} style={{ backgroundColor: currentCategory.color }} />
+                                            </Space>
+                                        </Card>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Services Grid */}
+                        <Row gutter={[16, 16]}>
+                            {currentServices.length === 0 ? (
+                                <Col span={24}>
+                                    <Empty description="No services in this category" />
+                                </Col>
+                            ) : (
+                                currentServices.map(service => (
+                                    <Col xs={24} sm={12} lg={8} xl={6} key={service.id}>
+                                        <ServiceCard
+                                            service={service}
+                                            isDarkMode={isDarkMode}
+                                            formatKSH={formatKSH}
+                                            formatUnit={formatUnit}
+                                            getIcon={getIcon}
+                                            categoryColor={currentCategory?.color}
+                                        />
+                                    </Col>
+                                ))
+                            )}
+                        </Row>
+                    </div>
+                )}
+            </Spin>
+
+            {/* Stats Footer */}
+            <Card style={{ marginTop: 32, background: isDarkMode ? 'rgba(30, 41, 59, 0.6)' : 'rgba(255, 255, 255, 0.8)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center', flexWrap: 'wrap', gap: 16 }}>
+                    <div>
+                        <Text type="secondary">Total Services</Text>
+                        <Title level={3} style={{ margin: 0, color: '#00B4D8' }}>{enabledServices.length}</Title>
+                    </div>
+                    <div>
+                        <Text type="secondary">Categories</Text>
+                        <Title level={3} style={{ margin: 0, color: '#FFB703' }}>{categories.length}</Title>
+                    </div>
+                    <div>
+                        <Text type="secondary">Operating Hours</Text>
+                        <Title level={5} style={{ margin: 0, color: '#00C853' }}>7 AM - 10 PM</Title>
                     </div>
                 </div>
             </Card>
+
+            <style>{`
+                .category-card:hover {
+                    transform: translateY(-4px) scale(1.02);
+                    box-shadow: 0 12px 24px rgba(0,0,0,0.15);
+                }
+                .category-card:hover > div > div:first-child {
+                    transform: scale(1.1);
+                }
+                .service-price-card {
+                    transition: all 0.2s ease;
+                }
+                .service-price-card:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.12);
+                }
+            `}</style>
         </div>
+    );
+}
+
+// Service Card Component
+function ServiceCard({ service, isDarkMode, formatKSH, formatUnit, getIcon, categoryColor }) {
+    const color = service.color || categoryColor || '#00B4D8';
+
+    return (
+        <Card
+            hoverable
+            className="service-price-card"
+            style={{
+                height: '100%',
+                background: `linear-gradient(145deg, ${color}12 0%, ${color}05 100%)`,
+                border: `1px solid ${color}30`,
+                borderRadius: 16,
+            }}
+        >
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 12,
+                    background: `${color}20`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 22,
+                    color: color,
+                    marginBottom: 12,
+                }}>
+                    {getIcon(service.icon || 'default')}
+                </div>
+
+                <Text strong style={{
+                    color: isDarkMode ? '#fff' : '#1e293b',
+                    fontSize: 16,
+                    display: 'block',
+                    marginBottom: 4
+                }}>
+                    {service.name}
+                </Text>
+
+                {service.subcategory && (
+                    <Tag size="small" style={{ width: 'fit-content', marginBottom: 8 }}>
+                        {service.subcategory}
+                    </Tag>
+                )}
+
+                {service.description && (
+                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12, flex: 1 }}>
+                        {service.description}
+                    </Text>
+                )}
+
+                <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: `1px solid ${color}20` }}>
+                    <Text style={{
+                        fontFamily: 'JetBrains Mono, monospace',
+                        color: '#00C853',
+                        fontWeight: 700,
+                        fontSize: 22,
+                        display: 'block'
+                    }}>
+                        {formatKSH(service.price)}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                        {formatUnit(service.unit)}
+                    </Text>
+                </div>
+            </div>
+        </Card>
     );
 }
 

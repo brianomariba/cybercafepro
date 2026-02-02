@@ -50,7 +50,12 @@ export const updateTaskStatus = async (taskId, status) => {
 // ==================== SERVICES ====================
 
 export const getServices = async () => {
-    const response = await api.get('/admin/services');
+    const response = await api.get('/services');
+    return response.data;
+};
+
+export const getServiceCategories = async () => {
+    const response = await api.get('/service-categories');
     return response.data;
 };
 
@@ -75,7 +80,6 @@ export const getGuides = async () => (await api.get('/guides')).data;
 export const downloadTemplateUrl = (id) => `${API_BASE_URL}/templates/${id}/download`;
 export const downloadCourseUrl = (id) => `${API_BASE_URL}/courses/${id}/download`;
 export const downloadGuideUrl = (id) => `${API_BASE_URL}/guides/${id}/download`;
-
 
 
 // ==================== USER AUTHENDPOINTS (OTP-BASED) ====================

@@ -40,6 +40,7 @@ const Course = require('./models/Course');
 const Guide = require('./models/Guide');
 const Settings = require('./models/Settings');
 const Blocklist = require('./models/Blocklist');
+const ServiceCategory = require('./models/ServiceCategory');
 
 
 
@@ -2899,6 +2900,235 @@ app.put('/api/v1/user/tasks/:id/status', requireUserAuth, async (req, res) => {
         res.status(500).json({ error: 'Failed to update task status' });
     }
 });
+
+// ==================== PUBLIC SERVICES (No Auth Required) ====================
+
+/**
+ * GET /api/v1/services
+ * Get all active services (public)
+ */
+app.get('/api/v1/services', async (req, res) => {
+    try {
+        const services = await Service.find({ isActive: { $ne: false } })
+            .sort({ displayOrder: 1, category: 1, name: 1 });
+        res.json(services);
+    } catch (error) {
+        console.error('[PUBLIC SERVICES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get services' });
+    }
+});
+
+/**
+ * GET /api/v1/service-categories
+ * Get all active service categories (public)
+ */
+app.get('/api/v1/service-categories', async (req, res) => {
+    try {
+        const categories = await ServiceCategory.find({ isActive: { $ne: false } })
+            .sort({ displayOrder: 1, name: 1 });
+        res.json(categories);
+    } catch (error) {
+        console.error('[PUBLIC SERVICE CATEGORIES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get categories' });
+    }
+});
+
+
+// ==================== ADMIN SERVICES ====================
+
+/**
+ * GET /api/v1/admin/services
+ * Get all services
+ */
+app.get('/api/v1/admin/services', async (req, res) => {
+    try {
+        const services = await Service.find().sort({ displayOrder: 1, category: 1, name: 1 });
+        res.json(services);
+    } catch (error) {
+        console.error('[SERVICES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get services' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/services
+ * Create a new service
+ */
+app.post('/api/v1/admin/services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, category, subcategory, description, price, unit, icon, color, displayOrder } = req.body;
+
+        if (!name || !category || price === undefined) {
+            return res.status(400).json({ error: 'Name, category, and price are required' });
+        }
+
+        // Generate unique ID
+        const id = `svc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const service = await Service.create({
+            id,
+            name,
+            category,
+            subcategory,
+            description,
+            price,
+            unit: unit || 'flat',
+            icon,
+            color,
+            displayOrder: displayOrder || 0
+        });
+
+        console.log(`[SERVICES] Created: ${name}`);
+        res.json(service);
+    } catch (error) {
+        console.error('[SERVICES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/services/:id
+ * Update a service
+ */
+app.put('/api/v1/admin/services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await Service.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
+
+        if (!service) {
+            return res.status(404).json({ error: 'Service not found' });
+        }
+
+        console.log(`[SERVICES] Updated: ${service.name}`);
+        res.json(service);
+    } catch (error) {
+        console.error('[SERVICES] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/services/:id
+ * Delete a service
+ */
+app.delete('/api/v1/admin/services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await Service.findOneAndDelete({ id: req.params.id });
+
+        if (!service) {
+            return res.status(404).json({ error: 'Service not found' });
+        }
+
+        console.log(`[SERVICES] Deleted: ${service.name}`);
+        res.json({ success: true, message: 'Service deleted' });
+    } catch (error) {
+        console.error('[SERVICES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+
+// ==================== SERVICE CATEGORIES ====================
+
+/**
+ * GET /api/v1/admin/service-categories
+ * Get all service categories
+ */
+app.get('/api/v1/admin/service-categories', async (req, res) => {
+    try {
+        const categories = await ServiceCategory.find().sort({ displayOrder: 1, name: 1 });
+        res.json(categories);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get categories' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/service-categories
+ * Create a new service category
+ */
+app.post('/api/v1/admin/service-categories', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, key, icon, color, description, parentCategory, displayOrder } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ error: 'Name is required' });
+        }
+
+        // Generate key from name if not provided
+        const categoryKey = key || name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+        const categoryId = `cat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const category = await ServiceCategory.create({
+            id: categoryId,
+            name,
+            key: categoryKey,
+            icon: icon || 'folder',
+            color: color || '#00B4D8',
+            description,
+            parentCategory,
+            displayOrder: displayOrder || 0
+        });
+
+        console.log(`[SERVICE CATEGORIES] Created: ${name}`);
+        res.json(category);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Create failed:', error);
+        if (error.code === 11000) {
+            return res.status(400).json({ error: 'Category with this key already exists' });
+        }
+        res.status(500).json({ error: 'Failed to create category' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/service-categories/:id
+ * Update a service category
+ */
+app.put('/api/v1/admin/service-categories/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const category = await ServiceCategory.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
+
+        if (!category) {
+            return res.status(404).json({ error: 'Category not found' });
+        }
+
+        console.log(`[SERVICE CATEGORIES] Updated: ${category.name}`);
+        res.json(category);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update category' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/service-categories/:id
+ * Delete a service category
+ */
+app.delete('/api/v1/admin/service-categories/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const category = await ServiceCategory.findOneAndDelete({ id: req.params.id });
+
+        if (!category) {
+            return res.status(404).json({ error: 'Category not found' });
+        }
+
+        console.log(`[SERVICE CATEGORIES] Deleted: ${category.name}`);
+        res.json({ success: true, message: 'Category deleted' });
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete category' });
+    }
+});
+
 
 // ==================== TRANSACTIONS ====================
 

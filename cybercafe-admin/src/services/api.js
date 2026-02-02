@@ -260,6 +260,28 @@ export const deleteService = async (id) => {
     return response.data;
 };
 
+// ==================== SERVICE CATEGORIES ====================
+
+export const getServiceCategories = async () => {
+    const response = await api.get('/admin/service-categories');
+    return response.data;
+};
+
+export const createServiceCategory = async (category) => {
+    const response = await api.post('/admin/service-categories', category);
+    return response.data;
+};
+
+export const updateServiceCategory = async (id, updates) => {
+    const response = await api.put(`/admin/service-categories/${id}`, updates);
+    return response.data;
+};
+
+export const deleteServiceCategory = async (id) => {
+    const response = await api.delete(`/admin/service-categories/${id}`);
+    return response.data;
+};
+
 // ==================== TASKS ====================
 
 export const getTasks = async (params = {}) => {
@@ -535,6 +557,10 @@ export default {
     createService,
     updateService,
     deleteService,
+    getServiceCategories,
+    createServiceCategory,
+    updateServiceCategory,
+    deleteServiceCategory,
     getTasks,
     createTask,
     updateTask,

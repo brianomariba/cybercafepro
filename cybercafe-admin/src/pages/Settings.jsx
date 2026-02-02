@@ -23,9 +23,12 @@ import {
     FileTextOutlined,
     CameraOutlined,
     DatabaseOutlined,
+    FolderAddOutlined,
+    AppstoreOutlined,
+    PictureOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -60,16 +63,40 @@ function Settings() {
     const [changingPassword, setChangingPassword] = useState(false);
     const [form] = Form.useForm();
 
+    // Category management states
+    const [categories, setCategories] = useState([]);
+    const [categoryModalVisible, setCategoryModalVisible] = useState(false);
+    const [editingCategory, setEditingCategory] = useState(null);
+    const [categoryForm] = Form.useForm();
+
+    // Default categories for dropdown
+    const defaultCategories = [
+        { key: 'printing', name: 'Printing', icon: 'printer', color: '#FFB703' },
+        { key: 'scanning', name: 'Scanning', icon: 'scan', color: '#00C853' },
+        { key: 'photocopy', name: 'Photocopying', icon: 'copy', color: '#FB8500' },
+        { key: 'typing', name: 'Typing', icon: 'edit', color: '#8B5CF6' },
+        { key: 'computer', name: 'Computer Usage', icon: 'desktop', color: '#00B4D8' },
+        { key: 'documents', name: 'Documents', icon: 'file', color: '#E91E63' },
+        { key: 'photography', name: 'Photography', icon: 'camera', color: '#FF6B6B' },
+        { key: 'other', name: 'Other', icon: 'folder', color: '#64748B' },
+    ];
+
+    // Combine default categories with custom ones
+    const allCategories = [...defaultCategories, ...categories.map(c => ({ key: c.key, name: c.name, icon: c.icon, color: c.color }))];
+
+
     const loadData = async () => {
         setLoadingServices(true);
         try {
-            const [servicesData, computersData, settingsData] = await Promise.all([
+            const [servicesData, computersData, settingsData, categoriesData] = await Promise.all([
                 getServices(),
                 getComputers(),
-                getSettings().catch(() => ({}))
+                getSettings().catch(() => ({})),
+                getServiceCategories().catch(() => [])
             ]);
             setServices(servicesData || []);
             setComputers(computersData || []);
+            setCategories(categoriesData || []);
 
             // Load saved settings
             if (settingsData.generalSettings) {
@@ -194,7 +221,51 @@ function Settings() {
         }
     };
 
+    // Category management handlers
+    const handleAddCategory = () => {
+        setEditingCategory(null);
+        categoryForm.resetFields();
+        setCategoryModalVisible(true);
+    };
+
+    const handleEditCategory = (category) => {
+        setEditingCategory(category);
+        categoryForm.setFieldsValue(category);
+        setCategoryModalVisible(true);
+    };
+
+    const handleSaveCategory = async (values) => {
+        try {
+            if (editingCategory) {
+                await updateServiceCategory(editingCategory.id, { ...editingCategory, ...values });
+                message.success('Category updated successfully');
+            } else {
+                await createServiceCategory(values);
+                message.success('Category added successfully');
+            }
+            setCategoryModalVisible(false);
+            categoryForm.resetFields();
+            loadData();
+        } catch (error) {
+            console.error('Failed to save category', error);
+            message.error(error.response?.data?.error || 'Failed to save category');
+        }
+    };
+
+    const handleDeleteCategory = async (category) => {
+        try {
+            await deleteServiceCategory(category.id);
+            message.success('Category deleted');
+            loadData();
+        } catch (error) {
+            console.error('Failed to delete category', error);
+            message.error('Failed to delete category');
+        }
+    };
+
     const getCategoryColor = (category) => {
+        const cat = allCategories.find(c => c.key === category);
+        if (cat) return cat.color;
         switch (category) {
             case 'core': return '#00d4ff';
             case 'printing': return '#7b2cbf';
@@ -814,30 +885,79 @@ function Settings() {
                                 rules={[{ required: true }]}
                             >
                                 <Select
+                                    placeholder="Select category"
+                                    showSearch
+                                    optionFilterProp="label"
+                                    dropdownRender={(menu) => (
+                                        <>
+                                            {menu}
+                                            <Divider style={{ margin: '8px 0' }} />
+                                            <Button
+                                                type="link"
+                                                icon={<FolderAddOutlined />}
+                                                onClick={handleAddCategory}
+                                                style={{ width: '100%', textAlign: 'left' }}
+                                            >
+                                                Add Custom Category
+                                            </Button>
+                                        </>
+                                    )}
+                                    options={allCategories.map(c => ({
+                                        value: c.key,
+                                        label: c.name,
+                                    }))}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item
+                                name="subcategory"
+                                label="Subcategory / Type"
+                            >
+                                <Select
+                                    placeholder="e.g., A4, Photo Paper, Glossy"
+                                    mode="tags"
+                                    maxCount={1}
+                                    allowClear
                                     options={[
-                                        { value: 'core', label: 'Core (Computer Usage)' },
-                                        { value: 'printing', label: 'Printing' },
-                                        { value: 'scanning', label: 'Scanning' },
-                                        { value: 'photocopy', label: 'Photocopy' },
-                                        { value: 'other', label: 'Other' },
+                                        { value: 'a4', label: 'A4 Paper' },
+                                        { value: 'a3', label: 'A3 Paper' },
+                                        { value: 'photopaper', label: 'Photo Paper' },
+                                        { value: 'glossy', label: 'Glossy Paper' },
+                                        { value: 'matte', label: 'Matte Paper' },
+                                        { value: 'passport', label: 'Passport Size' },
+                                        { value: 'document', label: 'Document' },
+                                        { value: 'color', label: 'Color' },
+                                        { value: 'blackwhite', label: 'Black & White' },
+                                    ]}
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+
+                    <Row gutter={16}>
+                        <Col span={12}>
+                            <Form.Item
+                                name="unit"
+                                label="Price Type / Unit"
+                                rules={[{ required: true }]}
+                            >
+                                <Select
+                                    options={[
+                                        { value: 'per_hour', label: 'Per Hour' },
+                                        { value: 'per_page', label: 'Per Page' },
+                                        { value: 'per_copy', label: 'Per Copy' },
+                                        { value: 'flat', label: 'Fixed Price' },
                                     ]}
                                 />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
                             <Form.Item
-                                name="priceType"
-                                label="Price Type"
-                                rules={[{ required: true }]}
+                                name="color"
+                                label="Accent Color"
                             >
-                                <Select
-                                    options={[
-                                        { value: 'hourly', label: 'Per Hour' },
-                                        { value: 'per_page', label: 'Per Page' },
-                                        { value: 'per_copy', label: 'Per Copy' },
-                                        { value: 'fixed', label: 'Fixed Price' },
-                                    ]}
-                                />
+                                <Input type="color" style={{ width: 80, height: 32 }} />
                             </Form.Item>
                         </Col>
                     </Row>
@@ -860,11 +980,14 @@ function Settings() {
                         </Col>
                         <Col span={12}>
                             <Form.Item
-                                name="unit"
-                                label="Unit Label"
-                                rules={[{ required: true }]}
+                                name="displayOrder"
+                                label="Display Order"
                             >
-                                <Input placeholder="e.g., per page" />
+                                <InputNumber
+                                    min={0}
+                                    style={{ width: '100%' }}
+                                    placeholder="0 = default order"
+                                />
                             </Form.Item>
                         </Col>
                     </Row>
@@ -879,6 +1002,112 @@ function Settings() {
                             </Button>
                             <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
                                 {editingService ? 'Update Service' : 'Add Service'}
+                            </Button>
+                        </Space>
+                    </Form.Item>
+                </Form>
+            </Modal>
+
+            {/* Add/Edit Category Modal */}
+            <Modal
+                title={
+                    <Space>
+                        {editingCategory ? <EditOutlined style={{ color: '#00d4ff' }} /> : <FolderAddOutlined style={{ color: '#00ff88' }} />}
+                        <span>{editingCategory ? 'Edit Category' : 'Add Custom Category'}</span>
+                    </Space>
+                }
+                open={categoryModalVisible}
+                onCancel={() => {
+                    setCategoryModalVisible(false);
+                    categoryForm.resetFields();
+                }}
+                footer={null}
+                width={450}
+            >
+                <Form
+                    form={categoryForm}
+                    layout="vertical"
+                    onFinish={handleSaveCategory}
+                >
+                    <Form.Item
+                        name="name"
+                        label="Category Name"
+                        rules={[{ required: true, message: 'Please enter category name' }]}
+                    >
+                        <Input placeholder="e.g., Photo Paper, ID Printing" />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="key"
+                        label="Category Key (optional)"
+                        extra="Auto-generated from name if not provided"
+                    >
+                        <Input placeholder="e.g., photopaper, id-printing" />
+                    </Form.Item>
+
+                    <Row gutter={16}>
+                        <Col span={12}>
+                            <Form.Item
+                                name="icon"
+                                label="Icon"
+                            >
+                                <Select
+                                    placeholder="Select icon"
+                                    options={[
+                                        { value: 'printer', label: '🖨️ Printer' },
+                                        { value: 'picture', label: '🖼️ Picture' },
+                                        { value: 'camera', label: '📷 Camera' },
+                                        { value: 'file', label: '📄 File' },
+                                        { value: 'folder', label: '📁 Folder' },
+                                        { value: 'desktop', label: '🖥️ Desktop' },
+                                        { value: 'scan', label: '📠 Scanner' },
+                                        { value: 'copy', label: '📋 Copy' },
+                                        { value: 'edit', label: '✏️ Edit' },
+                                        { value: 'id', label: '🪪 ID Card' },
+                                        { value: 'star', label: '⭐ Star' },
+                                    ]}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item
+                                name="color"
+                                label="Category Color"
+                            >
+                                <Input type="color" style={{ width: 80, height: 32 }} defaultValue="#00B4D8" />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+
+                    <Form.Item
+                        name="parentCategory"
+                        label="Parent Category (optional)"
+                        extra="For nested categories under an existing one"
+                    >
+                        <Select
+                            allowClear
+                            placeholder="Select parent category"
+                            options={allCategories.map(c => ({ value: c.key, label: c.name }))}
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="description"
+                        label="Description"
+                    >
+                        <Input.TextArea placeholder="Brief description" rows={2} />
+                    </Form.Item>
+
+                    <Form.Item>
+                        <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+                            <Button onClick={() => {
+                                setCategoryModalVisible(false);
+                                categoryForm.resetFields();
+                            }}>
+                                Cancel
+                            </Button>
+                            <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+                                {editingCategory ? 'Update Category' : 'Add Category'}
                             </Button>
                         </Space>
                     </Form.Item>
