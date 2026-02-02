@@ -2009,13 +2009,22 @@ app.post('/api/v1/agent/log', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
+        // Enhance browser log with category if not provided
+        let enhancedData = data;
+        if (type === 'browser' && data && !data.category) {
+            enhancedData = {
+                ...data,
+                category: categorizeUrl(data.url)
+            };
+        }
+
         const logEntry = await Log.create({
             type,
             clientId,
             hostname,
             sessionId,
             sessionUser,
-            data,
+            data: enhancedData,
             receivedAt: new Date()
         });
 
@@ -2028,6 +2037,41 @@ app.post('/api/v1/agent/log', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
+/**
+ * Categorize a URL based on its domain
+ */
+function categorizeUrl(url) {
+    if (!url) return 'other';
+
+    const CATEGORY_DOMAINS = {
+        search: ['google.com', 'bing.com', 'duckduckgo.com', 'yahoo.com', 'baidu.com', 'yandex.com'],
+        social: ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com', 'tiktok.com', 'reddit.com', 'pinterest.com', 'snapchat.com', 'whatsapp.com', 'telegram.org', 'discord.com'],
+        video: ['youtube.com', 'vimeo.com', 'netflix.com', 'twitch.tv', 'dailymotion.com', 'hulu.com', 'disneyplus.com', 'primevideo.com'],
+        education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com'],
+        development: ['github.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com', 'pypi.org', 'developer.mozilla.org', 'codepen.io', 'jsfiddle.net', 'replit.com', 'vercel.com', 'netlify.com', 'heroku.com'],
+        productivity: ['docs.google.com', 'sheets.google.com', 'slides.google.com', 'drive.google.com', 'notion.so', 'trello.com', 'asana.com', 'slack.com', 'zoom.us', 'meet.google.com', 'teams.microsoft.com', 'office.com'],
+        shopping: ['amazon.com', 'ebay.com', 'aliexpress.com', 'alibaba.com', 'etsy.com', 'shopify.com', 'walmart.com', 'target.com', 'jumia.co.ke'],
+        entertainment: ['spotify.com', 'soundcloud.com', 'pandora.com', 'crunchyroll.com', 'funimation.com'],
+        news: ['cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'theguardian.com', 'reuters.com', 'apnews.com', 'aljazeera.com']
+    };
+
+    try {
+        const hostname = new URL(url).hostname.replace('www.', '');
+
+        for (const [category, domains] of Object.entries(CATEGORY_DOMAINS)) {
+            for (const domain of domains) {
+                if (hostname === domain || hostname.endsWith('.' + domain)) {
+                    return category;
+                }
+            }
+        }
+    } catch (e) {
+        // URL parsing failed
+    }
+
+    return 'other';
+}
 
 // User authentication middleware is defined later in the file
 

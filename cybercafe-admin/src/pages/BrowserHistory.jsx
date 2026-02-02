@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Row, Col, Tabs, Timeline, Progress, Modal, DatePicker, message } from 'antd';
 import {
     GlobalOutlined,
@@ -19,9 +19,10 @@ import {
     CheckCircleOutlined,
     ExclamationCircleOutlined,
     FireOutlined,
+    SyncOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getBrowserHistory, addToBlocklist } from '../services/api';
+import { getBrowserHistory, addToBlocklist, connectSocket, disconnectSocket } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -35,34 +36,75 @@ function BrowserHistory() {
     const [filterCategory, setFilterCategory] = useState('all');
     const [filterComputer, setFilterComputer] = useState('all');
     const [loading, setLoading] = useState(false);
+    const [lastUpdate, setLastUpdate] = useState(null);
+
+    // Map backend records to UI-friendly shape
+    const mapBrowserData = useCallback((data) => {
+        return data.map((item, index) => ({
+            id: item.id || item._id || index,
+            computer: item.hostname || item.clientId || 'Unknown',
+            user: item.sessionUser || item.user || 'Unknown',
+            url: item.url || '',
+            title: item.title || item.url || 'Unknown Page',
+            category: item.category || 'other',
+            browser: item.browser || 'Unknown',
+            timestamp: item.timestamp || item.receivedAt || new Date().toISOString(),
+            duration: item.duration || null,
+            blocked: item.blocked || false,
+        }));
+    }, []);
+
+    // Load history function
+    const loadHistory = useCallback(async (showLoading = true) => {
+        if (showLoading) setLoading(true);
+        try {
+            const data = await getBrowserHistory({ limit: 200 });
+            const mapped = mapBrowserData(data);
+            setHistory(mapped);
+            setLastUpdate(new Date());
+        } catch (e) {
+            console.error('Failed to load browser history', e);
+        } finally {
+            if (showLoading) setLoading(false);
+        }
+    }, [mapBrowserData]);
 
     useEffect(() => {
-        const loadHistory = async () => {
-            setLoading(true);
-            try {
-                const data = await getBrowserHistory({ limit: 200 });
-                // Map backend records to UI-friendly shape
-                const mapped = data.map((item, index) => ({
-                    id: item.id || index,
-                    computer: item.hostname || item.clientId || 'Unknown',
-                    user: item.sessionUser || item.user || 'Unknown',
-                    url: item.url,
-                    title: item.title || item.url,
-                    category: item.category || 'other',
-                    timestamp: item.timestamp || item.receivedAt || new Date().toISOString(),
-                    duration: item.duration || null,
-                    blocked: item.blocked || false,
-                }));
-                setHistory(mapped);
-            } catch (e) {
-                console.error('Failed to load browser history', e);
-            } finally {
-                setLoading(false);
-            }
-        };
-
         loadHistory();
-    }, []);
+
+        // Set up WebSocket for real-time updates
+        const socket = connectSocket({
+            onNewLog: (log) => {
+                // Check if it's a browser log
+                if (log.type === 'browser') {
+                    const newEntry = {
+                        id: log._id || log.id || Date.now(),
+                        computer: log.hostname || log.clientId || 'Unknown',
+                        user: log.sessionUser || 'Unknown',
+                        url: log.data?.url || '',
+                        title: log.data?.title || 'Unknown Page',
+                        category: log.data?.category || 'other',
+                        browser: log.data?.browser || 'Unknown',
+                        timestamp: log.data?.timestamp || log.receivedAt || new Date().toISOString(),
+                        duration: null,
+                        blocked: false,
+                    };
+                    setHistory(prev => [newEntry, ...prev].slice(0, 200));
+                    setLastUpdate(new Date());
+                }
+            }
+        });
+
+        // Auto-refresh every 30 seconds
+        const refreshInterval = setInterval(() => {
+            loadHistory(false);
+        }, 30000);
+
+        return () => {
+            disconnectSocket();
+            clearInterval(refreshInterval);
+        };
+    }, [loadHistory]);
 
     const getCategoryColor = (category) => {
         switch (category) {
@@ -325,7 +367,7 @@ function BrowserHistory() {
                             </Space>
                         }
                         extra={
-                            <Space>
+                            <Space wrap>
                                 <Search
                                     placeholder="Search sites..."
                                     style={{ width: 200 }}
@@ -335,14 +377,19 @@ function BrowserHistory() {
                                 <Select
                                     value={filterCategory}
                                     onChange={setFilterCategory}
-                                    style={{ width: 130 }}
+                                    style={{ width: 140 }}
                                     options={[
                                         { value: 'all', label: 'All Categories' },
+                                        { value: 'search', label: 'Search' },
                                         { value: 'social', label: 'Social Media' },
                                         { value: 'video', label: 'Video' },
                                         { value: 'education', label: 'Education' },
-                                        { value: 'entertainment', label: 'Entertainment' },
+                                        { value: 'development', label: 'Development' },
                                         { value: 'productivity', label: 'Productivity' },
+                                        { value: 'shopping', label: 'Shopping' },
+                                        { value: 'entertainment', label: 'Entertainment' },
+                                        { value: 'news', label: 'News' },
+                                        { value: 'other', label: 'Other' },
                                         { value: 'blocked', label: 'Blocked' },
                                     ]}
                                 />
@@ -357,6 +404,15 @@ function BrowserHistory() {
                                         }))
                                     ]}
                                 />
+                                <Tooltip title={lastUpdate ? `Last updated: ${dayjs(lastUpdate).format('HH:mm:ss')}` : 'Click to refresh'}>
+                                    <Button
+                                        icon={<SyncOutlined spin={loading} />}
+                                        onClick={() => loadHistory()}
+                                        loading={loading}
+                                    >
+                                        Refresh
+                                    </Button>
+                                </Tooltip>
                             </Space>
                         }
                     >
@@ -371,7 +427,7 @@ function BrowserHistory() {
                     </Card>
                 </Col>
 
-                {/* Sidebar reserved for future real-time analytics */}
+                {/* Sidebar with real-time analytics */}
                 <Col xs={24} lg={8}>
                     <Card
                         title={
@@ -380,11 +436,112 @@ function BrowserHistory() {
                                 <span>Insights</span>
                             </Space>
                         }
+                        style={{ marginBottom: 16 }}
                     >
-                        <Text type="secondary">
-                            Insights and live activity will appear here once enough real browsing data has been collected
-                            from agents.
-                        </Text>
+                        {history.length > 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                {/* Category Breakdown */}
+                                <div>
+                                    <Text strong style={{ marginBottom: 8, display: 'block' }}>Category Breakdown</Text>
+                                    {Object.entries(
+                                        history.reduce((acc, h) => {
+                                            const cat = h.category || 'other';
+                                            acc[cat] = (acc[cat] || 0) + 1;
+                                            return acc;
+                                        }, {})
+                                    ).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([category, count]) => (
+                                        <div key={category} style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            padding: '4px 0'
+                                        }}>
+                                            <Tag
+                                                icon={getCategoryIcon(category)}
+                                                color={getCategoryColor(category)}
+                                                style={{ textTransform: 'capitalize' }}
+                                            >
+                                                {category}
+                                            </Tag>
+                                            <Badge
+                                                count={count}
+                                                style={{ backgroundColor: getCategoryColor(category) }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Top Sites */}
+                                <div>
+                                    <Text strong style={{ marginBottom: 8, display: 'block' }}>Top Sites</Text>
+                                    {Object.entries(
+                                        history.reduce((acc, h) => {
+                                            try {
+                                                const domain = h.url && h.url.includes('://') ? new URL(h.url).hostname : 'unknown';
+                                                acc[domain] = (acc[domain] || 0) + 1;
+                                            } catch (e) {
+                                                acc['unknown'] = (acc['unknown'] || 0) + 1;
+                                            }
+                                            return acc;
+                                        }, {})
+                                    ).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([domain, count]) => (
+                                        <div key={domain} style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            padding: '4px 0',
+                                            fontSize: 12
+                                        }}>
+                                            <Text type="secondary" ellipsis style={{ maxWidth: 150 }}>
+                                                {domain}
+                                            </Text>
+                                            <Text style={{ fontFamily: 'JetBrains Mono', color: '#00d4ff' }}>
+                                                {count} visits
+                                            </Text>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Active Users */}
+                                <div>
+                                    <Text strong style={{ marginBottom: 8, display: 'block' }}>Active Users</Text>
+                                    {[...new Set(history.map(h => h.user))].filter(u => u !== 'Unknown').slice(0, 4).map(user => (
+                                        <div key={user} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            padding: '4px 0'
+                                        }}>
+                                            <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#7b2cbf' }} />
+                                            <Text>{user}</Text>
+                                            <Badge
+                                                count={history.filter(h => h.user === user).length}
+                                                size="small"
+                                                style={{ backgroundColor: '#6b6b80' }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Last Update */}
+                                {lastUpdate && (
+                                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 12, marginTop: 8 }}>
+                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                            <SyncOutlined style={{ marginRight: 4 }} />
+                                            Last updated: {dayjs(lastUpdate).format('HH:mm:ss')}
+                                        </Text>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                                <GlobalOutlined style={{ fontSize: 48, color: '#6b6b80', marginBottom: 12 }} />
+                                <Text type="secondary" style={{ display: 'block' }}>
+                                    No browsing data yet. Browser history will appear here once agents start tracking
+                                    user activity.
+                                </Text>
+                            </div>
+                        )}
                     </Card>
                 </Col>
             </Row>

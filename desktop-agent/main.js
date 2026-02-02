@@ -529,23 +529,19 @@ async function startDataCollection() {
                         appUsageTracker.tick(currentApp.owner, currentApp.title);
 
 
-                        // Track URLs from browsers & Real-Time Log
-                        const isBrowser = ['chrome', 'msedge', 'firefox', 'opera', 'brave'].some(b =>
+                        // Track URLs from browsers & Real-Time Log using enhanced browser tracking
+                        const isBrowser = ['chrome', 'msedge', 'firefox', 'opera', 'brave', 'edge', 'chromium', 'vivaldi', 'safari'].some(b =>
                             (currentApp.owner || '').toLowerCase().includes(b)
                         );
 
-                        // Relaxed check: Accept if it has a URL OR if it's a known browser with a title
-                        if (currentApp.url || (isBrowser && currentApp.title && currentApp.title !== 'New Tab')) {
-                            const url = currentApp.url || `https://detected-from-title/${encodeURIComponent(currentApp.title)}`;
+                        // Use enhanced browser tracking if it's a browser window
+                        if (isBrowser) {
+                            // Use the enhanced addFromWindow method that extracts URLs from titles
+                            const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, currentApp.url);
 
-                            urlTracker.addUrl(url, currentApp.title);
-
-                            // Send Real-Time Browser Log
-                            // Use title+url as key to detect changes if URL is missing
-                            const currentKey = currentApp.url || currentApp.title;
-
-                            if (currentKey !== lastSentBrowserUrl) {
-                                lastSentBrowserUrl = currentKey;
+                            // Send Real-Time Browser Log if we got valid data
+                            if (browserData && browserData.url !== lastSentBrowserUrl) {
+                                lastSentBrowserUrl = browserData.url;
                                 const browserPayload = {
                                     type: 'browser',
                                     clientId: CLIENT_ID,
@@ -553,10 +549,11 @@ async function startDataCollection() {
                                     sessionId: currentSession?.id || null,
                                     sessionUser: currentSession?.user || null,
                                     data: {
-                                        url: currentApp.url || '', // Send empty if no real URL
-                                        title: currentApp.title,
-                                        browser: currentApp.owner,
-                                        timestamp: new Date().toISOString()
+                                        url: browserData.url,
+                                        title: browserData.title,
+                                        category: browserData.category,
+                                        browser: browserData.browser,
+                                        timestamp: browserData.timestamp
                                     }
                                 };
                                 // Don't await strictly to avoid blocking heartbeat
