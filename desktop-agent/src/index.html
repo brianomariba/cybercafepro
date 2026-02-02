@@ -370,33 +370,16 @@
             <span class="session-active-text">✓ SESSION SECURED</span>
         </div>
 
-        <button class="btn-shutdown" id="storeBtn"
-            style="margin-top:10px; width:100%; justify-content:center; background:rgba(255, 183, 3, 0.1); border-color:var(--accent); color:var(--accent);">
-            STORE & SUPPLIES
-        </button>
+
 
         <button class="btn-logout" id="logoutBtn">END SESSION & LOCK</button>
     </div>
 
-    <!-- STORE OVERLAY -->
-    <div id="store-overlay" class="view-section"
-        style="position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(1, 22, 39, 0.98); z-index:200; flex-direction:column; padding:20px; box-sizing:border-box;">
-        <div class="widget-header">
-            <span class="widget-title">CAFE STORE</span>
-            <button id="closeStore"
-                style="background:none; border:none; color:white; font-size:24px; cursor:pointer;">&times;</button>
-        </div>
-        <div id="store-items" style="flex:1; overflow-y:auto; padding-top:10px;">
-            <!-- Items injected here -->
-        </div>
-    </div>
+
 
     <script>
         const { ipcRenderer } = require('electron');
-        const axios = require('axios');
-        const path = require('path');
-        const config = require(path.join(__dirname, '../config.json'));
-        const API_BASE = config.server.baseUrl;
+
 
         // --- LOGIN FLOW ---
         const loginForm = document.getElementById('loginForm');
@@ -480,82 +463,9 @@
             document.getElementById('password').value = '';
             document.getElementById('username').focus();
         });
-        document.getElementById('username').focus();
-        });
 
-        // --- STORE LOGIC ---
-        const storeBtn = document.getElementById('storeBtn');
-        const storeOverlay = document.getElementById('store-overlay');
-        const closeStore = document.getElementById('closeStore');
-        const storeItemsContainer = document.getElementById('store-items');
 
-        if (storeBtn) {
-            storeBtn.addEventListener('click', () => {
-                storeOverlay.classList.add('active');
-                loadStoreItems();
-            });
-        }
 
-        if (closeStore) {
-            closeStore.addEventListener('click', () => {
-                storeOverlay.classList.remove('active');
-            });
-        }
-
-        async function loadStoreItems() {
-            storeItemsContainer.innerHTML = '<div style="text-align:center; color:#ccc;">Loading items...</div>';
-            try {
-                const [itemsRes, settingsRes] = await Promise.all([
-                    axios.get(`${API_BASE}/api/v1/inventory`),
-                    axios.get(`${API_BASE}/api/v1/inventory/settings`)
-                ]);
-                renderStore(itemsRes.data, settingsRes.data);
-            } catch (e) {
-                storeItemsContainer.innerHTML = '<div style="color:#ef4444; text-align:center;">Failed to load items.</div>';
-            }
-        }
-
-        function renderStore(items, settings) {
-            storeItemsContainer.innerHTML = '';
-            if (items.length === 0) {
-                storeItemsContainer.innerHTML = '<div style="text-align:center; color:#888;">No items available</div>';
-                return;
-            }
-
-            items.forEach(item => {
-                const el = document.createElement('div');
-                el.style.cssText = 'background:rgba(255,255,255,0.05); padding:12px; margin-bottom:10px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; border:1px solid rgba(255,255,255,0.1);';
-
-                const stockDisplay = settings?.showTotalItemsToUser ? `<span style="font-size:11px; color:#94A3B8; margin-right:10px;">${item.stock} in stock</span>` : '';
-
-                el.innerHTML = `
-                    <div>
-                        <div style="font-weight:bold; color:white; font-size:14px;">${item.name}</div>
-                        <div style="font-size:12px; color:#00B4D8; margin-top:2px;">KSH ${item.price}</div>
-                    </div>
-                    <div style="display:flex; align-items:center;">
-                        ${stockDisplay}
-                        <button onclick="buyItem('${item._id}', '${item.name}', ${item.price})" style="background:var(--accent); border:none; border-radius:4px; padding:6px 14px; color:black; font-weight:bold; cursor:pointer; font-size:12px;">BUY</button>
-                    </div>
-                `;
-                storeItemsContainer.appendChild(el);
-            });
-        }
-
-        window.buyItem = (id, name, price) => {
-            if (confirm(`Confirm purchase of ${name} for KSH ${price}?`)) {
-                ipcRenderer.send('buy-item', { itemId: id });
-            }
-        };
-
-        ipcRenderer.on('buy-item-response', (event, res) => {
-            if (res.success) {
-                alert(res.message);
-                loadStoreItems(); // Refresh stock
-            } else {
-                alert('Error: ' + res.message);
-            }
-        });
     </script>
 </body>
 

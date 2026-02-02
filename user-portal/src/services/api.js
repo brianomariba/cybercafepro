@@ -155,6 +155,14 @@ export const disconnectSocket = () => {
     }
 };
 
+// ==================== INVENTORY ====================
+export const getInventory = async () => (await api.get('/inventory')).data;
+export const getInventorySettings = async () => (await api.get('/inventory/settings')).data;
+export const purchaseItem = async (itemId, quantity = 1, reason = '', clientId = null) => {
+    const response = await api.post(`/inventory/${itemId}/sell`, { quantity, reason, clientId });
+    return response.data;
+};
+
 // Default export
 export default {
     getUserTasks,
@@ -163,5 +171,8 @@ export default {
     getDocuments,
     downloadDocument,
     connectSocket,
-    disconnectSocket
+    disconnectSocket,
+    getInventory,
+    getInventorySettings,
+    purchaseItem
 };

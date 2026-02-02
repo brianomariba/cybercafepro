@@ -23,6 +23,7 @@ import {
   FilePdfOutlined,
   FileWordOutlined,
   FileExcelOutlined,
+  ShopOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -32,6 +33,7 @@ import Learning from './pages/Learning';
 import Templates from './pages/Templates';
 import Guidance from './pages/Guidance';
 import Services from './pages/Services';
+import Store from './pages/Store';
 import { connectSocket, disconnectSocket } from './services/api';
 
 import './index.css';
@@ -94,6 +96,11 @@ const menuItems = [
     key: 'services',
     icon: <DollarOutlined />,
     label: 'Services & Pricing',
+  },
+  {
+    key: 'store',
+    icon: <ShopOutlined />,
+    label: 'Store',
   },
   {
     key: 'learning',
@@ -454,6 +461,8 @@ function App() {
         return <Account user={user} isDarkMode={isDarkMode} onUpdateUser={handleUpdateUser} />;
       case 'services':
         return <Services isDarkMode={isDarkMode} />;
+      case 'store':
+        return <Store isDarkMode={isDarkMode} />;
       case 'learning':
         return <Learning isDarkMode={isDarkMode} />;
       case 'templates':
