@@ -39,15 +39,19 @@
 
             <div class="nav-links" id="navLinks">
                 <a href="#services">Services</a>
+                <a href="#creative">Creative Studio</a>
                 <a href="#pricing">Pricing</a>
-                <a href="#upload">Upload Document</a>
+                <a href="#upload">Document Services</a>
                 <a href="#contact">Contact</a>
             </div>
 
-            <button class="nav-cta" onclick="scrollToSection('upload')">
-                <i data-lucide="upload-cloud"></i>
-                Upload Now
-            </button>
+            <div class="nav-actions">
+                <a href="https://portal.hawkninegroup.com" class="btn-login">Login / Sign Up</a>
+                <button class="nav-cta" onclick="scrollToSection('upload')">
+                    <i data-lucide="upload-cloud"></i>
+                    Upload Now
+                </button>
+            </div>
 
             <button class="mobile-menu" id="mobileMenu" aria-label="Toggle menu">
                 <span></span>
@@ -71,28 +75,28 @@
                     <span>Trusted by 1000+ customers</span>
                 </div>
 
-                <h1>Professional Document & Computer Services</h1>
+                <h1>One-Stop Hub for Professional Cyber & Creative Services</h1>
 
                 <p class="hero-subtitle">
-                    Fast, reliable, and affordable printing, scanning, typing, and computer services.
-                    Upload your documents online and pick them up ready.
+                    Beyond printing: We offer premium Videography, Photography, Branding, and Computer Services.
+                    Create an account to book sessions or upload documents online.
                 </p>
 
                 <div class="hero-cta">
-                    <button class="btn btn-primary" onclick="scrollToSection('upload')">
-                        <i data-lucide="upload-cloud"></i>
-                        Upload Document
+                    <button class="btn btn-primary" onclick="scrollToSection('creative')">
+                        <i data-lucide="camera"></i>
+                        Book Creative Services
                     </button>
-                    <button class="btn btn-secondary" onclick="scrollToSection('services')">
-                        <i data-lucide="grid-3x3"></i>
-                        View Services
+                    <button class="btn btn-secondary" onclick="scrollToSection('upload')">
+                        <i data-lucide="upload-cloud"></i>
+                        Upload Documents
                     </button>
                 </div>
 
                 <div class="hero-stats">
                     <div class="stat">
                         <span class="stat-value">5000+</span>
-                        <span class="stat-label">Documents Processed</span>
+                        <span class="stat-label">Projects Completed</span>
                     </div>
                     <div class="stat">
                         <span class="stat-value">99%</span>
@@ -111,16 +115,16 @@
                     <span>Printing</span>
                 </div>
                 <div class="floating-card card-2">
-                    <i data-lucide="scan"></i>
-                    <span>Scanning</span>
+                    <i data-lucide="video"></i>
+                    <span>Videography</span>
                 </div>
                 <div class="floating-card card-3">
-                    <i data-lucide="file-text"></i>
-                    <span>Typing</span>
+                    <i data-lucide="camera"></i>
+                    <span>Photography</span>
                 </div>
                 <div class="floating-card card-4">
-                    <i data-lucide="monitor"></i>
-                    <span>Computer</span>
+                    <i data-lucide="palette"></i>
+                    <span>Branding</span>
                 </div>
             </div>
         </div>
@@ -131,8 +135,8 @@
         <div class="container">
             <div class="section-header">
                 <span class="section-tag">Our Services</span>
-                <h2>Everything You Need, One Place</h2>
-                <p>Professional document and computer services at competitive prices</p>
+                <h2>Comprehensive Professional Services</h2>
+                <p>From documents to digital media, we handle it all with precision.</p>
             </div>
 
             <div class="services-grid" id="servicesGrid">
@@ -140,6 +144,49 @@
                 <div class="loading-placeholder">
                     <div class="spinner"></div>
                     <p>Loading services...</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Creative Studio Section -->
+    <section class="creative-studio" id="creative">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Creative Studio</span>
+                <h2>Capture, Create, Brand</h2>
+                <p>Elevate your brand and memories with our professional creative services.</p>
+            </div>
+
+            <div class="creative-grid">
+                <div class="creative-card">
+                    <div class="creative-icon">
+                        <i data-lucide="video"></i>
+                    </div>
+                    <h3>Videography</h3>
+                    <p>Professional video shooting and editing for events, interviews, and promotional content.</p>
+                    <button class="btn-text" onclick="goToPortal('/book/video')">Book Now <i
+                            data-lucide="arrow-right"></i></button>
+                </div>
+
+                <div class="creative-card">
+                    <div class="creative-icon">
+                        <i data-lucide="camera"></i>
+                    </div>
+                    <h3>Photography</h3>
+                    <p>High-quality photography for portraits, events, products, and corporate headshots.</p>
+                    <button class="btn-text" onclick="goToPortal('/book/photo')">Book Now <i
+                            data-lucide="arrow-right"></i></button>
+                </div>
+
+                <div class="creative-card">
+                    <div class="creative-icon">
+                        <i data-lucide="palette"></i>
+                    </div>
+                    <h3>Branding & Design</h3>
+                    <p>Logo design, business cards, flyers, and full brand identity packages.</p>
+                    <button class="btn-text" onclick="goToPortal('/book/branding')">Get Quote <i
+                            data-lucide="arrow-right"></i></button>
                 </div>
             </div>
         </div>

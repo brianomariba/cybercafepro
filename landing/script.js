@@ -9,6 +9,16 @@ const API_BASE_URL = isProduction
     ? 'https://api.hawkninegroup.com/api/v1'
     : 'http://localhost:5000/api/v1';
 
+const PORTAL_URL = isProduction
+    ? 'https://portal.hawkninegroup.com'
+    : 'http://localhost:5173';
+
+// Expose globally
+window.goToPortal = function (path) {
+    const url = path ? `${PORTAL_URL}${path}` : PORTAL_URL;
+    window.location.href = url;
+};
+
 // DOM Elements
 let dropZone, fileInput, selectedFilesContainer, uploadForm, servicesGrid, pricingTable;
 let uploadedFiles = [];
@@ -33,6 +43,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initDropZone();
     initForm();
     loadServices();
+    initPortalLinks();
 });
 
 // ==================== NAVIGATION ====================
@@ -100,6 +111,10 @@ function showDefaultServices() {
         { id: 'svc-6', name: 'Typing Services', category: 'typing', price: 50, unit: 'per_page', icon: 'file-text' },
         { id: 'svc-7', name: 'CV Creation', category: 'document', price: 500, unit: 'flat', icon: 'file-user' },
         { id: 'svc-8', name: 'Email Setup', category: 'service', price: 200, unit: 'flat', icon: 'mail' },
+        { id: 'svc-9', name: 'Passport Photo', category: 'photography', price: 200, unit: '4_photos', icon: 'camera' },
+        { id: 'svc-10', name: 'Photo Shoot', category: 'photography', price: 1500, unit: 'per_hour', icon: 'camera' },
+        { id: 'svc-11', name: 'Video Editing', category: 'videography', price: 2500, unit: 'per_min', icon: 'video' },
+        { id: 'svc-12', name: 'Logo Design', category: 'branding', price: 3000, unit: 'flat', icon: 'palette' },
     ];
 
     renderServices(defaultServices);
@@ -179,7 +194,10 @@ function getCategoryDescription(category) {
         photocopy: 'Fast and clear photocopies',
         typing: 'Professional document typing service',
         document: 'Expert document creation and formatting',
-        service: 'Professional IT services'
+        service: 'Professional IT services',
+        photography: 'Professional photography services',
+        videography: 'High-quality video production',
+        branding: 'Creative branding and design'
     };
     return descriptions[category] || 'Professional service';
 }
@@ -192,7 +210,10 @@ function getServiceIcon(category) {
         photocopy: 'copy',
         typing: 'file-text',
         document: 'file-check',
-        service: 'settings'
+        service: 'settings',
+        photography: 'camera',
+        videography: 'video',
+        branding: 'palette'
     };
     return icons[category] || 'package';
 }
@@ -202,7 +223,9 @@ function formatUnit(unit) {
         'per_hour': '/hour',
         'per_page': '/page',
         'per_copy': '/copy',
-        'flat': 'flat rate'
+        'flat': 'flat rate',
+        '4_photos': 'for 4',
+        'per_min': '/min'
     };
     return units[unit] || unit;
 }
@@ -476,3 +499,10 @@ function escapeHtml(text) {
 window.scrollToSection = scrollToSection;
 window.removeFile = removeFile;
 window.closeModal = closeModal;
+
+function initPortalLinks() {
+    const loginBtns = document.querySelectorAll('.btn-login');
+    loginBtns.forEach(btn => {
+        btn.href = PORTAL_URL;
+    });
+}
