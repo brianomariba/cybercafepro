@@ -21,10 +21,30 @@ function Login({ onLogin }) {
     try {
       const response = await loginUserStep1(values.username, values.password);
       if (response.success) {
-        setTempToken(response.tempToken);
-        setEmailMask(response.emailMask);
-        setStep(1);
-        message.success('Credentials verified. OTP sent.');
+        // Check if OTP is skipped (direct login)
+        if (response.skipOtp && response.token) {
+          const userData = {
+            name: response.user?.name || response.user?.username || 'User',
+            email: response.user?.email,
+            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${response.user?.username}`,
+            token: response.token
+          };
+
+          // Store token for future requests
+          setUserToken(response.token);
+
+          setSuccessMsg('Login successful! Welcome back.');
+          message.success('Login successful!');
+          setTimeout(() => {
+            onLogin(userData);
+          }, 800);
+        } else {
+          // OTP required - proceed to step 2
+          setTempToken(response.tempToken);
+          setEmailMask(response.emailMask);
+          setStep(1);
+          message.success('Credentials verified. OTP sent.');
+        }
       }
     } catch (err) {
       console.error('Login Step 1 Error:', err);

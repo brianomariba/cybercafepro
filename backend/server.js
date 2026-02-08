@@ -42,17 +42,75 @@ const Settings = require('./models/Settings');
 const Blocklist = require('./models/Blocklist');
 const ServiceCategory = require('./models/ServiceCategory');
 const InventoryItem = require('./models/InventoryItem');
+const UserSubmission = require('./models/UserSubmission');
 
 
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: '*' }
+    cors: { origin: '*' },
+    maxHttpBufferSize: 10e6 // 10MB for screenshots
+});
+
+// Store connected agent sockets
+const agentSockets = new Map(); // clientId -> socketId
+
+// ==================== SOCKET.IO HANDLERS ====================
+io.on('connection', (socket) => {
+    console.log(`[SOCKET] New connection: ${socket.id}`);
+
+    // Agent registration
+    socket.on('agent-register', (data) => {
+        if (data.clientId) {
+            agentSockets.set(data.clientId, socket.id);
+            socket.clientId = data.clientId;
+            socket.hostname = data.hostname;
+            console.log(`[SOCKET] Agent registered: ${data.clientId} (${data.hostname})`);
+        }
+    });
+
+    // Agent response (screenshots, errors, etc.)
+    socket.on('agent-response', (data) => {
+        // Use explicit clientId from data if available, otherwise use socket property
+        const clientId = data.clientId || socket.clientId;
+        const hostname = data.hostname || socket.hostname;
+
+        if (data.type === 'screenshot' && data.screenshot) {
+            // Broadcast screenshot to admin dashboards
+            io.emit('agent-screenshot', {
+                clientId: clientId,
+                hostname: hostname,
+                screenshot: data.screenshot,
+                timestamp: data.timestamp || new Date().toISOString()
+            });
+            console.log(`[SOCKET] Screenshot received from ${clientId} (${hostname})`);
+        } else if (data.type === 'error') {
+            io.emit('agent-error', {
+                clientId: clientId,
+                hostname: hostname,
+                message: data.message
+            });
+            console.log(`[SOCKET] Error from ${clientId}: ${data.message}`);
+        }
+    });
+
+    // Handle disconnect
+    socket.on('disconnect', () => {
+        if (socket.clientId) {
+            agentSockets.delete(socket.clientId);
+            console.log(`[SOCKET] Agent disconnected: ${socket.clientId}`);
+        }
+    });
 });
 
 // Trust Nginx Proxy
 app.set('trust proxy', 1);
+
+// ==================== HEALTH CHECK ====================
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // ==================== SECURITY: RATE LIMITING ====================
 
@@ -638,9 +696,9 @@ app.post('/api/v1/auth/agent/login', authRateLimit, async (req, res) => {
 /* User routes protection will be applied after requireUserAuth is defined. */
 
 /**
- * USER AUTHENTICATION (OTP-based)
+ * USER AUTHENTICATION (OTP-based or Direct)
  * POST /api/v1/auth/user/login-step1
- * Validate credentials and send OTP to user email
+ * Validate credentials and either send OTP or login directly based on settings
  */
 app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
     try {
@@ -661,7 +719,48 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
+        // Check if OTP is required from settings
+        let otpRequired = true;
+        try {
+            const authSettings = await Settings.findOne({ key: 'portal_auth' });
+            if (authSettings?.value?.otpEnabled === false) {
+                otpRequired = false;
+            }
+        } catch (e) {
+            // Default to OTP enabled
+        }
 
+        if (!otpRequired) {
+            // Direct login without OTP
+            console.log(`[USER AUTH] Direct login (OTP disabled) for: ${username}`);
+
+            const token = generateToken();
+            const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+
+            await AuthSession.create({
+                token,
+                username: foundUser.username,
+                email: foundUser.email,
+                name: foundUser.name,
+                type: 'portal',
+                expiresAt
+            });
+
+            return res.json({
+                success: true,
+                skipOtp: true,
+                token,
+                user: {
+                    username: foundUser.username,
+                    email: foundUser.email,
+                    name: foundUser.name
+                },
+                expiresIn: 86400
+            });
+        }
+
+        // OTP is required - proceed with 2FA
+        console.log(`[USER AUTH] OTP required for: ${username}`);
 
         // Generate OTP and send via email
         const otp = generateOTP();
@@ -688,6 +787,7 @@ app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
         if (emailSent) {
             res.json({
                 success: true,
+                skipOtp: false,
                 message: '2FA Code sent to email',
                 tempToken,
                 emailMask: foundUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
@@ -818,6 +918,79 @@ app.post('/api/v1/auth/user/logout', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Logout failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/portal-auth-settings
+ * Get portal authentication settings (admin only)
+ */
+app.get('/api/v1/admin/portal-auth-settings', requireAdminAuth, async (req, res) => {
+    try {
+        let settings = await Settings.findOne({ key: 'portal_auth' });
+        if (!settings) {
+            settings = {
+                value: {
+                    otpEnabled: true,
+                    sessionDurationHours: 24
+                }
+            };
+        }
+        res.json(settings.value);
+    } catch (error) {
+        console.error('[PORTAL AUTH] Get settings failed:', error);
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/portal-auth-settings
+ * Update portal authentication settings (admin only)
+ */
+app.put('/api/v1/admin/portal-auth-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const { otpEnabled, sessionDurationHours } = req.body;
+
+        const settings = await Settings.findOneAndUpdate(
+            { key: 'portal_auth' },
+            {
+                value: {
+                    otpEnabled: otpEnabled !== false,
+                    sessionDurationHours: sessionDurationHours || 24
+                },
+                updatedAt: new Date()
+            },
+            { new: true, upsert: true }
+        );
+
+        console.log(`[PORTAL AUTH] Settings updated - OTP: ${settings.value.otpEnabled ? 'Enabled' : 'Disabled'}`);
+
+        // Broadcast to all connected admin clients
+        io.emit('settings-update', { key: 'portal_auth', value: settings.value });
+
+        res.json({
+            success: true,
+            settings: settings.value,
+            message: `OTP ${settings.value.otpEnabled ? 'enabled' : 'disabled'} for portal login`
+        });
+    } catch (error) {
+        console.error('[PORTAL AUTH] Update settings failed:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+/**
+ * GET /api/v1/auth/portal-config
+ * Public endpoint to check if OTP is required (for login page)
+ */
+app.get('/api/v1/auth/portal-config', async (req, res) => {
+    try {
+        const settings = await Settings.findOne({ key: 'portal_auth' });
+        res.json({
+            otpEnabled: settings?.value?.otpEnabled !== false
+        });
+    } catch (error) {
+        res.json({ otpEnabled: true }); // Default to OTP enabled
     }
 });
 
@@ -2098,119 +2271,9 @@ app.get('/api/v1/admin/download-agent', (req, res) => {
     }
 });
 
-// ==================== INVENTORY MANAGEMENT ====================
-
-// GET /api/v1/inventory - List items
-app.get('/api/v1/inventory', async (req, res) => {
-    try {
-        const items = await InventoryItem.find().sort({ name: 1 });
-        res.json(items);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch inventory' });
-    }
-});
-
-// POST /api/v1/admin/inventory - Add item
-app.post('/api/v1/admin/inventory', async (req, res) => {
-    try {
-        const { name, price, stock, description, category, lowStockThreshold } = req.body;
-        const item = await InventoryItem.create({ name, price, stock, description, category, lowStockThreshold });
-        res.json(item);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to create item' });
-    }
-});
-
-// PUT /api/v1/admin/inventory/:id - Update item
-app.put('/api/v1/admin/inventory/:id', async (req, res) => {
-    try {
-        const item = await InventoryItem.findByIdAndUpdate(req.params.id, req.body, { new: true });
-        res.json(item);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update item' });
-    }
-});
-
-// DELETE /api/v1/admin/inventory/:id - Delete item
-app.delete('/api/v1/admin/inventory/:id', async (req, res) => {
-    try {
-        await InventoryItem.findByIdAndDelete(req.params.id);
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to delete item' });
-    }
-});
-
-// POST /api/v1/inventory/:id/sell - Record Sale
-app.post('/api/v1/inventory/:id/sell', async (req, res) => {
-    try {
-        const { quantity = 1, sessionId, reason, clientId } = req.body;
-        const item = await InventoryItem.findById(req.params.id);
-
-        if (!item) return res.status(404).json({ error: 'Item not found' });
-        if (item.stock < quantity) return res.status(400).json({ error: 'Insufficient stock' });
-
-        // Deduct Stock
-        item.stock -= quantity;
-        await item.save();
-
-        // Create Transaction
-        const transaction = await Transaction.create({
-            id: 'txn-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
-            type: 'SALE',
-            amount: item.price * quantity,
-            description: `Sale: ${item.name} (${quantity})`,
-            sessionId: sessionId || null,
-            clientId: clientId || null,
-            breakdown: {
-                item: item.name,
-                quantity: quantity
-            },
-            createdAt: new Date()
-        });
-
-        // Notify Admins
-        io.emit('inventory-update', { itemId: item._id, stock: item.stock });
-        io.emit('transaction-created', transaction);
-
-        res.json({ success: true, newStock: item.stock, transactionId: transaction.id });
-    } catch (error) {
-        console.error('Sale Error:', error);
-        res.status(500).json({ error: 'Failed to process sale' });
-    }
-});
-
-// GET /api/v1/inventory/settings
-app.get('/api/v1/inventory/settings', async (req, res) => {
-    try {
-        let settings = await Settings.findOne({ key: 'inventory_settings' });
-        if (!settings) {
-            settings = await Settings.create({
-                key: 'inventory_settings',
-                value: { showTotalItemsToUser: true }
-            });
-        }
-        res.json(settings.value);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch settings' });
-    }
-});
-
-// PUT /api/v1/admin/inventory/settings
-app.put('/api/v1/admin/inventory/settings', async (req, res) => {
-    try {
-        const settings = await Settings.findOneAndUpdate(
-            { key: 'inventory_settings' },
-            { value: req.body, updatedAt: new Date() },
-            { new: true, upsert: true }
-        );
-        // Broadcast change to agents
-        io.emit('settings-update', { key: 'inventory_settings', value: settings.value });
-        res.json(settings.value);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update settings' });
-    }
-});
+// NOTE: Inventory management routes are defined later in the file (around line 4700+)
+// with proper authentication, email alerts, and enhanced features.
+// See the "INVENTORY MANAGEMENT" section near the end of the file.
 
 /**
  * GET /api/v1/admin/computers
@@ -2728,6 +2791,55 @@ app.put('/api/v1/admin/pricing', (req, res) => {
     Object.assign(pricing, updates);
     io.emit('pricing-updated', pricing);
     res.json({ success: true, pricing });
+});
+
+// ==================== DOCUMENT SHARING TO COMPUTERS ====================
+
+/**
+ * POST /api/v1/documents/send-to-computer
+ * Send a file directly to a specific computer
+ */
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), (req, res) => {
+    try {
+        const { targetClientId, targetHostname, message } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!targetClientId) {
+            return res.status(400).json({ error: 'Target client ID required' });
+        }
+
+        const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+        // Emit to the specific agent
+        io.emit('document-for-agent', {
+            targetClientId: targetClientId,
+            document: {
+                filename: req.file.originalname,
+                downloadUrl: fileUrl,
+                message: message || 'File from Admin',
+                size: req.file.size,
+                mimetype: req.file.mimetype
+            }
+        });
+
+        console.log(`[DOCUMENT] Sent ${req.file.originalname} to ${targetHostname || targetClientId}`);
+
+        res.json({
+            success: true,
+            message: `File sent to ${targetHostname || targetClientId}`,
+            document: {
+                filename: req.file.originalname,
+                url: fileUrl,
+                size: req.file.size
+            }
+        });
+    } catch (error) {
+        console.error('Send to Computer Error:', error);
+        res.status(500).json({ error: 'Failed to send file' });
+    }
 });
 
 // ==================== SERVICE CATALOG ====================
@@ -4608,6 +4720,669 @@ app.get('/api/v1/guides/:id/download', async (req, res) => {
     } catch (error) {
         console.error('[GUIDES] Download failed:', error);
         res.status(500).json({ error: 'Failed to download' });
+    }
+});
+
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+/**
+ * GET /api/v1/inventory
+ * Get all inventory items (public/user accessible)
+ */
+app.get('/api/v1/inventory', async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true }).sort({ name: 1 });
+        res.json(items);
+    } catch (error) {
+        console.error('[INVENTORY] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch inventory' });
+    }
+});
+
+/**
+ * GET /api/v1/inventory/settings
+ * Get inventory settings
+ */
+app.get('/api/v1/inventory/settings', async (req, res) => {
+    try {
+        let settings = await Settings.findOne({ key: 'inventory' });
+        if (!settings) {
+            settings = { showTotalItemsToUser: true, lowStockEmailEnabled: true };
+        }
+        res.json(settings.value || settings);
+    } catch (error) {
+        console.error('[INVENTORY] Settings fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/inventory/settings
+ * Update inventory settings
+ */
+app.put('/api/v1/admin/inventory/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = await Settings.findOneAndUpdate(
+            { key: 'inventory' },
+            {
+                key: 'inventory',
+                value: req.body,
+                updatedAt: new Date()
+            },
+            { upsert: true, new: true }
+        );
+        res.json(settings.value);
+    } catch (error) {
+        console.error('[INVENTORY] Settings update failed:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/inventory
+ * Add a new inventory item
+ */
+app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, stock, lowStockThreshold, category } = req.body;
+
+        if (!name || price === undefined || stock === undefined) {
+            return res.status(400).json({ error: 'Name, price, and stock are required' });
+        }
+
+        const item = await InventoryItem.create({
+            name,
+            description: description || '',
+            price: parseFloat(price) || 0,
+            stock: parseInt(stock) || 0,
+            lowStockThreshold: parseInt(lowStockThreshold) || 5,
+            category: category || 'General',
+            isActive: true
+        });
+
+        console.log(`[INVENTORY] Added: ${name} (Stock: ${stock}, Price: KSH ${price})`);
+        res.status(201).json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Add failed:', error);
+        res.status(500).json({ error: 'Failed to add item' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/inventory/:id
+ * Update an inventory item
+ */
+app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, stock, lowStockThreshold, category, isActive } = req.body;
+
+        const item = await InventoryItem.findByIdAndUpdate(
+            req.params.id,
+            {
+                name,
+                description,
+                price: parseFloat(price) || 0,
+                stock: parseInt(stock) || 0,
+                lowStockThreshold: parseInt(lowStockThreshold) || 5,
+                category: category || 'General',
+                isActive: isActive !== false,
+                updatedAt: new Date()
+            },
+            { new: true }
+        );
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        console.log(`[INVENTORY] Updated: ${item.name}`);
+        res.json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update item' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/:id
+ * Delete an inventory item
+ */
+app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const item = await InventoryItem.findByIdAndDelete(req.params.id);
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+        console.log(`[INVENTORY] Deleted: ${item.name}`);
+        res.json({ success: true, message: 'Item deleted' });
+    } catch (error) {
+        console.error('[INVENTORY] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete item' });
+    }
+});
+
+/**
+ * POST /api/v1/inventory/:id/sell
+ * Record a sale - decrements stock and creates a transaction record
+ */
+app.post('/api/v1/inventory/:id/sell', async (req, res) => {
+    try {
+        const { quantity = 1, reason, clientId } = req.body;
+        const item = await InventoryItem.findById(req.params.id);
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        if (item.stock < quantity) {
+            return res.status(400).json({ error: 'Insufficient stock' });
+        }
+
+        // Decrement stock
+        const previousStock = item.stock;
+        item.stock -= quantity;
+        item.updatedAt = new Date();
+        await item.save();
+
+        // Create a transaction record for the sale
+        const transaction = await Transaction.create({
+            type: 'inventory-sale',
+            amount: item.price * quantity,
+            description: `Sold ${quantity}x ${item.name}${reason ? ` - ${reason}` : ''}`,
+            itemId: item._id,
+            itemName: item.name,
+            quantity,
+            clientId: clientId || null,
+            timestamp: new Date(),
+            status: 'completed'
+        });
+
+        console.log(`[INVENTORY] Sale: ${quantity}x ${item.name} (Stock: ${previousStock} → ${item.stock})`);
+
+        // Emit real-time updates for admin dashboard
+        io.emit('inventory-update', { itemId: item._id, stock: item.stock, name: item.name });
+        io.emit('transaction-created', transaction);
+
+        // Check for low stock alert
+        if (item.stock <= item.lowStockThreshold && previousStock > item.lowStockThreshold) {
+            console.log(`[INVENTORY] ⚠️ LOW STOCK ALERT: ${item.name} (${item.stock} remaining)`);
+
+            // Send email alert to admin
+            try {
+                const settings = await Settings.findOne({ key: 'inventory' });
+                const emailEnabled = settings?.value?.lowStockEmailEnabled !== false;
+
+                if (emailEnabled && process.env.ADMIN_EMAIL) {
+                    await transporter.sendMail({
+                        from: `"HawkNine Inventory Alert" <${process.env.EMAIL_USER}>`,
+                        to: process.env.ADMIN_EMAIL,
+                        subject: `⚠️ Low Stock Alert: ${item.name}`,
+                        html: `
+                            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8f9fa; border-radius: 10px;">
+                                <h2 style="color: #dc3545; margin-bottom: 20px;">⚠️ Low Stock Alert</h2>
+                                <div style="background-color: #fff; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                                    <p style="font-size: 16px; margin-bottom: 10px;">
+                                        <strong>${item.name}</strong> is running low on stock!
+                                    </p>
+                                    <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Current Stock:</td>
+                                            <td style="padding: 8px 0; font-weight: bold; color: #dc3545;">${item.stock} units</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Alert Threshold:</td>
+                                            <td style="padding: 8px 0;">${item.lowStockThreshold} units</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Category:</td>
+                                            <td style="padding: 8px 0;">${item.category}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Unit Price:</td>
+                                            <td style="padding: 8px 0;">KSH ${item.price}</td>
+                                        </tr>
+                                    </table>
+                                    <p style="margin-top: 20px; font-size: 14px; color: #666;">
+                                        Please restock this item soon to avoid running out.
+                                    </p>
+                                </div>
+                                <p style="text-align: center; color: #888; font-size: 12px; margin-top: 20px;">
+                                    HawkNine Inventory Management System
+                                </p>
+                            </div>
+                        `
+                    });
+                    console.log(`[INVENTORY] Low stock email sent for: ${item.name}`);
+                }
+            } catch (emailError) {
+                console.error('[INVENTORY] Failed to send low stock email:', emailError);
+            }
+
+            // Notify via socket
+            io.emit('low-stock-alert', {
+                itemId: item._id,
+                itemName: item.name,
+                currentStock: item.stock,
+                threshold: item.lowStockThreshold,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Sold ${quantity}x ${item.name}`,
+            item: {
+                id: item._id,
+                name: item.name,
+                previousStock,
+                currentStock: item.stock,
+                lowStockAlert: item.stock <= item.lowStockThreshold
+            }
+        });
+
+    } catch (error) {
+        console.error('[INVENTORY] Sale failed:', error);
+        res.status(500).json({ error: 'Failed to process sale' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/inventory/low-stock
+ * Get all items that are at or below low stock threshold
+ */
+app.get('/api/v1/admin/inventory/low-stock', requireAdminAuth, async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true });
+        const lowStockItems = items.filter(item => item.stock <= item.lowStockThreshold);
+        res.json(lowStockItems);
+    } catch (error) {
+        console.error('[INVENTORY] Low stock fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch low stock items' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/inventory/stats
+ * Get inventory statistics
+ */
+app.get('/api/v1/admin/inventory/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true });
+
+        const totalItems = items.length;
+        const totalStock = items.reduce((acc, item) => acc + item.stock, 0);
+        const totalValue = items.reduce((acc, item) => acc + (item.price * item.stock), 0);
+        const lowStockCount = items.filter(item => item.stock <= item.lowStockThreshold).length;
+        const outOfStockCount = items.filter(item => item.stock === 0).length;
+
+        // Get recent sales
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todaySales = await Transaction.aggregate([
+            { $match: { type: 'inventory-sale', timestamp: { $gte: today } } },
+            { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: '$quantity' } } }
+        ]);
+
+        res.json({
+            totalItems,
+            totalStock,
+            totalValue,
+            lowStockCount,
+            outOfStockCount,
+            todaySales: todaySales[0] || { total: 0, count: 0 }
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Stats failed:', error);
+        res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+
+// ==================== USER DOCUMENT SUBMISSIONS ====================
+
+/**
+ * POST /api/v1/user/submissions
+ * User submits a document for admin approval (to become template or guidance)
+ */
+app.post('/api/v1/user/submissions', requireUserAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, targetType } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!title || !targetType) {
+            return res.status(400).json({ error: 'Title and target type are required' });
+        }
+
+        if (!['template', 'guidance'].includes(targetType)) {
+            return res.status(400).json({ error: 'Target type must be "template" or "guidance"' });
+        }
+
+        const submission = await UserSubmission.create({
+            title,
+            description: description || '',
+            category: category || 'general',
+            targetType,
+            fileUrl: `/uploads/${req.file.filename}`,
+            fileOriginalName: req.file.originalname,
+            fileMimeType: req.file.mimetype,
+            fileSize: req.file.size,
+            submittedBy: req.user.username,
+            submittedByName: req.user.name || req.user.username,
+            status: 'pending'
+        });
+
+        // Notify admins via socket
+        io.emit('new-user-submission', {
+            submissionId: submission._id,
+            title: submission.title,
+            targetType: submission.targetType,
+            submittedBy: submission.submittedByName,
+            timestamp: new Date().toISOString()
+        });
+
+        console.log(`[SUBMISSIONS] New submission: "${title}" by ${req.user.username} for ${targetType}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'Document submitted successfully for review',
+            submission: {
+                id: submission._id,
+                title: submission.title,
+                targetType: submission.targetType,
+                status: submission.status,
+                submittedAt: submission.submittedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('[SUBMISSIONS] Create failed:', error);
+        res.status(500).json({ error: 'Failed to submit document' });
+    }
+});
+
+/**
+ * GET /api/v1/user/submissions
+ * Get user's own submissions
+ */
+app.get('/api/v1/user/submissions', requireUserAuth, async (req, res) => {
+    try {
+        const submissions = await UserSubmission.find({ submittedBy: req.user.username })
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        console.error('[SUBMISSIONS] Fetch user submissions failed:', error);
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * DELETE /api/v1/user/submissions/:id
+ * User can delete their own pending submission
+ */
+app.delete('/api/v1/user/submissions/:id', requireUserAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findOne({
+            _id: req.params.id,
+            submittedBy: req.user.username,
+            status: 'pending'
+        });
+
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found or cannot be deleted' });
+        }
+
+        // Delete the file
+        if (submission.fileUrl) {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+
+        res.json({ success: true, message: 'Submission deleted' });
+    } catch (error) {
+        console.error('[SUBMISSIONS] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
+
+// ==================== ADMIN SUBMISSION MANAGEMENT ====================
+
+/**
+ * GET /api/v1/admin/submissions
+ * Get all user submissions for admin review
+ */
+app.get('/api/v1/admin/submissions', requireAdminAuth, async (req, res) => {
+    try {
+        const { status, targetType } = req.query;
+        const filter = {};
+
+        if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+            filter.status = status;
+        }
+        if (targetType && ['template', 'guidance'].includes(targetType)) {
+            filter.targetType = targetType;
+        }
+
+        const submissions = await UserSubmission.find(filter)
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/submissions/stats
+ * Get submission statistics
+ */
+app.get('/api/v1/admin/submissions/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const [total, pending, approved, rejected] = await Promise.all([
+            UserSubmission.countDocuments(),
+            UserSubmission.countDocuments({ status: 'pending' }),
+            UserSubmission.countDocuments({ status: 'approved' }),
+            UserSubmission.countDocuments({ status: 'rejected' })
+        ]);
+
+        res.json({ total, pending, approved, rejected });
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Stats failed:', error);
+        res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/submissions/:id/download
+ * Download submission file
+ */
+app.get('/api/v1/admin/submissions/:id/download', requireAdminAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission || !submission.fileUrl) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        const filePath = path.join(__dirname, submission.fileUrl);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, submission.fileOriginalName || 'download');
+        } else {
+            res.status(404).json({ error: 'File not found on server' });
+        }
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download file' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/submissions/:id/approve
+ * Approve a submission and create the resource (Template or Guide)
+ */
+app.put('/api/v1/admin/submissions/:id/approve', requireAdminAuth, async (req, res) => {
+    try {
+        const { notes, resourceData } = req.body;
+
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        if (submission.status !== 'pending') {
+            return res.status(400).json({ error: 'Submission has already been reviewed' });
+        }
+
+        let createdResource;
+
+        if (submission.targetType === 'template') {
+            // Create Template from submission
+            createdResource = await Template.create({
+                title: resourceData?.title || submission.title,
+                description: resourceData?.description || submission.description,
+                category: resourceData?.category || submission.category || 'general',
+                type: resourceData?.type || 'Document',
+                fileUrl: submission.fileUrl,
+                fileOriginalName: submission.fileOriginalName,
+                fileMimeType: submission.fileMimeType,
+                fileSize: submission.fileSize,
+                icon: resourceData?.icon || 'file',
+                featured: resourceData?.featured || false,
+                downloads: 0
+            });
+
+            console.log(`[SUBMISSIONS] Approved as Template: ${createdResource.title}`);
+
+        } else if (submission.targetType === 'guidance') {
+            // Create Guide from submission
+            createdResource = await Guide.create({
+                title: resourceData?.title || submission.title,
+                description: resourceData?.description || submission.description,
+                objective: resourceData?.objective || submission.category || 'general',
+                type: resourceData?.type || 'Guide',
+                duration: resourceData?.duration || '5 min read',
+                content: resourceData?.content || '',
+                icon: resourceData?.icon || 'book',
+                popular: resourceData?.popular || false,
+                fileUrl: submission.fileUrl,
+                fileOriginalName: submission.fileOriginalName,
+                fileMimeType: submission.fileMimeType,
+                fileSize: submission.fileSize
+            });
+
+            console.log(`[SUBMISSIONS] Approved as Guide: ${createdResource.title}`);
+        }
+
+        // Update submission status
+        submission.status = 'approved';
+        submission.reviewedBy = req.admin.username;
+        submission.reviewedAt = new Date();
+        submission.reviewNotes = notes || '';
+        submission.approvedResourceId = createdResource._id;
+        submission.approvedResourceType = submission.targetType === 'template' ? 'Template' : 'Guide';
+        await submission.save();
+
+        // Notify user via socket
+        io.emit('submission-reviewed', {
+            submissionId: submission._id,
+            status: 'approved',
+            submittedBy: submission.submittedBy,
+            title: submission.title,
+            resourceType: submission.approvedResourceType,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            message: `Submission approved and created as ${submission.approvedResourceType}`,
+            submission,
+            resource: createdResource
+        });
+
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Approve failed:', error);
+        res.status(500).json({ error: 'Failed to approve submission' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/submissions/:id/reject
+ * Reject a submission
+ */
+app.put('/api/v1/admin/submissions/:id/reject', requireAdminAuth, async (req, res) => {
+    try {
+        const { notes } = req.body;
+
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        if (submission.status !== 'pending') {
+            return res.status(400).json({ error: 'Submission has already been reviewed' });
+        }
+
+        submission.status = 'rejected';
+        submission.reviewedBy = req.admin.username;
+        submission.reviewedAt = new Date();
+        submission.reviewNotes = notes || '';
+        await submission.save();
+
+        console.log(`[SUBMISSIONS] Rejected: ${submission.title} - Reason: ${notes || 'No reason provided'}`);
+
+        // Notify user via socket
+        io.emit('submission-reviewed', {
+            submissionId: submission._id,
+            status: 'rejected',
+            submittedBy: submission.submittedBy,
+            title: submission.title,
+            notes: notes,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            message: 'Submission rejected',
+            submission
+        });
+
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Reject failed:', error);
+        res.status(500).json({ error: 'Failed to reject submission' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/submissions/:id
+ * Delete a submission (admin only)
+ */
+app.delete('/api/v1/admin/submissions/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        // Delete the file if it exists and hasn't been approved (approved files are now used by resources)
+        if (submission.fileUrl && submission.status !== 'approved') {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+
+        res.json({ success: true, message: 'Submission deleted' });
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete submission' });
     }
 });
 

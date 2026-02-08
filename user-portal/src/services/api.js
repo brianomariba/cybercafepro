@@ -163,16 +163,56 @@ export const purchaseItem = async (itemId, quantity = 1, reason = '', clientId =
     return response.data;
 };
 
+// ==================== USER SUBMISSIONS ====================
+export const submitDocument = async (formData) => {
+    const response = await api.post('/user/submissions', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+};
+
+export const getUserSubmissions = async () => {
+    const response = await api.get('/user/submissions');
+    return response.data;
+};
+
+export const deleteSubmission = async (id) => {
+    const response = await api.delete(`/user/submissions/${id}`);
+    return response.data;
+};
+
 // Default export
 export default {
+    // Tasks
     getUserTasks,
     updateTaskStatus,
+    // Services
     getServices,
+    getServiceCategories,
+    // Documents
     getDocuments,
     downloadDocument,
+    // Content
+    getTemplates,
+    getCourses,
+    getGuides,
+    downloadTemplateUrl,
+    downloadCourseUrl,
+    downloadGuideUrl,
+    // Auth
+    loginUserStep1,
+    loginUserStep2,
+    userLogout,
+    setUserToken,
+    // Socket
     connectSocket,
     disconnectSocket,
+    // Inventory
     getInventory,
     getInventorySettings,
-    purchaseItem
+    purchaseItem,
+    // Submissions
+    submitDocument,
+    getUserSubmissions,
+    deleteSubmission
 };

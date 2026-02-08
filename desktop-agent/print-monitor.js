@@ -58,15 +58,54 @@ async function getPrinterCapabilities(printerName) {
 }
 
 /**
+ * Infer paper size from document name and size bytes
+ */
+function inferPaperSize(documentName, sizeBytes) {
+    const docLower = (documentName || '').toLowerCase();
+
+    // Check document name hints first
+    if (docLower.includes('a3')) return 'A3';
+    if (docLower.includes('a4')) return 'A4';
+    if (docLower.includes('a5')) return 'A5';
+    if (docLower.includes('legal')) return 'Legal';
+    if (docLower.includes('letter')) return 'Letter';
+    if (docLower.includes('photo') || docLower.includes('4x6') || docLower.includes('4"x6"')) return '4x6 Photo';
+    if (docLower.includes('5x7')) return '5x7 Photo';
+    if (docLower.includes('8x10')) return '8x10 Photo';
+    if (docLower.includes('envelope') || docLower.includes('env')) return 'Envelope';
+    if (docLower.includes('label')) return 'Label';
+
+    // Infer from file size (rough estimate based on typical document sizes)
+    // These are very rough estimates and paper size really can't be determined from file size alone
+    // Default to A4 which is most common
+    return 'A4';
+}
+
+/**
+ * Get print quality from document name hints
+ */
+function inferPrintQuality(documentName, driverName) {
+    const docLower = (documentName || '').toLowerCase();
+    const driverLower = (driverName || '').toLowerCase();
+
+    if (docLower.includes('draft') || docLower.includes('low')) return 'Draft';
+    if (docLower.includes('photo') || docLower.includes('high') || docLower.includes('best')) return 'High Quality';
+    if (driverLower.includes('photo')) return 'Photo Quality';
+
+    return 'Normal';
+}
+
+/**
  * Fetches detailed print jobs from the local Windows Spooler
- * Includes color detection and page counts
+ * Includes color detection, paper size, and comprehensive job details
  */
 function getRecentPrintJobs() {
     return new Promise((resolve) => {
-        // Enhanced PowerShell command to get more print job details
+        // Enhanced PowerShell command to get more print job details including paper size
         const psCommand = `
             Get-Printer | ForEach-Object {
                 $printer = $_
+                $printerConfig = Get-PrintConfiguration -PrinterName $_.Name -ErrorAction SilentlyContinue
                 Get-PrintJob -PrinterName $_.Name -ErrorAction SilentlyContinue | ForEach-Object {
                     [PSCustomObject]@{
                         Id = $_.Id
@@ -75,6 +114,7 @@ function getRecentPrintJobs() {
                         PrinterStatus = $printer.PrinterStatus
                         DriverName = $printer.DriverName
                         PortName = $printer.PortName
+                        PrinterLocation = $printer.Location
                         DocumentName = $_.DocumentName
                         JobStatus = $_.JobStatus
                         TotalPages = $_.TotalPages
@@ -83,12 +123,16 @@ function getRecentPrintJobs() {
                         SubmittedTime = $_.SubmittedTime
                         UserName = $_.UserName
                         Priority = $_.Priority
+                        PaperSize = if ($printerConfig) { $printerConfig.PaperSize } else { 'Unknown' }
+                        DuplexingMode = if ($printerConfig) { $printerConfig.DuplexingMode } else { 'Unknown' }
+                        Color = if ($printerConfig) { $printerConfig.Color } else { 'Unknown' }
+                        Collate = if ($printerConfig) { $printerConfig.Collate } else { $false }
                     }
                 }
             } | ConvertTo-Json -Depth 3
         `;
 
-        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ')}"`, (error, stdout, stderr) => {
+        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ')}"`, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
             if (error || !stdout || stdout.trim() === '') {
                 resolve([]);
                 return;
@@ -117,21 +161,48 @@ function getRecentPrintJobs() {
                         driverLower.includes('photosmart') ||
                         driverLower.includes('deskjet');
 
-                    // Check document name hints
+                    // Check document name hints for color content
                     const isColorDocument =
                         docNameLower.includes('color') ||
                         docNameLower.includes('photo') ||
                         docNameLower.includes('image') ||
                         docNameLower.includes('.jpg') ||
                         docNameLower.includes('.png') ||
-                        docNameLower.includes('.jpeg');
+                        docNameLower.includes('.jpeg') ||
+                        docNameLower.includes('.bmp') ||
+                        docNameLower.includes('.tiff');
 
-                    if (isColorPrinter && isColorDocument) {
+                    // Check job's color configuration from printer settings
+                    if (job.Color === true || (typeof job.Color === 'string' && job.Color.toLowerCase() === 'true')) {
+                        printType = 'color';
+                    } else if (isColorPrinter && isColorDocument) {
                         printType = 'color';
                     }
 
                     // Calculate size in KB
                     const sizeKB = job.Size ? Math.round(job.Size / 1024) : 0;
+
+                    // Determine paper size
+                    let paperSize = job.PaperSize || 'Unknown';
+                    if (paperSize === 'Unknown' || !paperSize) {
+                        paperSize = inferPaperSize(job.DocumentName, job.Size);
+                    }
+
+                    // Determine duplex mode
+                    let duplexMode = 'Single-sided';
+                    if (job.DuplexingMode) {
+                        const duplex = job.DuplexingMode.toString().toLowerCase();
+                        if (duplex.includes('twosided') || duplex.includes('duplex') || duplex.includes('both')) {
+                            duplexMode = 'Double-sided';
+                        } else if (duplex.includes('longedge')) {
+                            duplexMode = 'Double-sided (Long Edge)';
+                        } else if (duplex.includes('shortedge')) {
+                            duplexMode = 'Double-sided (Short Edge)';
+                        }
+                    }
+
+                    // Infer print quality
+                    const printQuality = inferPrintQuality(job.DocumentName, job.DriverName);
 
                     return {
                         id: job.Id,
@@ -140,14 +211,22 @@ function getRecentPrintJobs() {
                         printerType: job.PrinterType || 'Local',
                         printerDriver: job.DriverName || 'Unknown',
                         printerPort: job.PortName || 'Unknown',
+                        printerLocation: job.PrinterLocation || '',
                         printerStatus: job.PrinterStatus || 'Unknown',
                         document: job.DocumentName || 'Untitled',
+                        documentName: job.DocumentName || 'Untitled',
                         status: job.JobStatus || 'Spooling',
                         totalPages: job.TotalPages || 1,
                         pagesPrinted: job.PagesPrinted || 0,
                         printType: printType, // 'bw' or 'color'
                         isColorPrinter: isColorPrinter,
+                        isColorPrint: printType === 'color',
+                        paperSize: paperSize,
+                        duplexMode: duplexMode,
+                        printQuality: printQuality,
+                        collate: job.Collate || false,
                         sizeKB: sizeKB,
+                        sizeBytes: job.Size || 0,
                         submitted: job.SubmittedTime,
                         user: job.UserName || 'Unknown',
                         priority: job.Priority || 'Normal',

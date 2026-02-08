@@ -30,9 +30,10 @@ if (!gotTheLock) {
 const FileMonitor = require('./file-monitor');
 const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
+const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getInstalledPrinters } = require('./print-monitor');
-const { LiveUrlTracker } = require('./browser-history');
+const { LiveUrlTracker, getActiveTabUrl } = require('./browser-history');
 
 // Load Configuration
 let config;
@@ -82,10 +83,12 @@ try {
 let windows = []; // Support multiple monitors
 let tray = null;
 let mainWindow = null;
+let portalWindow = null; // User portal window
 let isLocked = true;
 let currentSession = null;
 let fileMonitor = null;
 let dataQueue = new DataQueue();
+let offlineStore = new OfflineStore(__dirname); // Offline data cache
 let appUsageTracker = new AppUsageTracker();
 let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
@@ -93,6 +96,7 @@ let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 let lastSentBrowserUrl = ''; // Track last sent URL to avoid duplicates
 let socket = null; // Socket.io connection for real-time commands
+let isOnline = true; // Track online status
 
 console.log(`HawkNine Agent Starting - Client ID: ${CLIENT_ID}`);
 
@@ -174,6 +178,7 @@ function setupTray() {
         tray = new Tray(iconPath);
 
         const updateTrayMenu = () => {
+            const pendingCount = offlineStore ? offlineStore.getPendingActions().length : 0;
             const contextMenu = Menu.buildFromTemplate([
                 { label: `HawkNine Agent (${CLIENT_ID})`, enabled: false },
                 { type: 'separator' },
@@ -181,6 +186,21 @@ function setupTray() {
                     label: isLocked ? 'Station Locked' : `Active: ${currentSession ? currentSession.user : 'User'}`,
                     enabled: false
                 },
+                {
+                    label: '🖥️ Open Portal',
+                    visible: !isLocked,
+                    click: () => {
+                        if (currentSession) {
+                            createPortalWindow(currentSession.user);
+                        }
+                    }
+                },
+                {
+                    label: pendingCount > 0 ? `⏳ Pending Sales (${pendingCount})` : '✅ All Synced',
+                    visible: !isLocked,
+                    enabled: false
+                },
+                { type: 'separator' },
                 {
                     label: 'Show/Hide Info Widget',
                     visible: !isLocked,
@@ -216,10 +236,10 @@ function setupTray() {
         tray.setToolTip('HawkNine Security Agent');
         updateTrayMenu();
 
+        // Double-click opens the portal
         tray.on('double-click', () => {
-            if (!isLocked && mainWindow) {
-                if (mainWindow.isVisible()) mainWindow.hide();
-                else mainWindow.show();
+            if (!isLocked && currentSession) {
+                createPortalWindow(currentSession.user);
             }
         });
 
@@ -365,6 +385,242 @@ ipcMain.on('restart-request', async () => {
     });
 });
 
+// ==================== PORTAL IPC HANDLERS ====================
+
+// Get all portal data (from cache or live)
+ipcMain.on('get-portal-data', async (event) => {
+    await sendPortalData(event);
+});
+
+// Refresh specific data type
+ipcMain.on('refresh-portal-data', async (event, { type }) => {
+    try {
+        await fetchAndCacheData(type);
+        await sendPortalData(event);
+    } catch (error) {
+        console.error(`[Portal] Failed to refresh ${type}:`, error.message);
+    }
+});
+
+// Record a sale (works offline too)
+ipcMain.on('record-sale', async (event, saleData) => {
+    const { itemId, itemName, quantity, unitPrice, total, note } = saleData;
+
+    if (isOnline) {
+        // Try to sync immediately
+        try {
+            const response = await axios.post(`${config.server.baseUrl}/api/v1/inventory/${itemId}/sell`, {
+                quantity,
+                reason: note,
+                clientId: CLIENT_ID,
+                sessionId: currentSession?.id
+            }, { timeout: 10000 });
+
+            if (response.data.success) {
+                // Update local cache
+                offlineStore.decrementLocalStock(itemId, quantity);
+                event.reply('sale-result', {
+                    success: true,
+                    message: `Sold ${quantity}x ${itemName} for KSH ${total.toLocaleString()}`
+                });
+                console.log(`[Portal] Sale recorded: ${quantity}x ${itemName}`);
+            } else {
+                event.reply('sale-result', { success: false, message: response.data.error || 'Sale failed' });
+            }
+        } catch (error) {
+            // If network fails, queue for later
+            console.log('[Portal] Network error, queuing sale for later sync');
+            offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note });
+            offlineStore.decrementLocalStock(itemId, quantity);
+            event.reply('sale-result', {
+                success: true,
+                message: `Sold ${quantity}x ${itemName} (will sync when online)`
+            });
+        }
+    } else {
+        // Offline mode - queue the action
+        offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note });
+        offlineStore.decrementLocalStock(itemId, quantity);
+        event.reply('sale-result', {
+            success: true,
+            message: `Sold ${quantity}x ${itemName} (offline - will sync later)`
+        });
+        console.log(`[Portal] Offline sale queued: ${quantity}x ${itemName}`);
+    }
+});
+
+// Get pending actions count
+ipcMain.on('get-pending-count', (event) => {
+    const pending = offlineStore.getPendingActions();
+    event.reply('pending-count', { count: pending.length });
+});
+
+// Sync pending actions
+ipcMain.on('sync-pending-actions', async (event) => {
+    if (!isOnline) {
+        event.reply('sync-result', { success: false, message: 'Currently offline' });
+        return;
+    }
+
+    const pending = offlineStore.getPendingActions();
+    let synced = 0;
+
+    for (const action of pending) {
+        try {
+            if (action.type === 'SELL_ITEM') {
+                const response = await axios.post(
+                    `${config.server.baseUrl}/api/v1/inventory/${action.payload.itemId}/sell`,
+                    {
+                        quantity: action.payload.quantity,
+                        reason: `Offline sale: ${action.payload.note || ''} (synced at ${new Date().toISOString()})`,
+                        clientId: CLIENT_ID
+                    },
+                    { timeout: 10000 }
+                );
+
+                if (response.data.success) {
+                    offlineStore.removePendingAction(action.id);
+                    synced++;
+                    console.log(`[Portal] Synced pending sale: ${action.payload.itemName}`);
+                }
+            }
+        } catch (error) {
+            offlineStore.updatePendingAction(action.id, { attempts: (action.attempts || 0) + 1 });
+            console.error(`[Portal] Failed to sync action ${action.id}:`, error.message);
+        }
+    }
+
+    // Refresh inventory data after sync
+    if (synced > 0) {
+        await fetchAndCacheData('inventory');
+    }
+
+    event.reply('sync-result', { success: true, synced, remaining: pending.length - synced });
+});
+
+// Check online status
+ipcMain.on('check-online-status', async (event) => {
+    try {
+        await axios.get(`${config.server.baseUrl}/health`, { timeout: 5000 });
+        isOnline = true;
+    } catch {
+        isOnline = false;
+    }
+    event.reply('online-status', { isOnline });
+});
+
+// Helper: Send portal data to renderer
+async function sendPortalData(event) {
+    event.reply('portal-data', {
+        user: currentSession ? { name: currentSession.user, username: currentSession.user } : null,
+        inventory: offlineStore.getInventory(),
+        services: offlineStore.getServices(),
+        templates: offlineStore.getTemplates(),
+        guides: offlineStore.getGuides(),
+        settings: offlineStore.getSettings(),
+        pendingActions: offlineStore.getPendingActions(),
+        lastSync: offlineStore.getLastSync(),
+        isOnline
+    });
+}
+
+// Helper: Fetch and cache data from server
+async function fetchAndCacheData(type = 'all') {
+    const baseUrl = config.server.baseUrl;
+
+    try {
+        if (type === 'all' || type === 'inventory') {
+            const res = await axios.get(`${baseUrl}/api/v1/inventory`, { timeout: 10000 });
+            offlineStore.setInventory(res.data || []);
+        }
+
+        if (type === 'all' || type === 'services') {
+            const res = await axios.get(`${baseUrl}/api/v1/services`, { timeout: 10000 });
+            offlineStore.setServices(res.data || []);
+        }
+
+        if (type === 'all' || type === 'templates') {
+            const res = await axios.get(`${baseUrl}/api/v1/templates`, { timeout: 10000 });
+            offlineStore.setTemplates(res.data || []);
+        }
+
+        if (type === 'all' || type === 'guides') {
+            const res = await axios.get(`${baseUrl}/api/v1/guides`, { timeout: 10000 });
+            offlineStore.setGuides(res.data || []);
+        }
+
+        if (type === 'all' || type === 'settings') {
+            const res = await axios.get(`${baseUrl}/api/v1/inventory/settings`, { timeout: 10000 });
+            offlineStore.setSettings(res.data || {});
+        }
+
+        isOnline = true;
+        console.log(`[Portal] Data cached for: ${type}`);
+    } catch (error) {
+        isOnline = false;
+        console.error(`[Portal] Failed to fetch ${type}:`, error.message);
+    }
+}
+
+// Auto-sync pending actions when online
+async function autoSyncPending() {
+    if (!isOnline) return;
+
+    const pending = offlineStore.getPendingActions();
+    if (pending.length === 0) return;
+
+    console.log(`[Portal] Auto-syncing ${pending.length} pending action(s)...`);
+
+    for (const action of pending) {
+        if (action.attempts >= 5) continue; // Skip failed actions
+
+        try {
+            if (action.type === 'SELL_ITEM') {
+                const response = await axios.post(
+                    `${config.server.baseUrl}/api/v1/inventory/${action.payload.itemId}/sell`,
+                    {
+                        quantity: action.payload.quantity,
+                        reason: `Offline sale: ${action.payload.note || ''} (auto-synced)`,
+                        clientId: CLIENT_ID
+                    },
+                    { timeout: 10000 }
+                );
+
+                if (response.data.success) {
+                    offlineStore.removePendingAction(action.id);
+                    console.log(`[Portal] Auto-synced: ${action.payload.itemName}`);
+                }
+            }
+        } catch {
+            offlineStore.updatePendingAction(action.id, { attempts: (action.attempts || 0) + 1 });
+        }
+    }
+}
+
+// Periodic data refresh and sync
+setInterval(async () => {
+    // Check online status
+    try {
+        await axios.get(`${config.server.baseUrl}/health`, { timeout: 5000 });
+        const wasOffline = !isOnline;
+        isOnline = true;
+
+        // If just came online, sync pending actions
+        if (wasOffline) {
+            console.log('[Portal] Connection restored, syncing...');
+            await autoSyncPending();
+            await fetchAndCacheData('all');
+        }
+    } catch {
+        isOnline = false;
+    }
+
+    // Refresh data if cache is old (every 5 minutes when online)
+    if (isOnline && offlineStore.getCacheAgeMinutes() > 5) {
+        await fetchAndCacheData('all');
+    }
+}, 30000); // Check every 30 seconds
+
 // ==================== SESSION MANAGEMENT ====================
 
 async function startSession(username) {
@@ -446,7 +702,65 @@ async function startSession(username) {
         ipcMain.emit('update-tray');
     }
 
+    // Fetch and cache data for offline use
+    fetchAndCacheData('all').catch(e => console.error('[Portal] Initial data fetch failed:', e.message));
+
+    // Create and show Portal Window
+    createPortalWindow(username);
+
     console.log(`Session Started: ${username} (${currentSession.id})`);
+}
+
+// Create Portal Window
+function createPortalWindow(username) {
+    if (portalWindow && !portalWindow.isDestroyed()) {
+        portalWindow.show();
+        portalWindow.focus();
+        return;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    portalWindow = new BrowserWindow({
+        width: Math.min(1200, width - 100),
+        height: Math.min(800, height - 100),
+        x: Math.floor((primaryDisplay.bounds.width - Math.min(1200, width - 100)) / 2),
+        y: Math.floor((primaryDisplay.bounds.height - Math.min(800, height - 100)) / 2),
+        frame: true,
+        resizable: true,
+        minimizable: true,
+        maximizable: true,
+        icon: path.join(__dirname, 'src/logo.jpg'),
+        title: 'HawkNine Portal',
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+        }
+    });
+
+    portalWindow.loadFile(path.join(__dirname, 'src/portal.html'));
+
+    // Send user info when loaded
+    portalWindow.webContents.on('did-finish-load', () => {
+        portalWindow.webContents.send('portal-data', {
+            user: { name: username, username },
+            inventory: offlineStore.getInventory(),
+            services: offlineStore.getServices(),
+            templates: offlineStore.getTemplates(),
+            guides: offlineStore.getGuides(),
+            settings: offlineStore.getSettings(),
+            pendingActions: offlineStore.getPendingActions(),
+            lastSync: offlineStore.getLastSync(),
+            isOnline
+        });
+    });
+
+    portalWindow.on('closed', () => {
+        portalWindow = null;
+    });
+
+    console.log(`[Portal] Portal window created for: ${username}`);
 }
 
 async function endSession() {
@@ -456,6 +770,12 @@ async function endSession() {
 
     // Stop File Monitoring
     if (fileMonitor) fileMonitor.stop();
+
+    // Close Portal Window if open
+    if (portalWindow && !portalWindow.isDestroyed()) {
+        portalWindow.close();
+        portalWindow = null;
+    }
 
     // Compile Full Session Report
     const sessionReport = {
@@ -493,6 +813,13 @@ async function endSession() {
 
 function lockSession() {
     isLocked = true;
+
+    // Close Portal Window if open
+    if (portalWindow && !portalWindow.isDestroyed()) {
+        portalWindow.close();
+        portalWindow = null;
+    }
+
     const displays = screen.getAllDisplays();
 
     displays.forEach((display, index) => {
@@ -560,8 +887,17 @@ async function startDataCollection() {
 
                         // Use enhanced browser tracking if it's a browser window
                         if (isBrowser) {
+                            // Try to get actual URL from browser address bar using UI Automation
+                            let actualUrl = null;
+                            try {
+                                actualUrl = await getActiveTabUrl();
+                            } catch (e) {
+                                // UI Automation failed, will fallback to window title
+                            }
+
                             // Use the enhanced addFromWindow method that extracts URLs from titles
-                            const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, currentApp.url);
+                            // Pass the actual URL if we got it, otherwise let it extract from title
+                            const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, actualUrl || currentApp.url);
 
                             // Send Real-Time Browser Log if we got valid data
                             if (browserData && browserData.url !== lastSentBrowserUrl) {
@@ -577,7 +913,8 @@ async function startDataCollection() {
                                         title: browserData.title,
                                         category: browserData.category,
                                         browser: browserData.browser,
-                                        timestamp: browserData.timestamp
+                                        timestamp: browserData.timestamp,
+                                        source: actualUrl ? 'ui_automation' : 'title_extraction'
                                     }
                                 };
                                 // Don't await strictly to avoid blocking heartbeat
@@ -805,24 +1142,60 @@ async function handleSocketCommand(data) {
                 const screenshot = require('screenshot-desktop');
                 const imgBuffer = await screenshot({ format: 'jpg' });
                 const base64 = imgBuffer.toString('base64');
-                if (socket) {
+                if (socket && socket.connected) {
                     socket.emit('agent-response', {
                         type: 'screenshot',
-                        screenshot: base64
+                        clientId: CLIENT_ID,
+                        hostname: os.hostname(),
+                        screenshot: base64,
+                        timestamp: new Date().toISOString()
                     });
-                    console.log('[COMMAND] Screenshot taken and sent');
+                    console.log('[COMMAND] Screenshot taken and sent successfully');
+                } else {
+                    console.error('[COMMAND] Screenshot taken but socket not connected');
                 }
             } catch (error) {
-                console.error('Screenshot failed:', error);
-                if (socket) {
+                console.error('Screenshot failed:', error.message);
+                if (socket && socket.connected) {
                     socket.emit('agent-response', {
                         type: 'error',
-                        message: 'Screenshot failed'
+                        clientId: CLIENT_ID,
+                        message: `Screenshot failed: ${error.message}`
                     });
                 }
             }
             break;
 
+        case 'disconnect':
+            console.log('[COMMAND] Disconnect requested by admin');
+            // End any active session first
+            if (currentSession) {
+                await endSession();
+            }
+            // Lock the station
+            lockSession();
+            // Notify server before disconnecting
+            if (socket && socket.connected) {
+                socket.emit('agent-response', {
+                    type: 'disconnected',
+                    clientId: CLIENT_ID,
+                    hostname: os.hostname(),
+                    message: 'Agent disconnected by admin command',
+                    timestamp: new Date().toISOString()
+                });
+                // Disconnect socket after brief delay to ensure message is sent
+                setTimeout(() => {
+                    socket.disconnect();
+                    socket = null;
+                    console.log('[COMMAND] Socket disconnected');
+                    // Optionally quit the entire agent
+                    if (params && params.quit === true) {
+                        console.log('[COMMAND] Quitting application...');
+                        app.quit();
+                    }
+                }, 500);
+            }
+            break;
 
         default:
             console.log(`[COMMAND] Unknown command: ${command}`);

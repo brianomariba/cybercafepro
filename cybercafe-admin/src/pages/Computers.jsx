@@ -23,12 +23,12 @@ import {
     SendOutlined,
     CaretRightOutlined,
     ExpandAltOutlined,
-
     InboxOutlined,
     CameraOutlined,
+    DisconnectOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket, sendDocumentToComputer } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -483,6 +483,27 @@ function Computers() {
                             <Button icon={<CameraOutlined />} onClick={handleScreenshotRequest}>
                                 Screenshot
                             </Button>
+                            <Popconfirm
+                                title="Disconnect Computer?"
+                                description="This will disconnect the computer from the server. The agent will stop sending data until restarted."
+                                onConfirm={async () => {
+                                    try {
+                                        await disconnectComputer(selectedComputer.clientId, false);
+                                        message.success(`Disconnect command sent to ${selectedComputer.hostname}`);
+                                        setActivityDrawerOpen(false);
+                                        fetchComputers();
+                                    } catch (error) {
+                                        message.error('Failed to disconnect computer');
+                                    }
+                                }}
+                                okText="Disconnect"
+                                cancelText="Cancel"
+                                okButtonProps={{ danger: true }}
+                            >
+                                <Button danger icon={<DisconnectOutlined />}>
+                                    Disconnect
+                                </Button>
+                            </Popconfirm>
                         </Space>
 
                         {/* Collapsible Activity Sections */}
@@ -540,21 +561,74 @@ function Computers() {
                                 <List
                                     size="small"
                                     loading={activityLoading}
-                                    dataSource={browserHistory.slice(0, 15)}
+                                    dataSource={browserHistory.slice(0, 20)}
                                     locale={{ emptyText: 'No browser history' }}
-                                    renderItem={item => (
-                                        <List.Item>
-                                            <List.Item.Meta
-                                                avatar={<Avatar size="small" style={{ background: '#7b2cbf' }}><GlobalOutlined /></Avatar>}
-                                                title={<Text ellipsis style={{ maxWidth: 400 }}>{item.title || item.url}</Text>}
-                                                description={
-                                                    <Text type="secondary" ellipsis style={{ maxWidth: 400, fontSize: 11 }}>
-                                                        {item.url}
-                                                    </Text>
-                                                }
-                                            />
-                                        </List.Item>
-                                    )}
+                                    renderItem={item => {
+                                        const getCategoryColor = (category) => {
+                                            const colors = {
+                                                search: 'blue',
+                                                social: 'magenta',
+                                                video: 'red',
+                                                education: 'green',
+                                                development: 'purple',
+                                                productivity: 'cyan',
+                                                shopping: 'orange',
+                                                entertainment: 'pink',
+                                                news: 'geekblue'
+                                            };
+                                            return colors[category] || 'default';
+                                        };
+
+                                        return (
+                                            <List.Item>
+                                                <List.Item.Meta
+                                                    avatar={
+                                                        <Avatar size="small" style={{ background: '#7b2cbf' }}>
+                                                            <GlobalOutlined />
+                                                        </Avatar>
+                                                    }
+                                                    title={
+                                                        <Space size="small">
+                                                            <Text ellipsis style={{ maxWidth: 350 }}>
+                                                                {item.title || item.url || 'Unknown Page'}
+                                                            </Text>
+                                                        </Space>
+                                                    }
+                                                    description={
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                            <Space size="small" wrap>
+                                                                {item.category && item.category !== 'other' && (
+                                                                    <Tag color={getCategoryColor(item.category)} style={{ textTransform: 'capitalize' }}>
+                                                                        {item.category}
+                                                                    </Tag>
+                                                                )}
+                                                                {item.browser && (
+                                                                    <Text type="secondary" style={{ fontSize: 10 }}>
+                                                                        {item.browser.split('.')[0]}
+                                                                    </Text>
+                                                                )}
+                                                                {item.timestamp && (
+                                                                    <Text type="secondary" style={{ fontSize: 10 }}>
+                                                                        {dayjs(item.timestamp).format('HH:mm')}
+                                                                    </Text>
+                                                                )}
+                                                            </Space>
+                                                            <a
+                                                                href={item.url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                style={{ fontSize: 11, color: '#00b4d8' }}
+                                                            >
+                                                                <Text type="secondary" ellipsis style={{ maxWidth: 400, fontSize: 11 }}>
+                                                                    {item.url}
+                                                                </Text>
+                                                            </a>
+                                                        </div>
+                                                    }
+                                                />
+                                            </List.Item>
+                                        );
+                                    }}
                                 />
                             </Panel>
 
@@ -569,26 +643,118 @@ function Computers() {
                                 }
                                 key="files"
                             >
-                                <List
-                                    size="small"
-                                    loading={activityLoading}
-                                    dataSource={fileActivity.slice(0, 15)}
-                                    locale={{ emptyText: 'No file activity' }}
-                                    renderItem={file => (
-                                        <List.Item>
-                                            <List.Item.Meta
-                                                avatar={<Avatar size="small" style={{ background: '#ff9500' }}><FileOutlined /></Avatar>}
-                                                title={file.name}
-                                                description={
-                                                    <Space>
-                                                        <Tag>{file.category || 'file'}</Tag>
-                                                        <Text type="secondary">{file.size || file.sizeFormatted}</Text>
-                                                    </Space>
-                                                }
+                                {/* File Summary by Type */}
+                                {(() => {
+                                    const getFileType = (file) => {
+                                        const name = (file.name || file.filename || '').toLowerCase();
+                                        const ext = name.split('.').pop();
+                                        if (['pdf'].includes(ext)) return 'pdf';
+                                        if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) return 'image';
+                                        if (['doc', 'docx', 'txt', 'rtf', 'odt'].includes(ext)) return 'document';
+                                        if (['xls', 'xlsx', 'csv'].includes(ext)) return 'spreadsheet';
+                                        if (['ppt', 'pptx', 'odp'].includes(ext)) return 'presentation';
+                                        if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm'].includes(ext)) return 'video';
+                                        if (['mp3', 'wav', 'flac', 'aac', 'ogg'].includes(ext)) return 'audio';
+                                        if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return 'archive';
+                                        return 'other';
+                                    };
+
+                                    const summary = fileActivity.reduce((acc, file) => {
+                                        const type = getFileType(file);
+                                        acc[type] = (acc[type] || 0) + 1;
+                                        return acc;
+                                    }, {});
+
+                                    const typeConfig = {
+                                        pdf: { color: '#e74c3c', icon: '📄', label: 'PDFs' },
+                                        image: { color: '#3498db', icon: '🖼️', label: 'Images' },
+                                        document: { color: '#2ecc71', icon: '📝', label: 'Docs' },
+                                        spreadsheet: { color: '#27ae60', icon: '📊', label: 'Sheets' },
+                                        presentation: { color: '#e67e22', icon: '📽️', label: 'Slides' },
+                                        video: { color: '#9b59b6', icon: '🎬', label: 'Videos' },
+                                        audio: { color: '#1abc9c', icon: '🎵', label: 'Audio' },
+                                        archive: { color: '#f39c12', icon: '📦', label: 'Archives' },
+                                        other: { color: '#95a5a6', icon: '📎', label: 'Other' }
+                                    };
+
+                                    return (
+                                        <>
+                                            {fileActivity.length > 0 && (
+                                                <div style={{
+                                                    display: 'flex',
+                                                    flexWrap: 'wrap',
+                                                    gap: 8,
+                                                    marginBottom: 16,
+                                                    padding: '12px',
+                                                    background: 'rgba(255, 149, 0, 0.1)',
+                                                    borderRadius: 8
+                                                }}>
+                                                    {Object.entries(summary).map(([type, count]) => (
+                                                        <Tag
+                                                            key={type}
+                                                            style={{
+                                                                background: typeConfig[type]?.color || '#95a5a6',
+                                                                border: 'none',
+                                                                color: 'white',
+                                                                padding: '4px 10px',
+                                                                fontSize: 12
+                                                            }}
+                                                        >
+                                                            {typeConfig[type]?.icon} {typeConfig[type]?.label}: {count}
+                                                        </Tag>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            <List
+                                                size="small"
+                                                loading={activityLoading}
+                                                dataSource={fileActivity.slice(0, 20)}
+                                                locale={{ emptyText: 'No file activity' }}
+                                                renderItem={file => {
+                                                    const fileType = getFileType(file);
+                                                    const config = typeConfig[fileType];
+                                                    return (
+                                                        <List.Item>
+                                                            <List.Item.Meta
+                                                                avatar={
+                                                                    <Avatar
+                                                                        size="small"
+                                                                        style={{
+                                                                            background: config?.color || '#ff9500',
+                                                                            fontSize: 14
+                                                                        }}
+                                                                    >
+                                                                        {config?.icon?.charAt(0) || '📄'}
+                                                                    </Avatar>
+                                                                }
+                                                                title={
+                                                                    <Text ellipsis style={{ maxWidth: 250 }}>
+                                                                        {file.name || file.filename || 'Unknown File'}
+                                                                    </Text>
+                                                                }
+                                                                description={
+                                                                    <Space size="small">
+                                                                        <Tag color={config?.color} style={{ fontSize: 10 }}>
+                                                                            {config?.label || file.category || 'file'}
+                                                                        </Tag>
+                                                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                            {file.size || file.sizeFormatted || ''}
+                                                                        </Text>
+                                                                        {file.action && (
+                                                                            <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                                ({file.action})
+                                                                            </Text>
+                                                                        )}
+                                                                    </Space>
+                                                                }
+                                                            />
+                                                        </List.Item>
+                                                    );
+                                                }}
                                             />
-                                        </List.Item>
-                                    )}
-                                />
+                                        </>
+                                    );
+                                })()}
                             </Panel>
 
                             {/* Print Jobs */}
@@ -605,22 +771,69 @@ function Computers() {
                                 <List
                                     size="small"
                                     loading={activityLoading}
-                                    dataSource={printJobs.slice(0, 10)}
+                                    dataSource={printJobs.slice(0, 15)}
                                     locale={{ emptyText: 'No print jobs' }}
                                     renderItem={job => (
                                         <List.Item>
                                             <List.Item.Meta
-                                                avatar={<Avatar size="small" style={{ background: job.printType === 'color' ? '#7b2cbf' : '#6b6b80' }}><PrinterOutlined /></Avatar>}
-                                                title={job.documentName || 'Print Job'}
-                                                description={
-                                                    <Space>
-                                                        <Tag color={job.printType === 'color' ? 'magenta' : 'default'}>
-                                                            {job.printType?.toUpperCase() || 'B&W'}
-                                                        </Tag>
-                                                        <Text type="secondary">{job.totalPages || 1} pages</Text>
+                                                avatar={
+                                                    <Avatar
+                                                        size="small"
+                                                        style={{
+                                                            background: job.printType === 'color' || job.isColorPrint ? '#7b2cbf' : '#6b6b80'
+                                                        }}
+                                                    >
+                                                        <PrinterOutlined />
+                                                    </Avatar>
+                                                }
+                                                title={
+                                                    <Space size="small">
+                                                        <Text ellipsis style={{ maxWidth: 250 }}>
+                                                            {job.documentName || job.document || 'Print Job'}
+                                                        </Text>
                                                     </Space>
                                                 }
+                                                description={
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                        <Space size="small" wrap>
+                                                            <Tag color={job.printType === 'color' || job.isColorPrint ? 'magenta' : 'default'}>
+                                                                {job.printType === 'color' || job.isColorPrint ? 'COLOR' : 'B&W'}
+                                                            </Tag>
+                                                            <Text type="secondary">{job.totalPages || 1} pages</Text>
+                                                            {job.paperSize && job.paperSize !== 'Unknown' && (
+                                                                <Tag color="blue">{job.paperSize}</Tag>
+                                                            )}
+                                                            {job.duplexMode && job.duplexMode !== 'Single-sided' && (
+                                                                <Tag color="cyan">{job.duplexMode}</Tag>
+                                                            )}
+                                                        </Space>
+                                                        <Space size="small">
+                                                            <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                Printer: {job.printer || 'Unknown'}
+                                                            </Text>
+                                                            {job.printQuality && job.printQuality !== 'Normal' && (
+                                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                    • {job.printQuality}
+                                                                </Text>
+                                                            )}
+                                                            {job.sizeKB > 0 && (
+                                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                    • {job.sizeKB > 1024 ? `${(job.sizeKB / 1024).toFixed(1)} MB` : `${job.sizeKB} KB`}
+                                                                </Text>
+                                                            )}
+                                                        </Space>
+                                                    </div>
+                                                }
                                             />
+                                            <div style={{ textAlign: 'right' }}>
+                                                <Tag color={
+                                                    job.status === 'Printing' ? 'processing' :
+                                                        job.status === 'Completed' || job.status === 'completed' ? 'success' :
+                                                            job.status === 'Error' ? 'error' : 'default'
+                                                }>
+                                                    {job.status || 'Pending'}
+                                                </Tag>
+                                            </div>
                                         </List.Item>
                                     )}
                                 />

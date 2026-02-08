@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>HawkNine Portal</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
+    <style>
+        :root {
+            --primary: #00B4D8;
+            --primary-dark: #0077B6;
+            --bg-dark: #011627;
+            --surface: rgba(2, 48, 71, 0.95);
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --text: #ffffff;
+            --text-secondary: #94A3B8;
+            --accent: #FFB703;
+            --success: #00C853;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #011627 0%, #023047 50%, #011627 100%);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: rgba(1, 22, 39, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 180, 216, 0.2);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-img {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+        }
+
+        .logo-text {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 180, 216, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .user-name {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .sync-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .sync-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .sync-dot.offline {
+            background: var(--warning);
+        }
+
+        /* Navigation */
+        .nav-tabs {
+            display: flex;
+            gap: 8px;
+            padding: 16px 24px;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            overflow-x: auto;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .nav-tab:hover {
+            background: rgba(0, 180, 216, 0.1);
+            color: var(--text);
+        }
+
+        .nav-tab.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .nav-tab .badge {
+            background: var(--danger);
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: 6px;
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .page-section {
+            display: none;
+        }
+
+        .page-section.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .grid-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .grid-4 {
+            grid-template-columns: repeat(4, 1fr);
+        }
+
+        @media (max-width: 1024px) {
+            .grid-4 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .grid-3 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 600px) {
+
+            .grid-4,
+            .grid-3,
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Stats Cards */
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Item Cards */
+        .item-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .item-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+
+        .item-card.out-of-stock {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .item-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .item-category {
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: rgba(0, 180, 216, 0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        .item-price {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--success);
+        }
+
+        .item-stock {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .item-stock.low {
+            color: var(--warning);
+        }
+
+        .item-stock.out {
+            color: var(--danger);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.02);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 450px;
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        /* Form */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* Quantity Selector */
+        .quantity-selector {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .qty-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: rgba(0, 180, 216, 0.1);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .qty-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .qty-value {
+            font-size: 20px;
+            font-weight: 700;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        /* Service/Template Cards */
+        .service-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .service-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .service-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .service-price {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        /* Template Card */
+        .template-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .template-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(0, 180, 216, 0.1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .template-info {
+            flex: 1;
+        }
+
+        .template-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .template-type {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Pending Actions */
+        .pending-banner {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pending-text {
+            color: var(--warning);
+            font-size: 13px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 180, 216, 0.3);
+            border-radius: 3px;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-size: 11px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            margin-top: 40px;
+        }
+
+        .footer-logout {
+            margin-top: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <img src="logo.jpg" alt="Logo" class="logo-img">
+            <span class="logo-text">HawkNine</span>
+        </div>
+        <div class="header-right">
+            <div class="sync-status">
+                <span class="sync-dot" id="syncDot"></span>
+                <span id="syncText">Online</span>
+            </div>
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">U</div>
+                <span class="user-name" id="userName">User</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-tabs">
+        <button class="nav-tab active" data-section="store">🛒 Store</button>
+        <button class="nav-tab" data-section="services">💼 Services & Prices</button>
+        <button class="nav-tab" data-section="templates">📄 Templates</button>
+        <button class="nav-tab" data-section="guides">📚 Guides</button>
+        <button class="nav-tab" data-section="pending" id="pendingTab">⏳ Pending <span class="badge" id="pendingBadge"
+                style="display:none">0</span></button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Pending Actions Banner -->
+        <div class="pending-banner" id="pendingBanner" style="display:none">
+            <span class="pending-text">⏳ You have <strong id="pendingCount">0</strong> pending sales that will sync when
+                online</span>
+            <button class="btn btn-small btn-secondary" onclick="syncPendingActions()">Sync Now</button>
+        </div>
+
+        <!-- Store Section -->
+        <div class="page-section active" id="section-store">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📦 Inventory Stock</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('inventory')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-4" id="inventoryGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📦</div>
+                        <p>Loading inventory...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Services Section -->
+        <div class="page-section" id="section-services">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">💼 Services & Pricing</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('services')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="servicesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">💼</div>
+                        <p>Loading services...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Templates Section -->
+        <div class="page-section" id="section-templates">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📄 Templates</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('templates')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="templatesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📄</div>
+                        <p>Loading templates...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guides Section -->
+        <div class="page-section" id="section-guides">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📚 Guides & Help</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('guides')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="guidesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <p>Loading guides...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pending Section -->
+        <div class="page-section" id="section-pending">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">⏳ Pending Offline Actions</h2>
+                    <button class="btn btn-small btn-primary" onclick="syncPendingActions()">🔄 Sync All</button>
+                </div>
+                <div id="pendingList">
+                    <div class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <p>No pending actions</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div>HawkNine Desktop Portal • Last sync: <span id="lastSyncTime">Never</span></div>
+            <div class="footer-logout">
+                <button class="btn btn-danger" id="logoutBtn">🔒 End Session & Lock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sale Modal -->
+    <div class="modal-overlay" id="saleModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Record Sale</h3>
+                <button class="modal-close" onclick="closeSaleModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="font-size: 20px; font-weight: 700;" id="saleItemName">Item Name</div>
+                    <div style="font-size: 24px; color: var(--success); font-weight: 700;" id="saleItemPrice">KSH 0
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Quantity</label>
+                    <div class="quantity-selector">
+                        <button class="qty-btn" onclick="adjustQuantity(-1)">−</button>
+                        <span class="qty-value" id="saleQuantity">1</span>
+                        <button class="qty-btn" onclick="adjustQuantity(1)">+</button>
+                    </div>
+                </div>
+
+                <div
+                    style="background: rgba(0, 200, 83, 0.1); padding: 16px; border-radius: 8px; text-align: center; margin: 16px 0;">
+                    <div style="font-size: 12px; color: var(--text-secondary);">Total Amount</div>
+                    <div style="font-size: 28px; font-weight: 700; color: var(--success);" id="saleTotal">KSH 0</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Note (optional)</label>
+                    <input type="text" class="form-input" id="saleNote" placeholder="e.g. Client name, PC number...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSaleModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirmSaleBtn" onclick="confirmSale()">Confirm Sale</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        // State
+        let currentUser = null;
+        let selectedItem = null;
+        let saleQuantity = 1;
+        let isOnline = true;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            setupNavigation();
+            loadAllData();
+            updatePendingCount();
+
+            // Check online status
+            setInterval(checkOnlineStatus, 5000);
+        });
+
+        // Navigation
+        function setupNavigation() {
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const section = tab.dataset.section;
+                    showSection(section);
+                    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                });
+            });
+        }
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(`section-${sectionId}`).classList.add('active');
+        }
+
+        // Data Loading
+        function loadAllData() {
+            ipcRenderer.send('get-portal-data');
+        }
+
+        function refreshData(type) {
+            ipcRenderer.send('refresh-portal-data', { type });
+        }
+
+        // IPC Listeners
+        ipcRenderer.on('portal-data', (event, data) => {
+            if (data.user) {
+                currentUser = data.user;
+                document.getElementById('userName').textContent = data.user.name || data.user.username;
+                document.getElementById('userAvatar').textContent = (data.user.name || data.user.username || 'U').charAt(0).toUpperCase();
+            }
+
+            if (data.inventory) renderInventory(data.inventory);
+            if (data.services) renderServices(data.services);
+            if (data.templates) renderTemplates(data.templates);
+            if (data.guides) renderGuides(data.guides);
+            if (data.pendingActions) updatePendingSection(data.pendingActions);
+            if (data.lastSync) {
+                document.getElementById('lastSyncTime').textContent = new Date(data.lastSync).toLocaleString();
+            }
+
+            updateOnlineStatus(data.isOnline);
+        });
+
+        ipcRenderer.on('sale-result', (event, result) => {
+            if (result.success) {
+                alert('✅ ' + result.message);
+                closeSaleModal();
+                loadAllData();
+            } else {
+                alert('❌ ' + result.message);
+            }
+        });
+
+        ipcRenderer.on('sync-result', (event, result) => {
+            if (result.success) {
+                alert(`✅ Synced ${result.synced} action(s)`);
+                loadAllData();
+            } else {
+                alert('❌ Sync failed: ' + result.message);
+            }
+        });
+
+        // Render Functions
+        function renderInventory(items) {
+            const grid = document.getElementById('inventoryGrid');
+            if (!items || items.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No inventory items available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = items.map(item => {
+                const isLow = item.stock <= (item.lowStockThreshold || 5);
+                const isOut = item.stock <= 0;
+                const stockClass = isOut ? 'out' : (isLow ? 'low' : '');
+
+                return `
+                    <div class="item-card ${isOut ? 'out-of-stock' : ''}" onclick="${isOut ? '' : `openSaleModal('${item._id}', '${item.name}', ${item.price}, ${item.stock})`}">
+                        <div class="item-category">${item.category || 'General'}</div>
+                        <div class="item-name">${item.name}</div>
+                        <div class="item-price">KSH ${(item.price || 0).toLocaleString()}</div>
+                        <div class="item-stock ${stockClass}">${isOut ? 'Out of Stock' : `${item.stock} in stock`}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderServices(services) {
+            const grid = document.getElementById('servicesGrid');
+            if (!services || services.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">💼</div><p>No services available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = services.map(svc => `
+                <div class="service-card">
+                    <div class="service-name">${svc.name}</div>
+                    <div class="service-desc">${svc.description || 'No description'}</div>
+                    <div class="service-price">KSH ${(svc.price || 0).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderTemplates(templates) {
+            const grid = document.getElementById('templatesGrid');
+            if (!templates || templates.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📄</div><p>No templates available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = templates.map(tpl => `
+                <div class="template-card">
+                    <div class="template-icon">${getFileIcon(tpl.type)}</div>
+                    <div class="template-info">
+                        <div class="template-name">${tpl.title}</div>
+                        <div class="template-type">${tpl.category || 'General'} • ${tpl.type || 'Document'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderGuides(guides) {
+            const grid = document.getElementById('guidesGrid');
+            if (!guides || guides.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📚</div><p>No guides available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = guides.map(guide => `
+                <div class="template-card">
+                    <div class="template-icon">📖</div>
+                    <div class="template-info">
+                        <div class="template-name">${guide.title}</div>
+                        <div class="template-type">${guide.category || 'General'} • ${guide.readTime || '5 min read'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getFileIcon(type) {
+            switch ((type || '').toLowerCase()) {
+                case 'word': return '📝';
+                case 'excel': return '📊';
+                case 'pdf': return '📕';
+                case 'powerpoint': return '📽️';
+                default: return '📄';
+            }
+        }
+
+        // Sale Modal
+        function openSaleModal(id, name, price, stock) {
+            selectedItem = { id, name, price, stock };
+            saleQuantity = 1;
+            document.getElementById('saleItemName').textContent = name;
+            document.getElementById('saleItemPrice').textContent = `KSH ${price.toLocaleString()} / unit`;
+            document.getElementById('saleQuantity').textContent = '1';
+            document.getElementById('saleTotal').textContent = `KSH ${price.toLocaleString()}`;
+            document.getElementById('saleNote').value = '';
+            document.getElementById('saleModal').classList.add('active');
+        }
+
+        function closeSaleModal() {
+            document.getElementById('saleModal').classList.remove('active');
+            selectedItem = null;
+            saleQuantity = 1;
+        }
+
+        function adjustQuantity(delta) {
+            if (!selectedItem) return;
+            const newQty = saleQuantity + delta;
+            if (newQty < 1 || newQty > selectedItem.stock) return;
+            saleQuantity = newQty;
+            document.getElementById('saleQuantity').textContent = saleQuantity;
+            document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
+        }
+
+        function confirmSale() {
+            if (!selectedItem) return;
+            const note = document.getElementById('saleNote').value;
+            ipcRenderer.send('record-sale', {
+                itemId: selectedItem.id,
+                itemName: selectedItem.name,
+                quantity: saleQuantity,
+                unitPrice: selectedItem.price,
+                total: selectedItem.price * saleQuantity,
+                note
+            });
+        }
+
+        // Pending Actions
+        function updatePendingSection(actions) {
+            const list = document.getElementById('pendingList');
+            const badge = document.getElementById('pendingBadge');
+            const banner = document.getElementById('pendingBanner');
+            const countSpan = document.getElementById('pendingCount');
+
+            if (!actions || actions.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div><p>No pending actions - all synced!</p></div>';
+                badge.style.display = 'none';
+                banner.style.display = 'none';
+                return;
+            }
+
+            badge.textContent = actions.length;
+            badge.style.display = 'inline';
+            banner.style.display = 'flex';
+            countSpan.textContent = actions.length;
+
+            list.innerHTML = actions.map(action => `
+                <div class="card" style="margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${action.payload?.itemName || action.type}</strong>
+                            <div style="font-size: 12px; color: var(--text-secondary);">
+                                Qty: ${action.payload?.quantity || 1} • ${new Date(action.createdAt).toLocaleString()}
+                            </div>
+                        </div>
+                        <div style="color: var(--warning); font-size: 12px;">
+                            ⏳ Pending (${action.attempts || 0} attempts)
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updatePendingCount() {
+            ipcRenderer.send('get-pending-count');
+        }
+
+        function syncPendingActions() {
+            ipcRenderer.send('sync-pending-actions');
+        }
+
+        // Online Status
+        function checkOnlineStatus() {
+            ipcRenderer.send('check-online-status');
+        }
+
+        function updateOnlineStatus(online) {
+            isOnline = online;
+            const dot = document.getElementById('syncDot');
+            const text = document.getElementById('syncText');
+            if (online) {
+                dot.classList.remove('offline');
+                text.textContent = 'Online';
+            } else {
+                dot.classList.add('offline');
+                text.textContent = 'Offline';
+            }
+        }
+
+        ipcRenderer.on('online-status', (event, status) => {
+            updateOnlineStatus(status.isOnline);
+        });
+
+        // Logout
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            if (confirm('Are you sure you want to end your session? The computer will lock.')) {
+                ipcRenderer.send('logout-request');
+            }
+        });
+    </script>
+</body>
+
+</html>

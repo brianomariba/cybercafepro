@@ -24,6 +24,7 @@ import {
   FileWordOutlined,
   FileExcelOutlined,
   ShopOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -34,6 +35,7 @@ import Templates from './pages/Templates';
 import Guidance from './pages/Guidance';
 import Services from './pages/Services';
 import Store from './pages/Store';
+import Submissions from './pages/Submissions';
 import { connectSocket, disconnectSocket } from './services/api';
 
 import './index.css';
@@ -116,6 +118,11 @@ const menuItems = [
     key: 'guidance',
     icon: <BulbOutlined />,
     label: 'Guidance',
+  },
+  {
+    key: 'submissions',
+    icon: <UploadOutlined />,
+    label: 'Submit Document',
   },
   {
     type: 'divider',
@@ -469,6 +476,8 @@ function App() {
         return <Templates isDarkMode={isDarkMode} />;
       case 'guidance':
         return <Guidance isDarkMode={isDarkMode} />;
+      case 'submissions':
+        return <Submissions user={user} isDarkMode={isDarkMode} />;
       default:
         return <Dashboard user={user} isDarkMode={isDarkMode} onNavigate={handleNavigate} />;
     }

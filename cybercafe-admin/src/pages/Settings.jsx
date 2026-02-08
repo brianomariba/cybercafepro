@@ -28,7 +28,7 @@ import {
     PictureOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -69,6 +69,13 @@ function Settings() {
     const [editingCategory, setEditingCategory] = useState(null);
     const [categoryForm] = Form.useForm();
 
+    // Portal auth settings state
+    const [portalAuthSettings, setPortalAuthSettings] = useState({
+        otpEnabled: true,
+        sessionDurationHours: 24
+    });
+    const [updatingPortalAuth, setUpdatingPortalAuth] = useState(false);
+
     // Default categories for dropdown
     const defaultCategories = [
         { key: 'printing', name: 'Printing', icon: 'printer', color: '#FFB703' },
@@ -88,15 +95,17 @@ function Settings() {
     const loadData = async () => {
         setLoadingServices(true);
         try {
-            const [servicesData, computersData, settingsData, categoriesData] = await Promise.all([
+            const [servicesData, computersData, settingsData, categoriesData, portalAuthData] = await Promise.all([
                 getServices(),
                 getComputers(),
                 getSettings().catch(() => ({})),
-                getServiceCategories().catch(() => [])
+                getServiceCategories().catch(() => []),
+                getPortalAuthSettings().catch(() => ({ otpEnabled: true, sessionDurationHours: 24 }))
             ]);
             setServices(servicesData || []);
             setComputers(computersData || []);
             setCategories(categoriesData || []);
+            setPortalAuthSettings(portalAuthData);
 
             // Load saved settings
             if (settingsData.generalSettings) {
@@ -166,6 +175,23 @@ function Settings() {
             message.error(error.response?.data?.error || 'Failed to change password');
         } finally {
             setChangingPassword(false);
+        }
+    };
+
+    // Toggle portal OTP setting
+    const handleTogglePortalOtp = async (enabled) => {
+        setUpdatingPortalAuth(true);
+        try {
+            const result = await updatePortalAuthSettings({
+                ...portalAuthSettings,
+                otpEnabled: enabled
+            });
+            setPortalAuthSettings(prev => ({ ...prev, otpEnabled: enabled }));
+            message.success(result.message || `Portal OTP ${enabled ? 'enabled' : 'disabled'}`);
+        } catch (error) {
+            message.error(error.response?.data?.error || 'Failed to update portal auth settings');
+        } finally {
+            setUpdatingPortalAuth(false);
         }
     };
 
@@ -744,10 +770,36 @@ function Settings() {
                             }
                         >
                             <div className="settings-section">
+                                <div className="settings-item" style={{
+                                    background: 'rgba(0, 180, 216, 0.1)',
+                                    padding: '16px',
+                                    borderRadius: '12px',
+                                    border: '1px solid rgba(0, 180, 216, 0.3)',
+                                    marginBottom: '16px'
+                                }}>
+                                    <div className="settings-label">
+                                        <strong style={{ color: '#00B4D8' }}>🔐 Portal Login OTP</strong>
+                                        <span>Require email verification code for user portal login</span>
+                                    </div>
+                                    <Switch
+                                        checked={portalAuthSettings.otpEnabled}
+                                        onChange={handleTogglePortalOtp}
+                                        loading={updatingPortalAuth}
+                                        checkedChildren="ON"
+                                        unCheckedChildren="OFF"
+                                    />
+                                </div>
+                                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 16 }}>
+                                    {portalAuthSettings.otpEnabled
+                                        ? '✅ Users must verify with email OTP to access the portal'
+                                        : '⚠️ OTP is disabled - users can log in with password only'
+                                    }
+                                </Text>
+                                <Divider style={{ margin: '16px 0' }} />
                                 <div className="settings-item">
                                     <div className="settings-label">
-                                        <strong>Two-Factor Authentication</strong>
-                                        <span>Add an extra layer of security</span>
+                                        <strong>Two-Factor Authentication (Admin)</strong>
+                                        <span>Add an extra layer of security for admin</span>
                                     </div>
                                     <Switch />
                                 </div>

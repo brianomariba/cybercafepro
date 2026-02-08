@@ -1,7 +1,170 @@
 /**
  * Browser History Tracking
  * Enhanced URL tracking from active window detection with intelligent extraction
+ * Includes UI Automation for extracting actual URLs from browser address bars
  */
+
+const { exec } = require('child_process');
+
+/**
+ * Get the actual URL from Chrome/Edge address bar using UI Automation
+ * This is more reliable than extracting from window titles
+ */
+function getActiveTabUrl() {
+    return new Promise((resolve) => {
+        // PowerShell script to get URL from browser address bar using UI Automation
+        const psCommand = `
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName UIAutomationTypes
+            
+            $automationId = [System.Windows.Automation.AutomationElement]::AutomationIdProperty
+            $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
+            $classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
+            $controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+            
+            # Get focused window
+            $root = [System.Windows.Automation.AutomationElement]::FocusedElement
+            if (-not $root) { return '' }
+            
+            # Walk up to find browser window
+            $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+            $current = $root
+            $browserWindow = $null
+            
+            while ($current -ne $null) {
+                $className = $current.GetCurrentPropertyValue($classProperty)
+                if ($className -match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|Firefox') {
+                    $browserWindow = $current
+                    break
+                }
+                $current = $walker.GetParent($current)
+            }
+            
+            if (-not $browserWindow) { return '' }
+            
+            # Find the address bar (Edit control with URL pattern)
+            $condition = New-Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]::Edit)
+            $editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            
+            foreach ($edit in $editElements) {
+                try {
+                    $pattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                    if ($pattern) {
+                        $value = $pattern.Current.Value
+                        if ($value -match '^https?://|^www\\.') {
+                            return $value
+                        }
+                    }
+                } catch { }
+                
+                # Try Name property as fallback
+                $name = $edit.GetCurrentPropertyValue($nameProperty)
+                if ($name -match '^https?://|^www\\.') {
+                    return $name
+                }
+            }
+            
+            return ''
+        `;
+
+        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`, { timeout: 3000 }, (error, stdout, stderr) => {
+            if (error || !stdout || stdout.trim() === '') {
+                resolve(null);
+                return;
+            }
+            let url = stdout.trim();
+            // Normalize URL
+            if (url && !url.startsWith('http')) {
+                url = 'https://' + url;
+            }
+            resolve(url);
+        });
+    });
+}
+
+/**
+ * Read browser history from SQLite databases (Chrome, Edge, Firefox)
+ * Note: This reads the history files which may be locked while browser is running
+ */
+function getBrowserHistoryFromDB(hoursBack = 1) {
+    return new Promise((resolve) => {
+        const psCommand = `
+            $results = @()
+            $cutoffTime = (Get-Date).AddHours(-${hoursBack})
+            $cutoffChrome = [int64]((Get-Date).AddHours(-${hoursBack}).ToUniversalTime() - [DateTime]'1601-01-01').TotalMicroseconds
+            
+            # Chrome History
+            $chromePath = "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\History"
+            if (Test-Path $chromePath) {
+                try {
+                    $tempPath = "$env:TEMP\\chrome_history_temp.db"
+                    Copy-Item $chromePath $tempPath -Force -ErrorAction SilentlyContinue
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempPath;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT url, title, last_visit_time FROM urls WHERE last_visit_time > $cutoffChrome ORDER BY last_visit_time DESC LIMIT 20"
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $results += [PSCustomObject]@{
+                            Browser = 'Chrome'
+                            Url = $reader['url']
+                            Title = $reader['title']
+                            VisitTime = [DateTime]::FromFileTimeUtc($reader['last_visit_time'] * 10)
+                        }
+                    }
+                    $conn.Close()
+                    Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+            
+            # Edge History
+            $edgePath = "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\History"
+            if (Test-Path $edgePath) {
+                try {
+                    $tempPath = "$env:TEMP\\edge_history_temp.db"
+                    Copy-Item $edgePath $tempPath -Force -ErrorAction SilentlyContinue
+                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempPath;Version=3;Read Only=True;")
+                    $conn.Open()
+                    $cmd = $conn.CreateCommand()
+                    $cmd.CommandText = "SELECT url, title, last_visit_time FROM urls WHERE last_visit_time > $cutoffChrome ORDER BY last_visit_time DESC LIMIT 20"
+                    $reader = $cmd.ExecuteReader()
+                    while ($reader.Read()) {
+                        $results += [PSCustomObject]@{
+                            Browser = 'Edge'
+                            Url = $reader['url']
+                            Title = $reader['title']
+                            VisitTime = [DateTime]::FromFileTimeUtc($reader['last_visit_time'] * 10)
+                        }
+                    }
+                    $conn.Close()
+                    Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+            
+            $results | ConvertTo-Json -Depth 2
+        `;
+
+        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ')}"`, { timeout: 5000 }, (error, stdout, stderr) => {
+            if (error || !stdout || stdout.trim() === '' || stdout.trim() === 'null') {
+                resolve([]);
+                return;
+            }
+            try {
+                const parsed = JSON.parse(stdout);
+                const history = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+                resolve(history.map(h => ({
+                    url: h.Url,
+                    title: h.Title,
+                    browser: h.Browser,
+                    visitTime: h.VisitTime,
+                    timestamp: new Date().toISOString()
+                })));
+            } catch (e) {
+                resolve([]);
+            }
+        });
+    });
+}
 
 // Domain to category mapping
 const CATEGORY_DOMAINS = {
@@ -275,4 +438,12 @@ class LiveUrlTracker {
     }
 }
 
-module.exports = { LiveUrlTracker, extractUrlFromTitle, categorizeUrl, isValidBrowsableUrl };
+module.exports = {
+    LiveUrlTracker,
+    extractUrlFromTitle,
+    categorizeUrl,
+    isValidBrowsableUrl,
+    getActiveTabUrl,
+    getBrowserHistoryFromDB
+};
+

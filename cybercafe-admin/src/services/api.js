@@ -217,6 +217,18 @@ export const getActivityLogs = async (params = {}) => {
     return response.data;
 };
 
+// ==================== PORTAL AUTH SETTINGS ====================
+
+export const getPortalAuthSettings = async () => {
+    const response = await api.get('/admin/portal-auth-settings');
+    return response.data;
+};
+
+export const updatePortalAuthSettings = async (settings) => {
+    const response = await api.put('/admin/portal-auth-settings', settings);
+    return response.data;
+};
+
 // ==================== STATS ====================
 
 export const getStats = async () => {
@@ -524,13 +536,34 @@ export const removeFromBlocklist = async (id) => (await api.delete(`/admin/block
 export const changeAdminPassword = async (currentPassword, newPassword) =>
     (await api.post('/admin/change-password', { currentPassword, newPassword })).data;
 
-// ==================== INVENTORY ====================
 export const getInventory = async () => (await api.get('/inventory')).data;
 export const addInventoryItem = async (data) => (await api.post('/admin/inventory', data)).data;
 export const updateInventoryItem = async (id, data) => (await api.put(`/admin/inventory/${id}`, data)).data;
 export const deleteInventoryItem = async (id) => (await api.delete(`/admin/inventory/${id}`)).data;
 export const getInventorySettings = async () => (await api.get('/inventory/settings')).data;
 export const updateInventorySettings = async (data) => (await api.put('/admin/inventory/settings', data)).data;
+export const getLowStockItems = async () => (await api.get('/admin/inventory/low-stock')).data;
+export const getInventoryStats = async () => (await api.get('/admin/inventory/stats')).data;
+
+// ==================== USER SUBMISSIONS ====================
+export const getSubmissions = async (status, targetType) => {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (targetType) params.append('targetType', targetType);
+    const url = `/admin/submissions${params.toString() ? '?' + params.toString() : ''}`;
+    return (await api.get(url)).data;
+};
+export const getSubmissionStats = async () => (await api.get('/admin/submissions/stats')).data;
+export const downloadSubmissionUrl = (id) => `${API_BASE_URL}/admin/submissions/${id}/download`;
+export const approveSubmission = async (id, notes, resourceData) =>
+    (await api.put(`/admin/submissions/${id}/approve`, { notes, resourceData })).data;
+export const rejectSubmission = async (id, notes) =>
+    (await api.put(`/admin/submissions/${id}/reject`, { notes })).data;
+export const deleteSubmission = async (id) => (await api.delete(`/admin/submissions/${id}`)).data;
+
+// ==================== COMPUTER DISCONNECT ====================
+export const disconnectComputer = async (clientId, quit = false) =>
+    (await api.post('/admin/command', { clientId, command: 'disconnect', params: { quit } })).data;
 
 // Default export
 export default {
@@ -611,5 +644,16 @@ export default {
     getBlocklist,
     addToBlocklist,
     removeFromBlocklist,
-    changeAdminPassword
+    changeAdminPassword,
+
+    // User Submissions
+    getSubmissions,
+    getSubmissionStats,
+    downloadSubmissionUrl,
+    approveSubmission,
+    rejectSubmission,
+    deleteSubmission,
+
+    // Computer Management
+    disconnectComputer
 };

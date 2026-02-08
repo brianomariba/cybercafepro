@@ -36,6 +36,7 @@ import {
   ReadOutlined,
   CompassOutlined,
   ShoppingCartOutlined,
+  InboxOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -54,6 +55,7 @@ import Templates from './pages/Templates';
 import Learning from './pages/Learning';
 import Guidance from './pages/Guidance';
 import Inventory from './pages/Inventory';
+import Submissions from './pages/Submissions';
 import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats } from './services/api';
 
 import './App.css';
@@ -166,6 +168,11 @@ const menuItems = [
       { key: 'admin-learning', icon: <ReadOutlined />, label: 'Learning' },
       { key: 'admin-guidance', icon: <CompassOutlined />, label: 'Guidance' },
     ]
+  },
+  {
+    key: 'submissions',
+    icon: <InboxOutlined />,
+    label: 'User Submissions',
   },
   {
     key: 'reports',
@@ -442,6 +449,8 @@ function App() {
         return <Learning />;
       case 'admin-guidance':
         return <Guidance />;
+      case 'submissions':
+        return <Submissions />;
       case 'reports':
         return <Reports />;
       case 'settings':
