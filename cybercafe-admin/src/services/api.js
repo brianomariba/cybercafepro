@@ -466,6 +466,10 @@ export const connectSocket = (callbacks = {}) => {
         if (callbacks.onDocumentRequestUpdated) callbacks.onDocumentRequestUpdated(data);
     });
 
+    socket.on('agent-error', (data) => {
+        if (callbacks.onAgentError) callbacks.onAgentError(data);
+    });
+
     return socket;
 };
 

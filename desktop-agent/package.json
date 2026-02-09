@@ -1,6 +1,6 @@
 {
   "name": "desktop-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Desktop agent for HawkNine Cybercafe Management System",
   "main": "main.js",
   "scripts": {

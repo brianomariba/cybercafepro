@@ -101,6 +101,12 @@ function Computers() {
                         message.success('Screenshot captured');
                     }
                 }
+            },
+            onAgentError: (data) => {
+                if (selectedComputer && data.clientId === selectedComputer.clientId) {
+                    setScreenshotLoading(false);
+                    message.error(`Failed to capture screenshot: ${data.message}`);
+                }
             }
         });
 
@@ -191,10 +197,22 @@ function Computers() {
         setScreenshotLoading(true);
         setScreenshotData(null);
         setScreenshotVisible(true);
+
+        // Timeout handler
+        const timer = setTimeout(() => {
+            setScreenshotLoading(loading => {
+                if (loading) {
+                    message.error('Screenshot request timed out. The agent may be unresponsive.');
+                    return false;
+                }
+                return loading;
+            });
+        }, 15000);
+
         try {
             await sendCommand(selectedComputer.clientId, 'screenshot');
-            // message.loading('Capturing screenshot...', 2);
         } catch (error) {
+            clearTimeout(timer);
             message.error('Failed to request screenshot');
             setScreenshotLoading(false);
             setScreenshotVisible(false);
