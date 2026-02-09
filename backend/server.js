@@ -92,6 +92,26 @@ io.on('connection', (socket) => {
                 message: data.message
             });
             console.log(`[SOCKET] Error from ${clientId}: ${data.message}`);
+        } else if (data.type === 'document-downloaded') {
+            // Update document status in DB
+            if (data.documentId) {
+                SharedDocument.findOneAndUpdate(
+                    { id: data.documentId },
+                    {
+                        status: 'downloaded',
+                        downloadedAt: new Date(data.timestamp)
+                    }
+                ).then(doc => {
+                    if (doc) {
+                        io.emit('document-status-update', {
+                            id: doc.id,
+                            status: 'downloaded',
+                            downloadedAt: data.timestamp
+                        });
+                        console.log(`[DOCUMENT] Download confirmed for ${doc.filename} by ${clientId}`);
+                    }
+                });
+            }
         }
     });
 
@@ -2813,10 +2833,32 @@ app.post('/api/v1/documents/send-to-computer', upload.single('file'), (req, res)
 
         const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
 
+        // Create SharedDocument record
+        const docRecord = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: (req.file.size / 1024).toFixed(1) + ' KB', // Simple format
+            mimetype: req.file.mimetype,
+            from: {
+                user: 'Admin',
+                clientId: 'admin'
+            },
+            to: {
+                user: targetHostname || 'Computer',
+                clientId: targetClientId
+            },
+            message: message || 'File from Admin',
+            status: 'pending' // pending until downloaded
+        });
+
         // Emit to the specific agent
         io.emit('document-for-agent', {
             targetClientId: targetClientId,
             document: {
+                id: docRecord.id, // Include ID for tracking download status
                 filename: req.file.originalname,
                 downloadUrl: fileUrl,
                 message: message || 'File from Admin',
@@ -2824,6 +2866,9 @@ app.post('/api/v1/documents/send-to-computer', upload.single('file'), (req, res)
                 mimetype: req.file.mimetype
             }
         });
+
+        // Emit to admin dashboard to update Documents list
+        io.emit('document-shared', docRecord);
 
         console.log(`[DOCUMENT] Sent ${req.file.originalname} to ${targetHostname || targetClientId}`);
 

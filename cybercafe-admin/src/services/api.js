@@ -441,6 +441,14 @@ export const connectSocket = (callbacks = {}) => {
         if (callbacks.onDocumentReceived) callbacks.onDocumentReceived(data);
     });
 
+    socket.on('document-shared', (data) => {
+        if (callbacks.onDocumentShared) callbacks.onDocumentShared(data);
+    });
+
+    socket.on('document-status-update', (data) => {
+        if (callbacks.onDocumentStatusUpdate) callbacks.onDocumentStatusUpdate(data);
+    });
+
     socket.on('document-downloaded', (data) => {
         if (callbacks.onDocumentDownloaded) callbacks.onDocumentDownloaded(data);
     });

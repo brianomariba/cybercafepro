@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Upload, Modal, message, Row, Col, Collapse, Badge, Empty, Tooltip, Progress, Tabs, List, Avatar } from 'antd';
+import { io } from 'socket.io-client';
 import {
     FileOutlined,
     UploadOutlined,
@@ -82,6 +83,38 @@ function Documents() {
 
     useEffect(() => {
         fetchData();
+
+        // Connect to socket for real-time updates
+        const socket = io(import.meta.env.VITE_SOCKET_URL || 'https://api.hawkninegroup.com', {
+            transports: ['websocket', 'polling']
+        });
+
+        socket.on('connect', () => {
+            console.log('Connected to socket for documents');
+        });
+
+        socket.on('document-shared', (newDoc) => {
+            setDocuments(prev => [newDoc, ...prev]);
+            setStats(prev => ({ ...prev, total: prev.total + 1, pending: prev.pending + 1 }));
+            message.info(`New document shared: ${newDoc.filename}`);
+        });
+
+        socket.on('document-status-update', (update) => {
+            setDocuments(prev => prev.map(doc =>
+                doc.id === update.id ? { ...doc, status: update.status, downloadedAt: update.downloadedAt } : doc
+            ));
+            if (update.status === 'downloaded') {
+                setStats(prev => ({
+                    ...prev,
+                    pending: Math.max(0, prev.pending - 1),
+                    downloaded: prev.downloaded + 1
+                }));
+            }
+        });
+
+        return () => {
+            socket.disconnect();
+        };
     }, []);
 
     // Filter documents

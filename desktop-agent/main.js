@@ -1184,7 +1184,7 @@ function setupSocket() {
         if (data.targetClientId && data.targetClientId !== CLIENT_ID) return;
         console.log(`Received Document: ${data.document.filename}`);
         if (data.document && data.document.downloadUrl) {
-            downloadFile(data.document.downloadUrl, data.document.filename, data.document.message);
+            downloadFile(data.document.downloadUrl, data.document.filename, data.document.message, data.document.id);
         }
     });
 }
@@ -1354,9 +1354,9 @@ function unlockSession() {
     ipcMain.emit('update-tray');
 }
 
-async function downloadFile(url, filename, messageText) {
+async function downloadFile(url, filename, messageText, documentId = null) {
     try {
-        const desktopPath = path.join(os.homedir(), 'Desktop');
+        const desktopPath = app.getPath('desktop');
         if (!fs.existsSync(desktopPath)) {
             try { fs.mkdirSync(desktopPath); } catch (e) { }
         }
@@ -1376,6 +1376,17 @@ async function downloadFile(url, filename, messageText) {
 
         writer.on('finish', () => {
             console.log('Download complete');
+
+            // Notify server of successful download
+            if (socket && socket.connected && documentId) {
+                socket.emit('agent-response', {
+                    type: 'document-downloaded',
+                    clientId: CLIENT_ID,
+                    documentId: documentId,
+                    timestamp: new Date().toISOString()
+                });
+            }
+
             const { dialog } = require('electron');
             dialog.showMessageBox(null, {
                 type: 'info',
