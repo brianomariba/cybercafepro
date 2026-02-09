@@ -15,6 +15,12 @@ const TransactionSchema = new mongoose.Schema({
         printBW: Number,
         printColor: Number
     },
+    // Inventory fields
+    itemId: { type: String },
+    itemName: { type: String },
+    quantity: { type: Number },
+    seller: { type: String }, // e.g. 'admin' or hostname
+    reason: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 

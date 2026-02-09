@@ -544,6 +544,7 @@ export const getInventorySettings = async () => (await api.get('/inventory/setti
 export const updateInventorySettings = async (data) => (await api.put('/admin/inventory/settings', data)).data;
 export const getLowStockItems = async () => (await api.get('/admin/inventory/low-stock')).data;
 export const getInventoryStats = async () => (await api.get('/admin/inventory/stats')).data;
+export const sellInventoryItem = async (id, data) => (await api.post(`/inventory/${id}/sell`, data)).data;
 
 // ==================== USER SUBMISSIONS ====================
 export const getSubmissions = async (status, targetType) => {
@@ -635,6 +636,7 @@ export default {
     addInventoryItem,
     updateInventoryItem,
     deleteInventoryItem,
+    sellInventoryItem,
     getInventorySettings,
     updateInventorySettings,
 

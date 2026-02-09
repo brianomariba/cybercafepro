@@ -634,6 +634,7 @@
         <button class="nav-tab" data-section="services">💼 Services & Prices</button>
         <button class="nav-tab" data-section="templates">📄 Templates</button>
         <button class="nav-tab" data-section="guides">📚 Guides</button>
+        <button class="nav-tab" data-section="printers">🖨️ My Printers</button>
         <button class="nav-tab" data-section="pending" id="pendingTab">⏳ Pending <span class="badge" id="pendingBadge"
                 style="display:none">0</span></button>
     </div>
@@ -706,6 +707,22 @@
                     <div class="empty-state">
                         <div class="empty-icon">📚</div>
                         <p>Loading guides...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Printers Section -->
+        <div class="page-section" id="section-printers">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🖨️ Connected Printers</h2>
+                    <button class="btn btn-small btn-secondary" onclick="loadAllData()">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="printersGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">🖨️</div>
+                        <p>Loading printers...</p>
                     </div>
                 </div>
             </div>
@@ -834,6 +851,7 @@
             if (data.services) renderServices(data.services);
             if (data.templates) renderTemplates(data.templates);
             if (data.guides) renderGuides(data.guides);
+            if (data.printers) renderPrinters(data.printers);
             if (data.pendingActions) updatePendingSection(data.pendingActions);
             if (data.lastSync) {
                 document.getElementById('lastSyncTime').textContent = new Date(data.lastSync).toLocaleString();
@@ -934,6 +952,27 @@
                         <div class="template-name">${guide.title}</div>
                         <div class="template-type">${guide.category || 'General'} • ${guide.readTime || '5 min read'}</div>
                         <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('guides', '${guide._id}', '${guide.title}')">📖 Read</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderPrinters(printers) {
+            const grid = document.getElementById('printersGrid');
+            if (!printers || printers.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🖨️</div><p>No printers found</p></div>';
+                return;
+            }
+
+            grid.innerHTML = printers.map(p => `
+                <div class="template-card">
+                    <div class="template-icon">🖨️</div>
+                    <div class="template-info">
+                        <div class="template-name">${p.name}</div>
+                        <div class="template-type">${p.driver} • ${p.isConnected !== false ? '✅ Ready' : '❌ Offline'}</div>
+                        <div style="font-size: 11px; margin-top: 4px; color: var(--text-secondary);">
+                            ${p.isColor ? '🌈 Color' : '⚫ B&W'} • ${p.port || 'USB/Network'}
+                        </div>
                     </div>
                 </div>
             `).join('');

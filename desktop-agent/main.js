@@ -65,17 +65,37 @@ const LOG_API_URL = config.server.baseUrl + '/api/v1/agent/log';
 const HEARTBEAT_INTERVAL = config.server.heartbeatInterval || 10000;
 const SCREENSHOT_INTERVAL = config.monitoring.screenshotInterval || 30000;
 
-// Generate unique Client ID (persistent across restarts using simple file)
-const CLIENT_ID_FILE = path.join(__dirname, '.client-id');
+// Generate unique Client ID (persistent across restarts and updates)
+// We use app.getPath('userData') to ensure the ID survives application updates
+const USER_DATA_PATH = app.getPath('userData');
+const CLIENT_ID_FILE = path.join(USER_DATA_PATH, '.client-id');
+const OLD_CLIENT_ID_FILE = path.join(__dirname, '.client-id');
+
 let CLIENT_ID;
 try {
+    // Check if we have an ID in the new persistent location
     if (fs.existsSync(CLIENT_ID_FILE)) {
         CLIENT_ID = fs.readFileSync(CLIENT_ID_FILE, 'utf8').trim();
-    } else {
+    }
+    // Migration: Check if we have an ID in the old installation folder
+    else if (fs.existsSync(OLD_CLIENT_ID_FILE)) {
+        CLIENT_ID = fs.readFileSync(OLD_CLIENT_ID_FILE, 'utf8').trim();
+        // Migrate to new location
+        if (!fs.existsSync(USER_DATA_PATH)) {
+            fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+        }
+        fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
+    }
+    // Generate new ID
+    else {
         CLIENT_ID = `${os.hostname()}-${uuidv4().slice(0, 8)}`;
+        if (!fs.existsSync(USER_DATA_PATH)) {
+            fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+        }
         fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
     }
 } catch (e) {
+    console.error('Client ID generation failed:', e);
     CLIENT_ID = os.hostname();
 }
 
@@ -549,6 +569,13 @@ ipcMain.on('check-online-status', async (event) => {
 
 // Helper: Send portal data to renderer
 async function sendPortalData(event) {
+    let printers = [];
+    try {
+        printers = await getInstalledPrinters();
+    } catch (e) {
+        console.error('Failed to get printers for portal:', e);
+    }
+
     event.reply('portal-data', {
         user: currentSession ? { name: currentSession.user, username: currentSession.user } : null,
         inventory: offlineStore.getInventory(),
@@ -558,6 +585,7 @@ async function sendPortalData(event) {
         settings: offlineStore.getSettings(),
         pendingActions: offlineStore.getPendingActions(),
         lastSync: offlineStore.getLastSync(),
+        printers,
         isOnline
     });
 }

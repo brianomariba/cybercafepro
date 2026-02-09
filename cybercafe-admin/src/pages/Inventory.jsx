@@ -13,7 +13,7 @@ import {
     DollarOutlined,
     InboxOutlined
 } from '@ant-design/icons';
-import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem, getInventorySettings, updateInventorySettings, connectSocket } from '../services/api';
+import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem, getInventorySettings, updateInventorySettings, sellInventoryItem, connectSocket } from '../services/api';
 
 const { Text, Title } = Typography;
 const formatKSH = (val) => `KSH ${val?.toLocaleString()}`;
@@ -26,7 +26,12 @@ function Inventory() {
     const [settingsVisible, setSettingsVisible] = useState(false);
     const [settings, setSettings] = useState({ showTotalItemsToUser: true, lowStockEmailEnabled: true });
 
+    // Sell Item State
+    const [sellModalVisible, setSellModalVisible] = useState(false);
+    const [sellingItem, setSellingItem] = useState(null);
+
     const [form] = Form.useForm();
+    const [sellForm] = Form.useForm();
 
     const fetchInventory = async () => {
         setLoading(true);
@@ -113,6 +118,30 @@ function Inventory() {
         }
     };
 
+    const handleSell = (item) => {
+        setSellingItem(item);
+        sellForm.setFieldsValue({ quantity: 1, reason: '' });
+        setSellModalVisible(true);
+    };
+
+    const submitSell = async (values) => {
+        if (!sellingItem) return;
+        try {
+            await sellInventoryItem(sellingItem._id, {
+                quantity: values.quantity,
+                reason: values.reason,
+                clientId: 'admin' // Indicate this sale was made from the admin panel
+            });
+            message.success(`Sold ${values.quantity}x ${sellingItem.name}`);
+            setSellModalVisible(false);
+            setSellingItem(null);
+            fetchInventory();
+        } catch (error) {
+            console.error(error);
+            message.error(error.response?.data?.error || 'Sale failed');
+        }
+    };
+
     const columns = [
         {
             title: 'Item Name',
@@ -169,6 +198,15 @@ function Inventory() {
             key: 'actions',
             render: (_, record) => (
                 <Space>
+                    <Tooltip title="Sell Item">
+                        <Button
+                            type="primary"
+                            ghost
+                            icon={<DollarOutlined />}
+                            onClick={() => handleSell(record)}
+                            disabled={record.stock <= 0}
+                        />
+                    </Tooltip>
                     <Tooltip title="Edit">
                         <Button icon={<EditOutlined />} onClick={() => handleEdit(record)} />
                     </Tooltip>
@@ -385,6 +423,61 @@ function Inventory() {
                             </div>
                         )}
                     </Form.Item>
+                </Form>
+            </Modal>
+
+            {/* Sell Item Modal */}
+            <Modal
+                title={
+                    <Space>
+                        <DollarOutlined style={{ color: '#52c41a' }} />
+                        <span>Sell Item: {sellingItem?.name}</span>
+                    </Space>
+                }
+                open={sellModalVisible}
+                onCancel={() => {
+                    setSellModalVisible(false);
+                    setSellingItem(null);
+                }}
+                onOk={() => sellForm.submit()}
+                okText="Complete Sale"
+                okButtonProps={{ type: 'primary', style: { background: '#52c41a' } }}
+            >
+                <Alert
+                    message={`Current Stock: ${sellingItem?.stock} units`}
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                />
+                <Form form={sellForm} layout="vertical" onFinish={submitSell}>
+                    <Form.Item
+                        name="quantity"
+                        label="Quantity"
+                        initialValue={1}
+                        rules={[
+                            { required: true, message: 'Enter quantity' },
+                            { type: 'number', min: 1, max: sellingItem?.stock, message: `Max quantity is ${sellingItem?.stock}` }
+                        ]}
+                    >
+                        <InputNumber style={{ width: '100%' }} min={1} max={sellingItem?.stock} autoFocus />
+                    </Form.Item>
+                    <Form.Item name="reason" label="Buyer / Reason (Optional)">
+                        <Input placeholder="e.g. Walk-in Customer" />
+                    </Form.Item>
+
+                    <div style={{ marginTop: 16, padding: 12, background: 'rgba(82, 196, 26, 0.1)', borderRadius: 8, textAlign: 'right' }}>
+                        <Form.Item shouldUpdate style={{ marginBottom: 0 }}>
+                            {() => {
+                                const qty = sellForm.getFieldValue('quantity') || 0;
+                                const price = sellingItem?.price || 0;
+                                return (
+                                    <Text strong style={{ fontSize: 18, color: '#52c41a' }}>
+                                        Total: {formatKSH(qty * price)}
+                                    </Text>
+                                );
+                            }}
+                        </Form.Item>
+                    </div>
                 </Form>
             </Modal>
 

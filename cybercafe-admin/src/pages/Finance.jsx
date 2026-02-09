@@ -21,6 +21,7 @@ import {
     MobileOutlined,
     ReloadOutlined,
     CheckCircleOutlined,
+    ShopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getTransactions, getTransactionSummary, getSessions, getComputers } from '../services/api';
@@ -109,6 +110,7 @@ function Finance() {
     const revenueByType = {
         sessions: transactions.filter(t => t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0),
         tasks: transactions.filter(t => t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0),
+        inventory: transactions.filter(t => t.type === 'inventory-sale').reduce((sum, t) => sum + (t.amount || 0), 0),
     };
 
     // Calculate revenue by computer from transactions
@@ -150,6 +152,7 @@ function Finance() {
         switch (type) {
             case 'session': return <DesktopOutlined style={{ color: '#00B4D8' }} />;
             case 'task_completion': return <CheckCircleOutlined style={{ color: '#00C853' }} />;
+            case 'inventory-sale': return <ShopOutlined style={{ color: '#FFB703' }} />;
             default: return <DollarOutlined />;
         }
     };
@@ -191,11 +194,13 @@ function Finance() {
             key: 'description',
             render: (desc, record) => (
                 <Space>
-                    <DesktopOutlined style={{ color: '#00B4D8' }} />
+                    {getTypeIcon(record.type)}
                     <div>
                         <Text strong>{desc || 'Transaction'}</Text>
                         <br />
-                        <Text type="secondary" style={{ fontSize: 12 }}>{record.hostname || 'N/A'}</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                            {record.seller ? `Seller: ${record.seller}` : (record.hostname || 'N/A')}
+                        </Text>
                     </div>
                 </Space>
             ),
@@ -335,7 +340,7 @@ function Finance() {
                         title={
                             <Space>
                                 <BarChartOutlined style={{ color: '#00C853' }} />
-                                <span>Weekly Revenue</span>
+                                <span style={{ fontFamily: 'Outfit' }}>Weekly Revenue</span>
                             </Space>
                         }
                         extra={
@@ -369,7 +374,7 @@ function Finance() {
                         )}
 
                         {/* Revenue by Type */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
                             <div style={{ padding: 16, background: 'rgba(0, 180, 216, 0.1)', borderRadius: 12, textAlign: 'center' }}>
                                 <DesktopOutlined style={{ fontSize: 24, color: '#00B4D8', marginBottom: 8 }} />
                                 <Title level={5} style={{ margin: 0, color: '#00B4D8' }}>{formatKSH(revenueByType.sessions)}</Title>
@@ -379,6 +384,11 @@ function Finance() {
                                 <CheckCircleOutlined style={{ fontSize: 24, color: '#00C853', marginBottom: 8 }} />
                                 <Title level={5} style={{ margin: 0, color: '#00C853' }}>{formatKSH(revenueByType.tasks)}</Title>
                                 <Text type="secondary" style={{ fontSize: 12 }}>Task Revenue</Text>
+                            </div>
+                            <div style={{ padding: 16, background: 'rgba(255, 183, 3, 0.1)', borderRadius: 12, textAlign: 'center' }}>
+                                <ShopOutlined style={{ fontSize: 24, color: '#FFB703', marginBottom: 8 }} />
+                                <Title level={5} style={{ margin: 0, color: '#FFB703' }}>{formatKSH(revenueByType.inventory)}</Title>
+                                <Text type="secondary" style={{ fontSize: 12 }}>Sales Revenue</Text>
                             </div>
                         </div>
                     </Card>
@@ -390,7 +400,7 @@ function Finance() {
                         title={
                             <Space>
                                 <RiseOutlined style={{ color: '#FFB703' }} />
-                                <span>Revenue Summary</span>
+                                <span style={{ fontFamily: 'Outfit' }}>Revenue Summary</span>
                             </Space>
                         }
                     >
@@ -409,7 +419,7 @@ function Finance() {
                             />
                         </div>
 
-                        <div>
+                        <div style={{ marginBottom: 24 }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
                                 <Space>
                                     <CheckCircleOutlined style={{ color: '#00C853' }} />
@@ -423,6 +433,21 @@ function Finance() {
                                 strokeColor="#00C853"
                             />
                         </div>
+
+                        <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                                <Space>
+                                    <ShopOutlined style={{ color: '#FFB703' }} />
+                                    <Text>Sales</Text>
+                                </Space>
+                                <Text strong style={{ color: '#FFB703' }}>{formatKSH(revenueByType.inventory)}</Text>
+                            </div>
+                            <Progress
+                                percent={stats.totalRevenue > 0 ? Math.round((revenueByType.inventory / stats.totalRevenue) * 100) : 0}
+                                showInfo={false}
+                                strokeColor="#FFB703"
+                            />
+                        </div>
                     </Card>
 
                     {/* Top Earning Computer */}
@@ -430,7 +455,7 @@ function Finance() {
                         title={
                             <Space>
                                 <RiseOutlined style={{ color: '#FFB703' }} />
-                                <span>Top Earner</span>
+                                <span style={{ fontFamily: 'Outfit' }}>Top Earner</span>
                             </Space>
                         }
                         style={{ marginTop: 24 }}
@@ -468,7 +493,7 @@ function Finance() {
                 title={
                     <Space>
                         <DesktopOutlined style={{ color: '#00B4D8' }} />
-                        <span>Revenue by Computer</span>
+                        <span style={{ fontFamily: 'Outfit' }}>Revenue by Computer</span>
                     </Space>
                 }
                 style={{ marginTop: 24 }}
@@ -506,7 +531,7 @@ function Finance() {
                 title={
                     <Space>
                         <ClockCircleOutlined style={{ color: '#FFB703' }} />
-                        <span>Recent Transactions</span>
+                        <span style={{ fontFamily: 'Outfit' }}>Recent Transactions</span>
                         <Badge count={transactions.length} style={{ backgroundColor: '#00B4D8' }} />
                     </Space>
                 }
@@ -521,11 +546,12 @@ function Finance() {
                         <Select
                             value={filterType}
                             onChange={setFilterType}
-                            style={{ width: 130 }}
+                            style={{ width: 150 }}
                             options={[
                                 { value: 'all', label: 'All Types' },
                                 { value: 'session', label: 'Sessions' },
                                 { value: 'task_completion', label: 'Tasks' },
+                                { value: 'inventory-sale', label: 'Inventory Sales' },
                             ]}
                         />
                     </Space>

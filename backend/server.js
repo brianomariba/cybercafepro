@@ -4887,14 +4887,17 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
 
         // Create a transaction record for the sale
         const transaction = await Transaction.create({
+            id: `txn-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             type: 'inventory-sale',
             amount: item.price * quantity,
-            description: `Sold ${quantity}x ${item.name}${reason ? ` - ${reason}` : ''}`,
+            description: `Sold ${quantity}x ${item.name}`,
             itemId: item._id,
             itemName: item.name,
-            quantity,
+            quantity: quantity,
+            seller: clientId || 'admin', // identify who sold it
+            reason: reason || 'Direct Sale',
             clientId: clientId || null,
-            timestamp: new Date(),
+            createdAt: new Date(),
             status: 'completed'
         });
 
@@ -5035,6 +5038,28 @@ app.get('/api/v1/admin/inventory/stats', requireAdminAuth, async (req, res) => {
     } catch (error) {
         console.error('[INVENTORY] Stats failed:', error);
         res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/transactions
+ * Returns list of all transactions (sales, sessions, etc.)
+ */
+app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
+    try {
+        const { limit = 100, type } = req.query;
+        const query = {};
+        // Allow querying by specific transaction types (e.g. 'inventory-sale')
+        if (type) query.type = type;
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 }) // Newest first
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        console.error('[TRANSACTIONS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch transactions' });
     }
 });
 
