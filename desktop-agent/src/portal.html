@@ -914,6 +914,7 @@
                     <div class="template-info">
                         <div class="template-name">${tpl.title}</div>
                         <div class="template-type">${tpl.category || 'General'} • ${tpl.type || 'Document'}</div>
+                        <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('templates', '${tpl._id}', '${tpl.title}')">📂 Open</button>
                     </div>
                 </div>
             `).join('');
@@ -932,9 +933,25 @@
                     <div class="template-info">
                         <div class="template-name">${guide.title}</div>
                         <div class="template-type">${guide.category || 'General'} • ${guide.readTime || '5 min read'}</div>
+                        <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('guides', '${guide._id}', '${guide.title}')">📖 Read</button>
                     </div>
                 </div>
             `).join('');
+        }
+
+        function openResource(type, id, title) {
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = '⏳ Opening...';
+            btn.disabled = true;
+
+            ipcRenderer.send('open-resource', { type, id, title });
+
+            // Re-enable button after a few seconds (in case opening fails silently)
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }, 5000);
         }
 
         function getFileIcon(type) {

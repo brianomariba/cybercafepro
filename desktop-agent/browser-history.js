@@ -2,9 +2,14 @@
  * Browser History Tracking
  * Enhanced URL tracking from active window detection with intelligent extraction
  * Includes UI Automation for extracting actual URLs from browser address bars
+ * Uses sql.js for reliable history database reading without native dependencies
  */
 
 const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const initSqlJs = require('sql.js');
 
 /**
  * Get the actual URL from Chrome/Edge address bar using UI Automation
@@ -83,87 +88,110 @@ function getActiveTabUrl() {
 }
 
 /**
- * Read browser history from SQLite databases (Chrome, Edge, Firefox)
- * Note: This reads the history files which may be locked while browser is running
+ * Helper to safely copy and read a locked file using sql.js
  */
-function getBrowserHistoryFromDB(hoursBack = 1) {
-    return new Promise((resolve) => {
-        const psCommand = `
-            $results = @()
-            $cutoffTime = (Get-Date).AddHours(-${hoursBack})
-            $cutoffChrome = [int64]((Get-Date).AddHours(-${hoursBack}).ToUniversalTime() - [DateTime]'1601-01-01').TotalMicroseconds
-            
-            # Chrome History
-            $chromePath = "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\History"
-            if (Test-Path $chromePath) {
-                try {
-                    $tempPath = "$env:TEMP\\chrome_history_temp.db"
-                    Copy-Item $chromePath $tempPath -Force -ErrorAction SilentlyContinue
-                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempPath;Version=3;Read Only=True;")
-                    $conn.Open()
-                    $cmd = $conn.CreateCommand()
-                    $cmd.CommandText = "SELECT url, title, last_visit_time FROM urls WHERE last_visit_time > $cutoffChrome ORDER BY last_visit_time DESC LIMIT 20"
-                    $reader = $cmd.ExecuteReader()
-                    while ($reader.Read()) {
-                        $results += [PSCustomObject]@{
-                            Browser = 'Chrome'
-                            Url = $reader['url']
-                            Title = $reader['title']
-                            VisitTime = [DateTime]::FromFileTimeUtc($reader['last_visit_time'] * 10)
-                        }
-                    }
-                    $conn.Close()
-                    Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
-                } catch { }
-            }
-            
-            # Edge History
-            $edgePath = "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\History"
-            if (Test-Path $edgePath) {
-                try {
-                    $tempPath = "$env:TEMP\\edge_history_temp.db"
-                    Copy-Item $edgePath $tempPath -Force -ErrorAction SilentlyContinue
-                    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempPath;Version=3;Read Only=True;")
-                    $conn.Open()
-                    $cmd = $conn.CreateCommand()
-                    $cmd.CommandText = "SELECT url, title, last_visit_time FROM urls WHERE last_visit_time > $cutoffChrome ORDER BY last_visit_time DESC LIMIT 20"
-                    $reader = $cmd.ExecuteReader()
-                    while ($reader.Read()) {
-                        $results += [PSCustomObject]@{
-                            Browser = 'Edge'
-                            Url = $reader['url']
-                            Title = $reader['title']
-                            VisitTime = [DateTime]::FromFileTimeUtc($reader['last_visit_time'] * 10)
-                        }
-                    }
-                    $conn.Close()
-                    Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
-                } catch { }
-            }
-            
-            $results | ConvertTo-Json -Depth 2
-        `;
+async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
+    if (!fs.existsSync(dbPath)) return [];
 
-        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ')}"`, { timeout: 5000 }, (error, stdout, stderr) => {
-            if (error || !stdout || stdout.trim() === '' || stdout.trim() === 'null') {
-                resolve([]);
-                return;
+    const tempPath = path.join(os.tmpdir(), `history_${browserName}_${Date.now()}.db`);
+    let db = null;
+
+    try {
+        // Copy to temp to avoid file locking issues
+        fs.copyFileSync(dbPath, tempPath);
+
+        const fileBuffer = fs.readFileSync(tempPath);
+        const SQL = await initSqlJs();
+        db = new SQL.Database(fileBuffer);
+
+        // Chrome/Edge/Firefox uses different epochs
+        // Chrome/Edge: Microseconds since Jan 1, 1601 UTC
+        // Firefox: Microseconds since Jan 1, 1970 UTC (PRTime)
+
+        let query = '';
+        const limit = 50;
+
+        if (browserName === 'Firefox') {
+            const cutoff = (Date.now() - (hoursBack * 3600000)) * 1000;
+            query = `SELECT url, title, last_visit_date as time FROM moz_places WHERE last_visit_date > ${cutoff} ORDER BY last_visit_date DESC LIMIT ${limit}`;
+        } else {
+            // Chrome/Edge
+            const epochDiff = 11644473600000; // ms between 1601 and 1970
+            const cutoff = ((Date.now() + epochDiff) - (hoursBack * 3600000)) * 1000;
+            query = `SELECT url, title, last_visit_time as time FROM urls WHERE last_visit_time > ${cutoff} ORDER BY last_visit_time DESC LIMIT ${limit}`;
+        }
+
+        const stmt = db.prepare(query);
+        const results = [];
+
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            let visitTime;
+
+            if (browserName === 'Firefox') {
+                visitTime = new Date(row.time / 1000).toISOString();
+            } else {
+                // Convert Chrome/Edge time (microseconds since 1601) to JS Date
+                const epochDiff = 11644473600000;
+                visitTime = new Date((row.time / 1000) - epochDiff).toISOString();
             }
-            try {
-                const parsed = JSON.parse(stdout);
-                const history = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-                resolve(history.map(h => ({
-                    url: h.Url,
-                    title: h.Title,
-                    browser: h.Browser,
-                    visitTime: h.VisitTime,
-                    timestamp: new Date().toISOString()
-                })));
-            } catch (e) {
-                resolve([]);
-            }
-        });
-    });
+
+            results.push({
+                url: row.url,
+                title: row.title,
+                browser: browserName,
+                visitTime: visitTime,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        stmt.free();
+        return results;
+
+    } catch (e) {
+        console.error(`Error reading ${browserName} history:`, e.message);
+        return [];
+    } finally {
+        if (db) db.close();
+        // Clean up temp file
+        try {
+            if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        } catch (e) { }
+    }
+}
+
+/**
+ * Read browser history from SQLite databases (Chrome, Edge, Firefox)
+ */
+async function getBrowserHistoryFromDB(hoursBack = 1) {
+    const results = [];
+    const localAppData = process.env.LOCALAPPDATA;
+    const appData = process.env.APPDATA;
+
+    // Paths to history files
+    const historyPaths = [
+        {
+            name: 'Chrome',
+            path: path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default', 'History')
+        },
+        {
+            name: 'Edge',
+            path: path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default', 'History')
+        },
+        {
+            name: 'Brave',
+            path: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data', 'Default', 'History')
+        }
+        // Firefox profile path is variable, skipping for simplicity unless requested
+    ];
+
+    for (const browser of historyPaths) {
+        const history = await readSqliteHistory(browser.path, browser.name, hoursBack);
+        results.push(...history);
+    }
+
+    // Sort by visit time descending
+    return results.sort((a, b) => new Date(b.visitTime) - new Date(a.visitTime));
 }
 
 // Domain to category mapping
@@ -446,4 +474,5 @@ module.exports = {
     getActiveTabUrl,
     getBrowserHistoryFromDB
 };
+
 

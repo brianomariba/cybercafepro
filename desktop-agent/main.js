@@ -3,7 +3,7 @@
  * Production-ready Windows monitoring client
  */
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell } = require('electron');
 const path = require('path');
 const si = require('systeminformation');
 const axios = require('axios');
@@ -33,7 +33,7 @@ const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getInstalledPrinters } = require('./print-monitor');
-const { LiveUrlTracker, getActiveTabUrl } = require('./browser-history');
+const { LiveUrlTracker, getActiveTabUrl, getBrowserHistoryFromDB } = require('./browser-history');
 
 // Load Configuration
 let config;
@@ -455,6 +455,25 @@ ipcMain.on('get-pending-count', (event) => {
     event.reply('pending-count', { count: pending.length });
 });
 
+// Open a resource (Template/Guide)
+ipcMain.on('open-resource', async (event, { type, id, title }) => {
+    try {
+        // Construct download URL
+        // endpoint: /api/v1/templates/:id/download or /api/v1/guides/:id/download
+        const url = `${config.server.baseUrl}/api/v1/${type}/${id}/download`;
+
+        console.log(`[RESOURCE] Requesting to open: ${url}`);
+
+        // Use shell.openExternal as a robust fallback that works for all file types
+        // This opens the URL in the default browser, which will handle the download/viewing
+        // This is often more reliable than downloading to temp and trying to open with specific app
+        await shell.openExternal(url);
+
+    } catch (error) {
+        console.error('[RESOURCE] Failed to open resource:', error.message);
+    }
+});
+
 // Sync pending actions
 ipcMain.on('sync-pending-actions', async (event) => {
     if (!isOnline) {
@@ -464,6 +483,8 @@ ipcMain.on('sync-pending-actions', async (event) => {
 
     const pending = offlineStore.getPendingActions();
     let synced = 0;
+
+    console.log(`[SYNC] Attempting to sync ${pending.length} pending actions...`);
 
     for (const action of pending) {
         try {
@@ -482,11 +503,28 @@ ipcMain.on('sync-pending-actions', async (event) => {
                     offlineStore.removePendingAction(action.id);
                     synced++;
                     console.log(`[Portal] Synced pending sale: ${action.payload.itemName}`);
+                } else {
+                    console.error('[SYNC] Server returned success:false', response.data);
+                    // Add details to attempts for debugging
+                    offlineStore.updatePendingAction(action.id, {
+                        attempts: (action.attempts || 0) + 1,
+                        lastError: response.data.error || 'Server rejected sale'
+                    });
                 }
             }
         } catch (error) {
-            offlineStore.updatePendingAction(action.id, { attempts: (action.attempts || 0) + 1 });
-            console.error(`[Portal] Failed to sync action ${action.id}:`, error.message);
+            let errorMsg = error.message;
+            if (error.response) {
+                errorMsg = `Status ${error.response.status}: ${JSON.stringify(error.response.data)}`;
+                console.error(`[SYNC] API Error for action ${action.id}:`, errorMsg);
+            } else {
+                console.error(`[SYNC] Network Error for action ${action.id}:`, error.message);
+            }
+
+            offlineStore.updatePendingAction(action.id, {
+                attempts: (action.attempts || 0) + 1,
+                lastError: errorMsg
+            });
         }
     }
 
@@ -1035,13 +1073,64 @@ async function startDataCollection() {
 
             await sendToServer(ADMIN_API_URL, payload);
             dataQueue.processQueue();
-
         } catch (error) {
             if (error?.code !== 'ECONNREFUSED') {
                 console.error('Collection Error:', error.message);
             }
         }
     }, HEARTBEAT_INTERVAL);
+
+    // Periodic Browser History Sync (every 60 seconds)
+    // This catches URLs that might be missed by real-time tracking
+    let lastHistorySyncTime = Date.now();
+    setInterval(async () => {
+        if (isLocked) return; // Don't sync history if locked (privacy/noise)
+
+        try {
+            // Get history from the last hour
+            const history = await getBrowserHistoryFromDB(1);
+
+            // Filter only new items since last sync
+            const newItems = history.filter(item => {
+                const visitTime = new Date(item.visitTime).getTime();
+                return visitTime > lastHistorySyncTime;
+            });
+
+            if (newItems.length > 0) {
+                console.log(`[HISTORY] Found ${newItems.length} new history items from DB`);
+
+                // Update sync time to the latest item found
+                // (Sorted desc, so first item is latest)
+                const latestTime = new Date(newItems[0].visitTime).getTime();
+                if (latestTime > lastHistorySyncTime) {
+                    lastHistorySyncTime = latestTime;
+                }
+
+                // Send items to server
+                for (const item of newItems) {
+                    // Avoid duplicates with real-time tracker if recently sent
+                    if (item.url === lastSentBrowserUrl) continue;
+
+                    const historyPayload = {
+                        type: 'browser',
+                        clientId: CLIENT_ID,
+                        hostname: os.hostname(),
+                        sessionId: currentSession?.id || null,
+                        sessionUser: currentSession?.user || null,
+                        data: {
+                            ...item,
+                            source: 'database_sync'
+                        }
+                    };
+
+                    // Don't flood the server, small delay or just fire
+                    sendToServer(LOG_API_URL, historyPayload).catch(e => console.error('History Sync Log Failed:', e.message));
+                }
+            }
+        } catch (e) {
+            console.error('[HISTORY] Sync failed:', e.message);
+        }
+    }, 60000);
 }
 
 // ==================== SERVER COMMUNICATION & SOCKETS ====================
