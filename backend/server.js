@@ -2820,7 +2820,7 @@ app.put('/api/v1/admin/pricing', (req, res) => {
  * POST /api/v1/documents/send-to-computer
  * Send a file directly to a specific computer
  */
-app.post('/api/v1/documents/send-to-computer', upload.single('file'), (req, res) => {
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), async (req, res) => {
     try {
         const { targetClientId, targetHostname, message } = req.body;
 
