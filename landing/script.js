@@ -430,13 +430,7 @@ async function handleFormSubmit(e) {
 
     } catch (error) {
         console.error('Submit error:', error);
-
-        // For demo: Show success anyway with generated order ID
-        // In production, show error message
-        showSuccessModal(generateOrderId());
-        uploadForm.reset();
-        uploadedFiles = [];
-        renderSelectedFiles();
+        alert('Failed to submit request. Please try again or contact us directly.');
     } finally {
         submitBtn.disabled = false;
         submitBtn.innerHTML = originalText;
