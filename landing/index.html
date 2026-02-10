@@ -40,7 +40,7 @@
             <div class="nav-links" id="navLinks">
                 <a href="#services">Services</a>
                 <a href="#creative">Creative Studio</a>
-                <a href="#pricing">Pricing</a>
+
                 <a href="#upload">Document Services</a>
                 <a href="#contact">Contact</a>
             </div>
@@ -125,6 +125,113 @@
                 <div class="floating-card card-4">
                     <i data-lucide="palette"></i>
                     <span>Branding</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Upload Section -->
+    <section class="upload-section" id="upload">
+        <div class="container">
+            <div class="upload-container">
+                <div class="upload-info">
+                    <span class="section-tag">Upload Documents</span>
+                    <h2>Send Us Your Documents</h2>
+                    <p>Upload your files online and we'll prepare them for you. No need to visit until pickup!</p>
+
+                    <div class="upload-steps">
+                        <div class="step">
+                            <div class="step-number">1</div>
+                            <div class="step-content">
+                                <h4>Upload Your File</h4>
+                                <p>Drag & drop or browse to upload</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">2</div>
+                            <div class="step-content">
+                                <h4>Select Service</h4>
+                                <p>Choose printing, typing, etc.</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">3</div>
+                            <div class="step-content">
+                                <h4>Add Instructions</h4>
+                                <p>Specify your requirements</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-number">4</div>
+                            <div class="step-content">
+                                <h4>Pick Up Ready</h4>
+                                <p>We'll notify when ready</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="upload-form-container">
+                    <form class="upload-form" id="uploadForm">
+                        <!-- Drop Zone -->
+                        <div class="drop-zone" id="dropZone">
+                            <div class="drop-zone-content">
+                                <i data-lucide="cloud-upload"></i>
+                                <h4>Drag & Drop Files Here</h4>
+                                <p>or click to browse</p>
+                                <span class="file-types">PDF, DOC, DOCX, XLS, XLSX only (Max 50MB)</span>
+                            </div>
+                            <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.xls,.xlsx" multiple hidden>
+                        </div>
+
+                        <!-- Selected Files -->
+                        <div class="selected-files" id="selectedFiles"></div>
+
+                        <!-- Service Selection -->
+                        <div class="form-group">
+                            <label>Service Required</label>
+                            <select id="serviceType" required>
+                                <option value="">Select a service...</option>
+                                <option value="printing-bw">Printing (Black & White)</option>
+                                <option value="printing-color">Printing (Color)</option>
+                                <option value="typing">Typing Services</option>
+                                <option value="scanning">Scanning</option>
+                                <option value="photocopy">Photocopying</option>
+                                <option value="binding">Binding</option>
+                                <option value="other">Other (Specify below)</option>
+                            </select>
+                        </div>
+
+                        <!-- Contact Info -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Your Name</label>
+                                <input type="text" id="customerName" placeholder="John Doe" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Phone Number</label>
+                                <input type="tel" id="customerPhone" placeholder="0712 345 678" required>
+                            </div>
+                        </div>
+
+                        <!-- Instructions -->
+                        <div class="form-group">
+                            <label>Special Instructions (Optional)</label>
+                            <textarea id="instructions" rows="3"
+                                placeholder="E.g., Print 5 copies, double-sided, bind with spiral..."></textarea>
+                        </div>
+
+                        <!-- Submit -->
+                        <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
+                            <i data-lucide="send"></i>
+                            Submit Request
+                        </button>
+
+                        <p class="form-note">
+                            <i data-lucide="info"></i>
+                            We'll call you to confirm details and pricing before processing.
+                        </p>
+                    </form>
                 </div>
             </div>
         </div>
@@ -253,127 +360,9 @@
         </div>
     </section>
 
-    <!-- Pricing Section -->
-    <section class="pricing" id="pricing">
-        <div class="container">
-            <div class="section-header">
-                <span class="section-tag">Transparent Pricing</span>
-                <h2>Simple, Clear Rates</h2>
-                <p>No hidden fees. What you see is what you pay.</p>
-            </div>
 
-            <div class="pricing-table" id="pricingTable">
-                <!-- Pricing will be loaded dynamically -->
-            </div>
-        </div>
-    </section>
 
-    <!-- Upload Section -->
-    <section class="upload-section" id="upload">
-        <div class="container">
-            <div class="upload-container">
-                <div class="upload-info">
-                    <span class="section-tag">Upload Documents</span>
-                    <h2>Send Us Your Documents</h2>
-                    <p>Upload your files online and we'll prepare them for you. No need to visit until pickup!</p>
 
-                    <div class="upload-steps">
-                        <div class="step">
-                            <div class="step-number">1</div>
-                            <div class="step-content">
-                                <h4>Upload Your File</h4>
-                                <p>Drag & drop or browse to upload</p>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <div class="step-number">2</div>
-                            <div class="step-content">
-                                <h4>Select Service</h4>
-                                <p>Choose printing, typing, etc.</p>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <div class="step-number">3</div>
-                            <div class="step-content">
-                                <h4>Add Instructions</h4>
-                                <p>Specify your requirements</p>
-                            </div>
-                        </div>
-                        <div class="step">
-                            <div class="step-number">4</div>
-                            <div class="step-content">
-                                <h4>Pick Up Ready</h4>
-                                <p>We'll notify when ready</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="upload-form-container">
-                    <form class="upload-form" id="uploadForm">
-                        <!-- Drop Zone -->
-                        <div class="drop-zone" id="dropZone">
-                            <div class="drop-zone-content">
-                                <i data-lucide="cloud-upload"></i>
-                                <h4>Drag & Drop Files Here</h4>
-                                <p>or click to browse</p>
-                                <span class="file-types">PDF, DOC, DOCX, XLS, XLSX only (Max 50MB)</span>
-                            </div>
-                            <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.xls,.xlsx" multiple hidden>
-                        </div>
-
-                        <!-- Selected Files -->
-                        <div class="selected-files" id="selectedFiles"></div>
-
-                        <!-- Service Selection -->
-                        <div class="form-group">
-                            <label>Service Required</label>
-                            <select id="serviceType" required>
-                                <option value="">Select a service...</option>
-                                <option value="printing-bw">Printing (Black & White)</option>
-                                <option value="printing-color">Printing (Color)</option>
-                                <option value="typing">Typing Services</option>
-                                <option value="scanning">Scanning</option>
-                                <option value="photocopy">Photocopying</option>
-                                <option value="binding">Binding</option>
-                                <option value="other">Other (Specify below)</option>
-                            </select>
-                        </div>
-
-                        <!-- Contact Info -->
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Your Name</label>
-                                <input type="text" id="customerName" placeholder="John Doe" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Phone Number</label>
-                                <input type="tel" id="customerPhone" placeholder="0712 345 678" required>
-                            </div>
-                        </div>
-
-                        <!-- Instructions -->
-                        <div class="form-group">
-                            <label>Special Instructions (Optional)</label>
-                            <textarea id="instructions" rows="3"
-                                placeholder="E.g., Print 5 copies, double-sided, bind with spiral..."></textarea>
-                        </div>
-
-                        <!-- Submit -->
-                        <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
-                            <i data-lucide="send"></i>
-                            Submit Request
-                        </button>
-
-                        <p class="form-note">
-                            <i data-lucide="info"></i>
-                            We'll call you to confirm details and pricing before processing.
-                        </p>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </section>
 
     <!-- Testimonials -->
     <section class="testimonials">
@@ -512,7 +501,7 @@
                 <div class="footer-links">
                     <h4>Quick Links</h4>
                     <a href="#services">Services</a>
-                    <a href="#pricing">Pricing</a>
+
                     <a href="#upload">Upload Document</a>
                     <a href="#contact">Contact Us</a>
                 </div>

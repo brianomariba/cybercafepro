@@ -43,6 +43,7 @@ const Blocklist = require('./models/Blocklist');
 const ServiceCategory = require('./models/ServiceCategory');
 const InventoryItem = require('./models/InventoryItem');
 const UserSubmission = require('./models/UserSubmission');
+const DocumentRequest = require('./models/DocumentRequest');
 
 
 
@@ -5145,6 +5146,176 @@ app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
     } catch (error) {
         console.error('[TRANSACTIONS] Fetch failed:', error);
         res.status(500).json({ error: 'Failed to fetch transactions' });
+    }
+});
+
+
+
+// ==================== PUBLIC DOCUMENT REQUESTS (LANDING PAGE) ====================
+
+// Helper for doc type
+const getDocType = (mime, name) => {
+    if (!mime || !name) return 'other';
+    const lowerName = name.toLowerCase();
+    const lowerMime = mime.toLowerCase();
+
+    if (lowerMime.includes('pdf') || lowerName.endsWith('.pdf')) return 'pdf';
+    if (lowerMime.includes('word') || lowerName.endsWith('.doc') || lowerName.endsWith('.docx')) return 'word';
+    if (lowerMime.includes('excel') || lowerMime.includes('sheet') || lowerName.endsWith('.xls') || lowerName.endsWith('.xlsx')) return 'excel';
+    return 'other';
+};
+
+/**
+ * POST /api/v1/public/document-request
+ * Public endpoint for guests/users to upload documents from landing page
+ */
+app.post('/api/v1/public/document-request', upload.array('files'), async (req, res) => {
+    try {
+        const { serviceType, customerName, customerPhone, instructions } = req.body;
+        const files = req.files || [];
+
+        if (!files.length) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        // Generate Order ID: HN-XXXXXX-ABC
+        const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
+        const timestamp = Date.now().toString().slice(-6);
+        const orderId = `HN-${timestamp}-${randomSuffix}`;
+
+        const newRequest = await DocumentRequest.create({
+            orderId,
+            customerName,
+            customerPhone,
+            serviceType,
+            instructions,
+            files: files.map(f => ({
+                originalName: f.originalname,
+                filename: f.filename,
+                path: f.path,
+                mimeType: f.mimetype,
+                size: f.size,
+                docType: getDocType(f.mimetype, f.originalname)
+            })),
+            totalFiles: files.length,
+            totalSize: files.reduce((acc, f) => acc + f.size, 0),
+            status: 'pending'
+        });
+
+        // Notify admins
+        io.emit('new-document-request', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            serviceType: newRequest.serviceType,
+            notification: {
+                message: `New request ${orderId} from ${customerName}`,
+                type: 'info'
+            }
+        });
+
+        // Notify user portal (e.g., reception desk view)
+        io.emit('new-document-for-users', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            serviceType: newRequest.serviceType
+        });
+
+        console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName}`);
+
+        res.status(201).json({ success: true, orderId: newRequest.orderId });
+    } catch (error) {
+        console.error('[DOCUMENT REQUEST] Error:', error);
+        res.status(500).json({ error: 'Submission failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests
+ * Fetch all document requests for admin dashboard
+ */
+app.get('/api/v1/admin/document-requests', requireAdminAuth, async (req, res) => {
+    try {
+        const { status, limit = 50 } = req.query;
+        const query = status && status !== 'all' ? { status } : {};
+
+        const requests = await DocumentRequest.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(requests);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/status
+ * Update status (pending -> processing -> ready -> completed)
+ */
+app.put('/api/v1/admin/document-requests/:orderId/status', requireAdminAuth, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            { status, updatedAt: new Date() },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, status });
+
+        // Notify user portal too
+        if (status === 'ready' || status === 'completed') {
+            io.emit('document-request-status-changed', { orderId: request.orderId, status, customerName: request.customerName });
+        }
+
+        res.json(request);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Update failed:', error);
+        res.status(500).json({ error: 'Update failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests/stats
+ * Get comprehensive stats for admin dashboard
+ */
+app.get('/api/v1/admin/document-requests/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const requests = await DocumentRequest.find({});
+
+        const stats = {
+            summary: { totalPdf: 0, totalWord: 0, totalExcel: 0, pendingJobs: 0 },
+            all: { pdf: 0, word: 0, excel: 0, totalFiles: 0, totalSize: 0 },
+            byStatus: {}
+        };
+
+        for (const req of requests) {
+            if (req.status === 'pending') stats.summary.pendingJobs++;
+            stats.byStatus[req.status] = (stats.byStatus[req.status] || 0) + 1;
+
+            for (const file of req.files || []) {
+                stats.all.totalFiles++;
+                stats.all.totalSize += file.size || 0;
+
+                if (file.docType === 'pdf') {
+                    stats.all.pdf++;
+                    stats.summary.totalPdf++;
+                } else if (file.docType === 'word') {
+                    stats.all.word++;
+                    stats.summary.totalWord++;
+                } else if (file.docType === 'excel') {
+                    stats.all.excel++;
+                    stats.summary.totalExcel++;
+                }
+            }
+        }
+        res.json(stats);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Stats failed:', error);
+        res.status(500).json({ error: 'Stats failed' });
     }
 });
 
