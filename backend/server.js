@@ -5213,11 +5213,26 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             }
         });
 
+        // Prepare summary for frontend
+        const typeSummary = { pdf: 0, word: 0, excel: 0, other: 0 };
+        files.forEach(f => {
+            const type = getDocType(f.mimetype, f.originalname);
+            if (typeSummary[type] !== undefined) typeSummary[type]++;
+            else typeSummary.other++;
+        });
+
         // Notify user portal (e.g., reception desk view)
         io.emit('new-document-for-users', {
             orderId: newRequest.orderId,
             customerName: newRequest.customerName,
-            serviceType: newRequest.serviceType
+            serviceType: newRequest.serviceType,
+            fileCount: files.length,
+            typeSummary,
+            notification: {
+                title: 'New Document Request',
+                message: `${files.length} file(s) from ${customerName} for ${serviceType}`
+            },
+            createdAt: newRequest.createdAt
         });
 
         console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName}`);
