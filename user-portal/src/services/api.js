@@ -166,7 +166,8 @@ export const purchaseItem = async (itemId, quantity = 1, reason = '', clientId =
 // ==================== USER SUBMISSIONS ====================
 export const submitDocument = async (formData) => {
     const response = await api.post('/user/submissions', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': undefined },
+        timeout: 60000 // 60s for file uploads
     });
     return response.data;
 };

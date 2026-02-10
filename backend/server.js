@@ -4910,6 +4910,7 @@ app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => 
 /**
  * POST /api/v1/inventory/:id/sell
  * Record a sale - decrements stock and creates a transaction record
+ * Tries to identify the seller from auth token (admin or portal user)
  */
 app.post('/api/v1/inventory/:id/sell', async (req, res) => {
     try {
@@ -4924,6 +4925,32 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
             return res.status(400).json({ error: 'Insufficient stock' });
         }
 
+        // Try to identify the seller from auth token
+        let sellerName = clientId || 'admin';
+        let sellerType = 'unknown';
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                // Check admin session first
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    sellerName = session.name || session.username;
+                    sellerType = 'admin';
+                } else {
+                    // Check portal user session
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        sellerName = session.name || session.username;
+                        sellerType = 'portal-user';
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical: proceed with clientId as seller
+            console.log('[INVENTORY] Could not identify seller from token:', authErr.message);
+        }
+
         // Decrement stock
         const previousStock = item.stock;
         item.stock -= quantity;
@@ -4935,18 +4962,19 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
             id: `txn-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
             type: 'inventory-sale',
             amount: item.price * quantity,
-            description: `Sold ${quantity}x ${item.name}`,
+            description: `Sold ${quantity}x ${item.name} @ KSH ${item.price.toLocaleString()} each = KSH ${(item.price * quantity).toLocaleString()}`,
             itemId: item._id,
             itemName: item.name,
             quantity: quantity,
-            seller: clientId || 'admin', // identify who sold it
+            seller: sellerName,
             reason: reason || 'Direct Sale',
             clientId: clientId || null,
+            userId: sellerName,
             createdAt: new Date(),
             status: 'completed'
         });
 
-        console.log(`[INVENTORY] Sale: ${quantity}x ${item.name} (Stock: ${previousStock} → ${item.stock})`);
+        console.log(`[INVENTORY] Sale: ${quantity}x ${item.name} by ${sellerName} (${sellerType}) (Stock: ${previousStock} → ${item.stock})`);
 
         // Emit real-time updates for admin dashboard
         io.emit('inventory-update', { itemId: item._id, stock: item.stock, name: item.name });
@@ -5025,7 +5053,18 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
                 name: item.name,
                 previousStock,
                 currentStock: item.stock,
+                unitPrice: item.price,
+                totalAmount: item.price * quantity,
                 lowStockAlert: item.stock <= item.lowStockThreshold
+            },
+            transaction: {
+                id: transaction.id,
+                seller: sellerName,
+                quantity: quantity,
+                unitPrice: item.price,
+                totalAmount: item.price * quantity,
+                description: transaction.description,
+                createdAt: transaction.createdAt
             }
         });
 
@@ -5034,6 +5073,7 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
         res.status(500).json({ error: 'Failed to process sale' });
     }
 });
+
 
 /**
  * GET /api/v1/admin/inventory/low-stock
