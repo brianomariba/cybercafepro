@@ -405,7 +405,6 @@ function App() {
       key: 'settings',
       icon: <SettingOutlined />,
       label: 'Settings',
-      label: 'Settings',
       onClick: () => navigate('/settings'),
     },
     {

@@ -17,7 +17,6 @@ import {
     DesktopOutlined,
     DollarOutlined,
     WifiOutlined,
-    WifiOneOneOutlined,
     AppstoreOutlined,
     BarsOutlined
 } from '@ant-design/icons';
