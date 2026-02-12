@@ -680,7 +680,11 @@
                 <div class="user-avatar" id="userAvatar">U</div>
                 <span class="user-name" id="userName">User</span>
             </div>
+            <button class="btn btn-small btn-secondary" onclick="checkForUpdates()" title="Check for Updates">
+                🔃 Update
+            </button>
         </div>
+    </div>
     </div>
 
     <!-- Navigation -->
@@ -1545,6 +1549,16 @@
                 ipcRenderer.send('logout-request');
             }
         });
+
+        // Update Check
+        function checkForUpdates() {
+            if (confirm('Do you want to check for the latest version of HawkNine Agent?')) {
+                // Open the admin download URL in the default browser
+                // In a production app, you might use autoUpdater, but for now we link to the installer
+                const downloadUrl = 'https://admin.hawkninegroup.com'; // Or specific download link
+                ipcRenderer.send('open-external-link', downloadUrl);
+            }
+        }
     </script>
 </body>
 

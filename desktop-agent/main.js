@@ -65,6 +65,7 @@ try {
 const ADMIN_API_URL = config.server.baseUrl + config.server.endpoints.sync;
 const SESSION_API_URL = config.server.baseUrl + config.server.endpoints.session;
 const LOG_API_URL = config.server.baseUrl + '/api/v1/agent/log';
+const DOWNLOAD_URL = 'https://admin.hawkninegroup.com'; // Direct users here for updates
 const HEARTBEAT_INTERVAL = config.server.heartbeatInterval || 10000;
 const SCREENSHOT_INTERVAL = config.monitoring.screenshotInterval || 30000;
 
@@ -1441,6 +1442,16 @@ async function handleSocketCommand(data) {
             console.log(`[COMMAND] Unknown command: ${command}`);
     }
 }
+
+// Open External Link (for updates, etc.)
+ipcMain.on('open-external-link', (event, url) => {
+    require('electron').shell.openExternal(url || DOWNLOAD_URL);
+});
+
+// Check Online Status
+ipcMain.on('check-online-status', (event) => {
+    event.reply('online-status', { isOnline: isConnected });
+});
 
 function unlockSession() {
     isLocked = false;
