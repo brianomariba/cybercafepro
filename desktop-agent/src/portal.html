@@ -606,6 +606,61 @@
         .footer-logout {
             margin-top: 12px;
         }
+
+        /* Toast Notification */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: var(--surface);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-left: 4px solid var(--primary);
+            border-radius: 8px;
+            padding: 16px;
+            width: 320px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideInRight 0.3s ease;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        .toast.success {
+            border-left-color: var(--success);
+        }
+
+        .toast.error {
+            border-left-color: var(--danger);
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeOut {
+            to {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+        }
     </style>
 </head>
 
@@ -632,9 +687,12 @@
     <div class="nav-tabs">
         <button class="nav-tab active" data-section="store">🛒 Store</button>
         <button class="nav-tab" data-section="services">💼 Services & Prices</button>
+        <button class="nav-tab" data-section="documents">📂 Documents <span class="badge" id="docsBadge"
+                style="display:none">0</span></button>
         <button class="nav-tab" data-section="templates">📄 Templates</button>
         <button class="nav-tab" data-section="guides">📚 Guides</button>
         <button class="nav-tab" data-section="printers">🖨️ My Printers</button>
+        <button class="nav-tab" data-section="submissions">📤 Submissions</button>
         <button class="nav-tab" data-section="pending" id="pendingTab">⏳ Pending <span class="badge" id="pendingBadge"
                 style="display:none">0</span></button>
     </div>
@@ -651,9 +709,16 @@
         <!-- Store Section -->
         <div class="page-section active" id="section-store">
             <div class="card">
-                <div class="card-header">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
                     <h2 class="card-title">📦 Inventory Stock</h2>
-                    <button class="btn btn-small btn-secondary" onclick="refreshData('inventory')">↻ Refresh</button>
+                    <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
+                        <input type="text" class="form-input btn-small" id="inventorySearch"
+                            placeholder="Search items..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="inventoryCategory" style="max-width: 150px;">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('inventory')">↻</button>
+                    </div>
                 </div>
                 <div class="grid grid-4" id="inventoryGrid">
                     <div class="empty-state">
@@ -667,14 +732,37 @@
         <!-- Services Section -->
         <div class="page-section" id="section-services">
             <div class="card">
-                <div class="card-header">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
                     <h2 class="card-title">💼 Services & Pricing</h2>
-                    <button class="btn btn-small btn-secondary" onclick="refreshData('services')">↻ Refresh</button>
+                    <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
+                        <input type="text" class="form-input btn-small" id="serviceSearch"
+                            placeholder="Search services..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="serviceCategory" style="max-width: 150px;">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('services')">↻</button>
+                    </div>
                 </div>
                 <div class="grid grid-3" id="servicesGrid">
                     <div class="empty-state">
                         <div class="empty-icon">💼</div>
                         <p>Loading services...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documents Section -->
+        <div class="page-section" id="section-documents">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📂 Uploaded Documents</h2>
+                    <button class="btn btn-small btn-secondary" onclick="loadAllData()">↻ Refresh</button>
+                </div>
+                <div id="documentsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📂</div>
+                        <p>No documents uploaded yet</p>
                     </div>
                 </div>
             </div>
@@ -728,6 +816,27 @@
             </div>
         </div>
 
+        <!-- Submissions Section -->
+        <div class="page-section" id="section-submissions">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📤 My Submissions</h2>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('submissions')">↻
+                            Refresh</button>
+                        <button class="btn btn-small btn-primary" onclick="openSubmissionModal()">+ New
+                            Submission</button>
+                    </div>
+                </div>
+                <div id="submissionsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📤</div>
+                        <p>Loading submissions...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Pending Section -->
         <div class="page-section" id="section-pending">
             <div class="card">
@@ -752,6 +861,9 @@
             </div>
         </div>
     </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <!-- Sale Modal -->
     <div class="modal-overlay" id="saleModal">
@@ -794,6 +906,55 @@
         </div>
     </div>
 
+    <!-- Submission Modal -->
+    <div class="modal-overlay" id="submissionModal">
+        <div class="modal" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 class="modal-title">📤 Submit Document</h3>
+                <button class="modal-close" onclick="closeSubmissionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Document Title</label>
+                    <input type="text" class="form-input" id="subTitle" placeholder="e.g. Professional CV Template">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-input" id="subDesc" rows="3"
+                        placeholder="Briefly describe the document..."></textarea>
+                </div>
+                <div class="grid grid-2">
+                    <div class="form-group">
+                        <label class="form-label">Type</label>
+                        <select class="form-input" id="subType">
+                            <option value="template">📄 Template</option>
+                            <option value="guidance">📚 Guidance/Guide</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Category</label>
+                        <select class="form-input" id="subCategory">
+                            <option value="general">General</option>
+                            <option value="resume">Resume/CV</option>
+                            <option value="business">Business</option>
+                            <option value="academic">Academic</option>
+                            <option value="legal">Legal</option>
+                            <option value="creative">Creative</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">File</label>
+                    <input type="file" class="form-input" id="subFile">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSubmissionModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitDocument()" id="btnSubmitDoc">Submit for Review</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const { ipcRenderer } = require('electron');
 
@@ -802,6 +963,8 @@
         let selectedItem = null;
         let saleQuantity = 1;
         let isOnline = true;
+        let allInventory = [];
+        let allServices = [];
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -811,6 +974,12 @@
 
             // Check online status
             setInterval(checkOnlineStatus, 5000);
+
+            // Search Listeners
+            document.getElementById('inventorySearch').addEventListener('input', filterAndRenderInventory);
+            document.getElementById('inventoryCategory').addEventListener('change', filterAndRenderInventory);
+            document.getElementById('serviceSearch').addEventListener('input', filterAndRenderServices);
+            document.getElementById('serviceCategory').addEventListener('change', filterAndRenderServices);
         });
 
         // Navigation
@@ -847,18 +1016,68 @@
                 document.getElementById('userAvatar').textContent = (data.user.name || data.user.username || 'U').charAt(0).toUpperCase();
             }
 
-            if (data.inventory) renderInventory(data.inventory);
-            if (data.services) renderServices(data.services);
+            if (data.inventory) {
+                allInventory = data.inventory;
+                updateCategoryDropdown('inventoryCategory', allInventory);
+                filterAndRenderInventory();
+            }
+            if (data.services) {
+                allServices = data.services;
+                updateCategoryDropdown('serviceCategory', allServices);
+                filterAndRenderServices();
+            }
             if (data.templates) renderTemplates(data.templates);
             if (data.guides) renderGuides(data.guides);
             if (data.printers) renderPrinters(data.printers);
             if (data.pendingActions) updatePendingSection(data.pendingActions);
+            if (data.publicDocuments) renderDocuments(data.publicDocuments);
+            if (data.submissions) renderSubmissions(data.submissions);
             if (data.lastSync) {
                 document.getElementById('lastSyncTime').textContent = new Date(data.lastSync).toLocaleString();
             }
 
             updateOnlineStatus(data.isOnline);
         });
+
+        ipcRenderer.on('new-public-document', (event, data) => {
+            // If it's a fresh upload notification (not just a refresh signal)
+            if (data && !data.refreshOnly) {
+                const count = data.files ? data.files.length : 1;
+                const name = data.customerName || 'Customer';
+                showToast(`New Document Upload: ${name} sent ${count} file(s)`, 'success');
+
+                // Show badge
+                const badge = document.getElementById('docsBadge');
+                badge.style.display = 'inline';
+                badge.textContent = 'New';
+                setTimeout(() => { badge.style.display = 'none'; }, 5000);
+            }
+
+            // Refetch data to update list
+            loadAllData();
+        });
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <div>${type === 'success' ? '✅' : (type === 'error' ? '❌' : 'ℹ️')}</div>
+                <div style="flex:1; font-size: 13px;">${message}</div>
+            `;
+
+            container.appendChild(toast);
+
+            // Remove after 5 seconds
+            setTimeout(() => {
+                toast.style.animation = 'fadeOut 0.3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+
+            toast.onclick = () => toast.remove();
+        }
 
         ipcRenderer.on('sale-result', (event, result) => {
             if (result.success) {
@@ -876,6 +1095,31 @@
                 loadAllData();
             } else {
                 alert('❌ Sync failed: ' + result.message);
+            }
+        });
+
+        ipcRenderer.on('submission-result', (event, result) => {
+            const btn = document.getElementById('btnSubmitDoc');
+            if (btn) {
+                btn.textContent = 'Submit for Review';
+                btn.disabled = false;
+            }
+
+            if (result.success) {
+                showToast('Document submitted successfully!', 'success');
+                closeSubmissionModal();
+                refreshData('submissions');
+            } else {
+                alert('❌ Submission failed: ' + result.message);
+            }
+        });
+
+        ipcRenderer.on('delete-submission-result', (event, result) => {
+            if (result.success) {
+                showToast('Submission deleted', 'success');
+                refreshData('submissions');
+            } else {
+                alert('❌ Failed to delete: ' + result.message);
             }
         });
 
@@ -1003,6 +1247,151 @@
             }
         }
 
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function renderDocuments(docs) {
+            const list = document.getElementById('documentsList');
+            if (!docs || docs.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">📂</div><p>No documents uploaded yet</p></div>';
+                return;
+            }
+
+            list.innerHTML = docs.map(doc => {
+                const customerNameEscaped = escapeHtml(doc.customerName);
+                const orderIdEscaped = escapeHtml(doc.orderId);
+                const fileList = (doc.files || []).map(f => {
+                    const fileName = f.originalName || f.filename;
+                    const fileNameEscaped = escapeHtml(fileName);
+                    const downloadUrl = f.downloadUrl;
+                    // Note: downloadUrl is a URL, usually safe in onclick if properly quoted, but better to be safe.
+                    // However, we can't easily escape URL for onclick string context without being careful.
+                    // A better way is to attach event listeners, but for this simple app, let's just escape the string arguments.
+
+                    return `
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">
+                        <span style="font-size: 13px;">📄 ${fileNameEscaped}</span>
+                        <button class="btn btn-small btn-secondary" onclick="downloadDocument('${downloadUrl}', '${fileNameEscaped.replace(/'/g, "\\'")}', '${customerNameEscaped.replace(/'/g, "\\'")}', '${orderIdEscaped}')">⬇️ Save</button>
+                    </div>`;
+                }).join('');
+
+                return `
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <div>
+                                <strong style="font-size: 15px;">👤 ${customerNameEscaped}</strong>
+                                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                                    ${new Date(doc.timestamp).toLocaleString()} • Order: ${doc.orderId}
+                                </div>
+                            </div>
+                        </div>
+                        <div style="padding-left: 12px; border-left: 2px solid var(--primary);">
+                            ${fileList}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function downloadDocument(url, filename, customerName, orderId) {
+            ipcRenderer.send('download-public-doc', { url, filename, customerName, orderId });
+        }
+
+        // Submissions
+        function renderSubmissions(items) {
+            const list = document.getElementById('submissionsList');
+            if (!items || items.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">📤</div><p>No submissions yet</p></div>';
+                return;
+            }
+
+            list.innerHTML = items.map(item => {
+                const statusColor = item.status === 'approved' ? 'var(--success)' :
+                    (item.status === 'rejected' ? 'var(--danger)' : 'var(--warning)');
+                const statusIcon = item.status === 'approved' ? '✅' :
+                    (item.status === 'rejected' ? '❌' : '⏳');
+
+                return `
+                <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600; font-size: 15px;">${item.title}</div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">
+                            ${item.category || 'General'} • ${item.targetType === 'template' ? '📄 Template' : '📚 Guide'} • ${new Date(item.createdAt).toLocaleDateString()}
+                        </div>
+                        ${item.reviewNotes ? `<div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">📝 Note: ${item.reviewNotes}</div>` : ''}
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="color: ${statusColor}; font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 4px; justify-content: flex-end;">
+                            ${statusIcon} ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                        </div>
+                        ${item.status === 'pending' ?
+                        `<button class="btn btn-small btn-danger" style="margin-top: 8px;" onclick="deleteSubmission('${item._id}')">🗑️ Delete</button>` :
+                        ''}
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function openSubmissionModal() {
+            document.getElementById('subTitle').value = '';
+            document.getElementById('subDesc').value = '';
+            document.getElementById('subFile').value = '';
+            document.getElementById('submissionModal').classList.add('active');
+        }
+
+        function closeSubmissionModal() {
+            document.getElementById('submissionModal').classList.remove('active');
+        }
+
+        async function submitDocument() {
+            const title = document.getElementById('subTitle').value;
+            const description = document.getElementById('subDesc').value;
+            const targetType = document.getElementById('subType').value;
+            const category = document.getElementById('subCategory').value;
+            const fileInput = document.getElementById('subFile');
+
+            if (!title || !fileInput.files[0]) {
+                alert('Please provide a title and select a file.');
+                return;
+            }
+
+            const btn = document.getElementById('btnSubmitDoc');
+            btn.textContent = 'Uploading...';
+            btn.disabled = true;
+
+            // We need to read the file in the renderer and send it to main process
+            // simpler approach: send path if strict isolation is off, or read to buffer
+            // Since contextIsolation is false in createWindows options, we can probably use fs if we require it, 
+            // but ipcRenderer is safeguarding. standard way in electron without context isolation:
+            // Just pass the file path.
+
+            const file = fileInput.files[0];
+            // In electron with nodeIntegration: true, file object has 'path' property
+            const filePath = file.path;
+
+            ipcRenderer.send('submit-document', {
+                title,
+                description,
+                targetType,
+                category,
+                filePath
+            });
+        }
+
+        function deleteSubmission(id) {
+            if (confirm('Are you sure you want to delete this submission?')) {
+                ipcRenderer.send('delete-submission', { id });
+            }
+        }
+
         // Sale Modal
         function openSaleModal(id, name, price, stock) {
             selectedItem = { id, name, price, stock };
@@ -1108,6 +1497,47 @@
         ipcRenderer.on('online-status', (event, status) => {
             updateOnlineStatus(status.isOnline);
         });
+
+        // Search & Filter Logic
+        function updateCategoryDropdown(elementId, items) {
+            const select = document.getElementById(elementId);
+            const currentVal = select.value;
+            const categories = [...new Set(items.map(i => i.category || 'General'))].sort();
+
+            select.innerHTML = '<option value="all">All Categories</option>' +
+                categories.map(c => `<option value="${c}">${c}</option>`).join('');
+
+            // Restore selection if possible
+            if (currentVal && (currentVal === 'all' || categories.includes(currentVal))) {
+                select.value = currentVal;
+            }
+        }
+
+        function filterAndRenderInventory() {
+            const search = document.getElementById('inventorySearch').value.toLowerCase();
+            const category = document.getElementById('inventoryCategory').value;
+
+            const filtered = allInventory.filter(item => {
+                const matchesSearch = item.name.toLowerCase().includes(search) ||
+                    (item.category || '').toLowerCase().includes(search);
+                const matchesCategory = category === 'all' || (item.category || 'General') === category;
+                return matchesSearch && matchesCategory;
+            });
+            renderInventory(filtered);
+        }
+
+        function filterAndRenderServices() {
+            const search = document.getElementById('serviceSearch').value.toLowerCase();
+            const category = document.getElementById('serviceCategory').value;
+
+            const filtered = allServices.filter(svc => {
+                const matchesSearch = svc.name.toLowerCase().includes(search) ||
+                    (svc.description || '').toLowerCase().includes(search);
+                const matchesCategory = category === 'all' || (svc.category || 'General') === category;
+                return matchesSearch && matchesCategory;
+            });
+            renderServices(filtered);
+        }
 
         // Logout
         document.getElementById('logoutBtn').addEventListener('click', () => {

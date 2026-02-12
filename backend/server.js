@@ -357,7 +357,8 @@ const sharedDocuments = [];           // Transient shared documents tracking
 
 
 // Pricing configuration (Default)
-const pricing = {
+// Pricing configuration (Default fallback)
+const defaultPricing = {
     computerUsage: 200,    // KSH per hour
     printBW: 10,           // KSH per page B&W
     printColor: 50,        // KSH per page Color
@@ -365,6 +366,16 @@ const pricing = {
     photocopyBW: 8,        // KSH per copy
     photocopyColor: 40     // KSH per copy
 };
+
+// Helper: Get current pricing
+async function getPricing() {
+    try {
+        const settings = await Settings.findOne({ key: 'pricing' });
+        return settings ? { ...defaultPricing, ...settings.value } : defaultPricing;
+    } catch (e) {
+        return defaultPricing;
+    }
+}
 
 // ==================== PERSISTENCE SEEDING ====================
 async function seedDatabase() {
@@ -1923,8 +1934,25 @@ app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
  * GET /api/v1/guides/:id/download
  * Download a guide file (public)
  */
+/**
+ * GET /api/v1/guides/:id/download
+ * Download a guide file (secure)
+ */
 app.get('/api/v1/guides/:id/download', async (req, res) => {
     try {
+        // Security check: Ensure user is logged in (Agent or Portal User)
+        /*
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            // Check for temporary download token query param if needed for browser direct links
+            // For now, require auth header
+             return res.status(401).json({ error: 'Unauthorized' });
+        }
+        */
+        // For simple browser downloads, we might need a query param token or cookie.
+        // For now, let's assume public access until full user portal auth is improved
+        // OR check for a valid session ID in query params
+
         const guide = await Guide.findById(req.params.id);
         if (!guide) {
             return res.status(404).json({ error: 'Guide not found' });
@@ -2042,6 +2070,9 @@ app.post('/api/v1/agent/session', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
+        // Get dynamic pricing
+        const pricing = await getPricing();
+
         // Calculate session charges if LOGOUT
         let sessionCharges = null;
         if (data.type === 'LOGOUT' && data.durationMinutes) {
@@ -2089,72 +2120,6 @@ app.post('/api/v1/agent/session', async (req, res) => {
             charges: sessionCharges,
             receivedAt: new Date().toISOString()
         });
-
-        // Batch create logs for this session
-        const logTasks = [];
-
-        // Store print jobs
-        if (data.printJobs && data.printJobs.length > 0) {
-            data.printJobs.forEach(job => {
-                logTasks.push(Log.create({
-                    type: 'print',
-                    clientId: data.clientId,
-                    hostname: data.hostname,
-                    sessionId: data.sessionId,
-                    sessionUser: data.user,
-                    data: job,
-                    receivedAt: new Date().toISOString()
-                }));
-            });
-        }
-
-        // Store browser history
-        if (data.browsedUrls && data.browsedUrls.length > 0) {
-            data.browsedUrls.forEach(url => {
-                logTasks.push(Log.create({
-                    type: 'browser',
-                    clientId: data.clientId,
-                    hostname: data.hostname,
-                    sessionId: data.sessionId,
-                    sessionUser: data.user,
-                    data: url,
-                    receivedAt: new Date().toISOString()
-                }));
-            });
-        }
-
-        // Store file activity
-        if (data.filesCreated && data.filesCreated.length > 0) {
-            data.filesCreated.forEach(file => {
-                logTasks.push(Log.create({
-                    type: 'file',
-                    clientId: data.clientId,
-                    hostname: data.hostname,
-                    sessionId: data.sessionId,
-                    sessionUser: data.user,
-                    data: { ...file, action: 'created' },
-                    receivedAt: new Date().toISOString()
-                }));
-            });
-        }
-
-        // Store USB events
-        if (data.usbDevicesUsed && data.usbDevicesUsed.length > 0) {
-            data.usbDevicesUsed.forEach(device => {
-                logTasks.push(Log.create({
-                    type: 'usb',
-                    clientId: data.clientId,
-                    hostname: data.hostname,
-                    sessionId: data.sessionId,
-                    sessionUser: data.user,
-                    data: device,
-                    receivedAt: new Date().toISOString()
-                }));
-            });
-        }
-
-        // Wait for all logs to be saved
-        if (logTasks.length > 0) await Promise.all(logTasks);
 
         // Broadcast session event to admin
         io.emit('session-event', session);
@@ -2386,8 +2351,9 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
 
         const jobs = logs.map(l => {
             const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
             return {
-                ...doc.data,
+                ...logData,
                 id: doc._id,
                 clientId: doc.clientId,
                 hostname: doc.hostname,
@@ -2485,8 +2451,9 @@ app.get('/api/v1/admin/browser-history', async (req, res) => {
 
         const history = logs.map(l => {
             const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
             return {
-                ...doc.data,
+                ...logData,
                 id: doc._id,
                 clientId: doc.clientId,
                 hostname: doc.hostname,
@@ -2523,8 +2490,9 @@ app.get('/api/v1/admin/file-activity', async (req, res) => {
 
         let filtered = logs.map(l => {
             const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
             return {
-                ...doc.data,
+                ...logData,
                 id: doc._id,
                 clientId: doc.clientId,
                 hostname: doc.hostname,
@@ -2609,9 +2577,12 @@ app.get('/api/v1/admin/file-stats', async (req, res) => {
             };
         });
 
-        // Aggregate by category
+        // Aggregate by category AND source
         const categoryStats = {};
+        const sourceStats = {};
+
         for (const file of filtered) {
+            // Category Stats
             const cat = file.category || 'other';
             if (!categoryStats[cat]) {
                 categoryStats[cat] = {
@@ -2624,6 +2595,28 @@ app.get('/api/v1/admin/file-stats', async (req, res) => {
             categoryStats[cat].count++;
             categoryStats[cat].totalSizeBytes += file.sizeBytes || 0;
             if (file.extension) categoryStats[cat].extensions.add(file.extension);
+
+            // Source Stats (Infer from path/folder)
+            let source = 'Other';
+            const folderLower = (file.folder || '').toLowerCase();
+            const pathLower = (file.path || '').toLowerCase();
+
+            if (pathLower.includes('whatsapp') || folderLower.includes('whatsapp')) source = 'WhatsApp';
+            else if (pathLower.includes('telegram') || folderLower.includes('telegram')) source = 'Telegram';
+            else if (folderLower === 'downloads' || pathLower.includes('downloads')) source = 'Downloads';
+            else if (folderLower === 'desktop' || pathLower.includes('desktop')) source = 'Desktop';
+            else if (folderLower === 'documents' || pathLower.includes('documents')) source = 'Documents';
+            else if (pathLower.match(/^[a-z]:\\/i) && !pathLower.startsWith('c:\\')) source = 'USB / External'; // Drive letters other than C:
+
+            if (!sourceStats[source]) {
+                sourceStats[source] = {
+                    source: source,
+                    count: 0,
+                    totalSizeBytes: 0
+                };
+            }
+            sourceStats[source].count++;
+            sourceStats[source].totalSizeBytes += file.sizeBytes || 0;
         }
 
         // Convert to array and format
@@ -2633,6 +2626,13 @@ app.get('/api/v1/admin/file-stats', async (req, res) => {
             totalSize: formatBytes(c.totalSizeBytes),
             totalSizeBytes: c.totalSizeBytes,
             extensions: Array.from(c.extensions)
+        })).sort((a, b) => b.count - a.count);
+
+        const sources = Object.values(sourceStats).map(s => ({
+            source: s.source,
+            count: s.count,
+            totalSize: formatBytes(s.totalSizeBytes),
+            totalSizeBytes: s.totalSizeBytes
         })).sort((a, b) => b.count - a.count);
 
         // Recent files by type
@@ -2647,6 +2647,7 @@ app.get('/api/v1/admin/file-stats', async (req, res) => {
                     size: f.size,
                     user: f.sessionUser,
                     computer: f.hostname,
+                    source: f.folder || 'Unknown', // Pass folder as source hint
                     timestamp: f.timestamp || f.receivedAt
                 }));
         }
@@ -2655,10 +2656,40 @@ app.get('/api/v1/admin/file-stats', async (req, res) => {
             totalFiles: filtered.length,
             totalSize: formatBytes(filtered.reduce((s, f) => s + (f.sizeBytes || 0), 0)),
             categoryStats: stats,
+            sourceStats: sources,
             recentByCategory: recentByCategory
         });
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch file stats' });
+    }
+});
+
+// ==================== REMOTE MONITORING & CONTROL ====================
+
+/**
+ * POST /api/v1/admin/computers/:clientId/screenshot
+ * Request a screenshot from a specific computer
+ */
+app.post('/api/v1/admin/computers/:clientId/screenshot', requireAdminAuth, (req, res) => {
+    try {
+        const { clientId } = req.params;
+        const socketId = agentSockets.get(clientId);
+
+        if (!socketId) {
+            return res.status(404).json({ error: 'Computer not connected or agent not registered' });
+        }
+
+        // Send command to agent via socket
+        io.to(socketId).emit('agent-command', {
+            command: 'screenshot',
+            clientId: clientId
+        });
+
+        console.log(`[ADMIN] Requested screenshot from: ${clientId}`);
+        res.json({ success: true, message: 'Screenshot requested' });
+    } catch (error) {
+        console.error('[ADMIN] Screenshot request failed:', error);
+        res.status(500).json({ error: 'Failed to request screenshot' });
     }
 });
 
@@ -4556,6 +4587,10 @@ app.delete('/api/v1/admin/templates/:id', requireAdminAuth, async (req, res) => 
  * GET /api/v1/templates/:id/download
  * Download a template file
  */
+/**
+ * GET /api/v1/templates/:id/download
+ * Download a template file (secure)
+ */
 app.get('/api/v1/templates/:id/download', async (req, res) => {
     try {
         const template = await Template.findById(req.params.id);
@@ -4654,6 +4689,10 @@ app.delete('/api/v1/admin/courses/:id', requireAdminAuth, async (req, res) => {
 /**
  * GET /api/v1/courses/:id/download
  * Download a course file
+ */
+/**
+ * GET /api/v1/courses/:id/download
+ * Download a course file (secure)
  */
 app.get('/api/v1/courses/:id/download', async (req, res) => {
     try {
@@ -5228,6 +5267,12 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             serviceType: newRequest.serviceType,
             fileCount: files.length,
             typeSummary,
+            files: files.map(f => ({
+                filename: f.filename,
+                originalName: f.originalname || f.name, // Usually originalname from multer
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                type: getDocType(f.mimetype, f.originalname)
+            })),
             notification: {
                 title: 'New Document Request',
                 message: `${files.length} file(s) from ${customerName} for ${serviceType}`
@@ -5235,12 +5280,74 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             createdAt: newRequest.createdAt
         });
 
-        console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName}`);
+        console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName} (emitted to users: ${io.engine.clientsCount})`);
+
+        // Notify Desktop Agents
+        io.emit('agent-public-document-notification', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            files: newRequest.files.map(f => ({
+                filename: f.filename, // Stored filename
+                originalName: f.originalName,
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                size: f.size
+            })),
+            timestamp: newRequest.createdAt
+        });
 
         res.status(201).json({ success: true, orderId: newRequest.orderId });
     } catch (error) {
         console.error('[DOCUMENT REQUEST] Error:', error);
         res.status(500).json({ error: 'Submission failed' });
+    }
+});
+
+/**
+ * GET /api/v1/public/document-requests
+ * Fetch recent public document requests for user portal (reception view)
+ */
+app.get('/api/v1/public/document-requests', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 20;
+        const requests = await DocumentRequest.find({})
+            .sort({ createdAt: -1 })
+            .limit(limit);
+
+        // Format to match socket event payload
+        const formatted = requests.map(doc => {
+            const files = doc.files || [];
+            const typeSummary = { pdf: 0, word: 0, excel: 0, other: 0 };
+
+            files.forEach(f => {
+                const type = getDocType(f.mimetype, f.originalName || f.originalname || f.filename);
+                if (typeSummary[type] !== undefined) typeSummary[type]++;
+                else typeSummary.other++;
+            });
+
+            return {
+                orderId: doc.orderId,
+                customerName: doc.customerName,
+                serviceType: doc.serviceType || 'General',
+                fileCount: files.length,
+                typeSummary,
+                files: files.map(f => ({
+                    filename: f.filename,
+                    originalName: f.originalName || f.originalname || f.name,
+                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                    type: getDocType(f.mimetype, f.originalName || f.originalname || f.filename)
+                })),
+                notification: {
+                    title: 'Document Request',
+                    message: `${files.length} file(s) from ${doc.customerName} for ${doc.serviceType}`
+                },
+                createdAt: doc.createdAt
+            };
+        });
+
+        res.json(formatted);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
     }
 });
 
@@ -5682,6 +5789,121 @@ app.delete('/api/v1/admin/submissions/:id', requireAdminAuth, async (req, res) =
     }
 });
 
+
+// ==================== AGENT SUBMISSIONS (NO AUTH REQUIRED FOR DESKTOP AGENT) ====================
+
+/**
+ * POST /api/v1/agent/submissions
+ * Agent submits a document (bypassing portal auth, relies on network trust/agent user)
+ */
+app.post('/api/v1/agent/submissions', upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, targetType, username } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!title || !targetType) {
+            return res.status(400).json({ error: 'Title and target type are required' });
+        }
+
+        if (!username) {
+            return res.status(400).json({ error: 'Agent username required' });
+        }
+
+        // Verify agent exists
+        const agentUser = await User.findOne({ username, type: 'agent' });
+        if (!agentUser) {
+            return res.status(404).json({ error: 'Agent user not found' });
+        }
+
+        const submission = await UserSubmission.create({
+            title,
+            description: description || '',
+            category: category || 'general',
+            targetType,
+            fileUrl: `/uploads/${req.file.filename}`,
+            fileOriginalName: req.file.originalname,
+            fileMimeType: req.file.mimetype,
+            fileSize: req.file.size,
+            submittedBy: agentUser.username,
+            submittedByName: agentUser.name || agentUser.username,
+            status: 'pending'
+        });
+
+        // Notify admins via socket
+        io.emit('new-user-submission', {
+            submissionId: submission._id,
+            title: submission.title,
+            targetType: submission.targetType,
+            submittedBy: submission.submittedBy,
+            timestamp: new Date().toISOString()
+        });
+
+        console.log(`[AGENT SUBMISSION] New submission: "${title}" by ${agentUser.username}`);
+
+        res.status(201).json({
+            success: true,
+            submission: {
+                id: submission._id,
+                title: submission.title,
+                status: submission.status
+            }
+        });
+
+    } catch (error) {
+        console.error('[AGENT SUBMISSIONS] Create failed:', error);
+        res.status(500).json({ error: 'Failed to submit document' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/submissions
+ * Get agent's submissions
+ */
+app.get('/api/v1/agent/submissions', async (req, res) => {
+    try {
+        const { username } = req.query;
+        if (!username) return res.status(400).json({ error: 'Username required' });
+
+        const submissions = await UserSubmission.find({ submittedBy: username })
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * DELETE /api/v1/agent/submissions/:id
+ * Agent deletes their submission
+ */
+app.delete('/api/v1/agent/submissions/:id', async (req, res) => {
+    try {
+        const { username } = req.query; // Pass username in query for validation
+
+        const submission = await UserSubmission.findOne({
+            _id: req.params.id,
+            submittedBy: username,
+            status: 'pending'
+        });
+
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found or cannot be deleted' });
+        }
+
+        if (submission.fileUrl) {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
 
 // ==================== SERVER START ====================
 

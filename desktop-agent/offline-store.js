@@ -14,7 +14,9 @@ class OfflineStore {
             inventory: [],
             services: [],
             templates: [],
+            templates: [],
             guides: [],
+            submissions: [],
             settings: {},
             lastSync: null
         };
@@ -130,6 +132,22 @@ class OfflineStore {
     }
 
     /**
+     * Update submissions cache
+     */
+    setSubmissions(submissions) {
+        this.data.submissions = submissions;
+        this.saveToDisk();
+        console.log(`[OfflineStore] Cached ${submissions.length} submissions`);
+    }
+
+    /**
+     * Get cached submissions
+     */
+    getSubmissions() {
+        return this.data.submissions || [];
+    }
+
+    /**
      * Update settings cache
      */
     setSettings(settings) {
@@ -222,6 +240,51 @@ class OfflineStore {
             lastSync: null
         };
         this.saveToDisk();
+    }
+
+    /**
+     * Add a public document notification
+     */
+    addPublicDocument(doc) {
+        if (!this.data.publicDocuments) this.data.publicDocuments = [];
+        // Add to beginning
+        this.data.publicDocuments.unshift(doc);
+        // Keep only last 50
+        if (this.data.publicDocuments.length > 50) {
+            this.data.publicDocuments = this.data.publicDocuments.slice(0, 50);
+        }
+        this.saveToDisk();
+    }
+
+    /**
+     * Get public documents
+     */
+    getPublicDocuments() {
+        return this.data.publicDocuments || [];
+    }
+
+    /**
+     * Mark a file as downloaded (remove it from the list)
+     * If all files in a request are downloaded, remove the request
+     */
+    markFileDownloaded(orderId, filename) {
+        if (!this.data.publicDocuments) return [];
+
+        const docIndex = this.data.publicDocuments.findIndex(d => d.orderId === orderId);
+        if (docIndex === -1) return this.data.publicDocuments;
+
+        const doc = this.data.publicDocuments[docIndex];
+
+        // Remove the specific file
+        doc.files = doc.files.filter(f => (f.originalName || f.filename) !== filename);
+
+        // If no files left, remove the document request
+        if (doc.files.length === 0) {
+            this.data.publicDocuments.splice(docIndex, 1);
+        }
+
+        this.saveToDisk();
+        return this.data.publicDocuments;
     }
 
     /**

@@ -344,40 +344,44 @@ class LiveUrlTracker {
     addFromWindow(windowTitle, browserName, explicitUrl = null) {
         // Use explicit URL if provided, otherwise try to extract from title
         let url = explicitUrl;
+
+        // If no explicit URL, try to extract from title
         if (!url || url.trim() === '') {
             url = extractUrlFromTitle(windowTitle, browserName);
         }
 
         const title = windowTitle || 'Unknown Page';
 
-        // Skip if not a valid browsable page
-        if (!isValidBrowsableUrl(url, title)) {
-            return null;
-        }
-
-        // Create a key for deduplication
+        // Check deduplication key using URL or Title
         const key = url || title;
         if (key === this.lastProcessedKey) {
             return null; // Already processed this
         }
-        this.lastProcessedKey = key;
 
-        // If we still don't have a URL, create a synthetic one from the title
-        if (!url) {
-            // Only create synthetic URL if we have a meaningful title
-            if (title && title !== 'Unknown Page' && title.length > 3) {
-                url = `https://page-from-title/${encodeURIComponent(title.substring(0, 100))}`;
-            } else {
+        // Check if we have a valid URL or at least a meaningful title to track
+        if (url) {
+            // Validate URL format roughly
+            if (url.startsWith('file://') || url === 'about:blank' || url === 'chrome://newtab/') {
                 return null;
             }
+        } else {
+            // If we STILL don't have a URL, checks if title is browsable and informative
+            if (!isValidBrowsableUrl(null, title)) {
+                return null;
+            }
+            // Create synthetic URL for tracking purposes if title is good
+            url = `https://page-limit/${encodeURIComponent(title.substring(0, 50))}`;
         }
+
+        this.lastProcessedKey = key;
 
         // Get category
         const category = categorizeUrl(url);
 
-        // Track the visit
+        // Track the visit internally
         this.addUrl(url, title, category, browserName);
 
+        // Return the data so it can be sent to server
         return {
             url,
             title,

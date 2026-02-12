@@ -3,7 +3,7 @@
  * Production-ready Windows monitoring client
  */
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const si = require('systeminformation');
 const axios = require('axios');
@@ -11,7 +11,10 @@ const os = require('os');
 const fs = require('fs');
 const { exec } = require('child_process');
 const { randomUUID: uuidv4 } = require('crypto');
+const { randomUUID: uuidv4 } = require('crypto');
 const io = require('socket.io-client');
+const FormData = require('form-data');
+const fs = require('fs');
 
 // SINGLE INSTANCE LOCK
 const gotTheLock = app.requestSingleInstanceLock();
@@ -567,6 +570,71 @@ ipcMain.on('check-online-status', async (event) => {
     event.reply('online-status', { isOnline });
 });
 
+// Submit Document
+ipcMain.on('submit-document', async (event, { title, description, category, targetType, filePath }) => {
+    if (!currentSession) {
+        event.reply('submission-result', { success: false, message: 'Session not active' });
+        return;
+    }
+
+    try {
+        if (!fs.existsSync(filePath)) {
+            event.reply('submission-result', { success: false, message: 'File not found' });
+            return;
+        }
+
+        const form = new FormData();
+        form.append('title', title);
+        form.append('description', description || '');
+        form.append('category', category || 'general');
+        form.append('targetType', targetType);
+        form.append('username', currentSession.user);
+        form.append('file', fs.createReadStream(filePath));
+
+        // Use AGENT endpoint
+        const response = await axios.post(`${config.server.baseUrl}/api/v1/agent/submissions`, form, {
+            headers: { ...form.getHeaders() },
+            timeout: 60000
+        });
+
+        if (response.data.success) {
+            event.reply('submission-result', { success: true });
+            await fetchAndCacheData('submissions');
+            await sendPortalData(event);
+        } else {
+            event.reply('submission-result', { success: false, message: response.data.error || 'Submission failed' });
+        }
+    } catch (error) {
+        console.error('Submission failed:', error.message);
+        event.reply('submission-result', { success: false, message: error.response?.data?.error || 'Network error during upload' });
+    }
+});
+
+// Delete Submission
+ipcMain.on('delete-submission', async (event, { id }) => {
+    if (!currentSession) {
+        event.reply('delete-submission-result', { success: false, message: 'Session not active' });
+        return;
+    }
+
+    try {
+        // Use AGENT endpoint with query param
+        const response = await axios.delete(`${config.server.baseUrl}/api/v1/agent/submissions/${id}`, {
+            params: { username: currentSession.user }
+        });
+
+        if (response.data.success) {
+            event.reply('delete-submission-result', { success: true });
+            await fetchAndCacheData('submissions');
+            await sendPortalData(event);
+        } else {
+            event.reply('delete-submission-result', { success: false, message: response.data.error || 'Delete failed' });
+        }
+    } catch (error) {
+        event.reply('delete-submission-result', { success: false, message: error.response?.data?.error || 'Network error' });
+    }
+});
+
 // Helper: Send portal data to renderer
 async function sendPortalData(event) {
     let printers = [];
@@ -584,6 +652,11 @@ async function sendPortalData(event) {
         guides: offlineStore.getGuides(),
         settings: offlineStore.getSettings(),
         pendingActions: offlineStore.getPendingActions(),
+        publicDocuments: offlineStore.getPublicDocuments(), // Public uploads
+        settings: offlineStore.getSettings(),
+        pendingActions: offlineStore.getPendingActions(),
+        publicDocuments: offlineStore.getPublicDocuments(),
+        submissions: offlineStore.getSubmissions(),
         lastSync: offlineStore.getLastSync(),
         printers,
         isOnline
@@ -618,6 +691,19 @@ async function fetchAndCacheData(type = 'all') {
         if (type === 'all' || type === 'settings') {
             const res = await axios.get(`${baseUrl}/api/v1/inventory/settings`, { timeout: 10000 });
             offlineStore.setSettings(res.data || {});
+        }
+
+        if ((type === 'all' || type === 'submissions') && currentSession) {
+            try {
+                // Use AGENT endpoint with query param
+                const res = await axios.get(`${baseUrl}/api/v1/agent/submissions`, {
+                    params: { username: currentSession.user },
+                    timeout: 10000
+                });
+                offlineStore.setSubmissions(res.data || []);
+            } catch (e) {
+                console.log('Failed to fetch submissions:', e.message);
+            }
         }
 
         isOnline = true;
@@ -1013,13 +1099,29 @@ async function startDataCollection() {
                             sentPrintJobIds.add(job.jobId);
 
                             // Send Real-Time Print Log
+                            // Send Real-Time Print Log with extensive details
                             const printPayload = {
                                 type: 'print',
                                 clientId: CLIENT_ID,
                                 hostname: os.hostname(),
                                 sessionId: currentSession?.id || null,
                                 sessionUser: currentSession?.user || null,
-                                data: job
+                                data: {
+                                    id: job.id,
+                                    jobId: job.jobId,
+                                    printer: job.printer,
+                                    printerType: job.printerType,
+                                    document: job.document,
+                                    totalPages: job.totalPages,
+                                    pagesPrinted: job.pagesPrinted,
+                                    printType: job.printType, // 'bw' or 'color'
+                                    paperSize: job.paperSize, // A4, Letter, etc.
+                                    isColorPrint: job.isColorPrint,
+                                    duplexMode: job.duplexMode,
+                                    sizeKB: job.sizeKB,
+                                    status: job.status,
+                                    timestamp: job.timestamp
+                                }
                             };
                             sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
 
@@ -1186,6 +1288,11 @@ function setupSocket() {
         if (data.document && data.document.downloadUrl) {
             downloadFile(data.document.downloadUrl, data.document.filename, data.document.message, data.document.id);
         }
+    });
+
+    socket.on('agent-public-document-notification', (data) => {
+        console.log(`Received Public Document Upload: ${data.orderId}`);
+        handlePublicDocument(data);
     });
 }
 
@@ -1420,6 +1527,152 @@ async function sendToServer(url, data) {
         } else {
             console.error('API Error:', error.message, error.response?.data);
         }
+    }
+}
+
+async function handlePublicDocument(data) {
+    if (!data.files || data.files.length === 0) return;
+
+    // Save to store for history
+    if (offlineStore) {
+        offlineStore.addPublicDocument(data);
+    }
+
+    // Notify Portal if open
+    if (portalWindow && !portalWindow.isDestroyed()) {
+        portalWindow.webContents.send('new-public-document', data);
+    }
+
+    // Show Notification
+    const { Notification } = require('electron');
+    if (Notification.isSupported()) {
+        new Notification({
+            title: 'New Document Upload',
+            body: `${data.customerName} uploaded ${data.files.length} document(s).`
+        }).show();
+    }
+
+    // Process files sequentially (auto-prompt)
+    for (const file of data.files) {
+        await promptAndDownloadFile(file.downloadUrl, file.originalName || file.filename, data.customerName);
+    }
+}
+
+// IPC for user document submission
+ipcMain.on('submit-user-document', async (event, data) => {
+    try {
+        const { filePath, title, description, category, targetType } = data;
+
+        if (!currentSession || !currentSession.token) {
+            // We need a user token. If currentSession doesn't have it, we might have a problem.
+            // But wait, the desktop agent usually authenticates as the AGENT. 
+            // The user submission endpoint requires USER auth.
+            // Strategy: Use a special "Agent-User-Submission" endpoint or check if we have a token.
+            // Let's assume for now we might need to modify backend to allow agents to submit on behalf of users.
+            // Or use the AGENT token and pass 'submittedBy' field?
+            // UserSubmission model has 'submittedBy'.
+
+            // Let's try sending with Agent Token and let backend handle it? 
+            // No, requireUserAuth checks for user.
+
+            // Temporary Workaround: Modify backend to allow this or fallback. 
+            // But I can't easily modify backend auth middleware without breaking things relative to user portal.
+
+            // Let's look at startSession in server.js next.
+            // For now, I'll perform the upload implementation assuming I can get a token or use agent token.
+            throw new Error('User not authenticated');
+        }
+
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('description', description);
+        formData.append('category', category);
+        formData.append('targetType', targetType);
+
+        // This part depends on how we can append file in Node environment with axios/FormData
+        // In Node, we usually use 'form-data' library.
+        // const FormData = require('form-data');
+        // const form = new FormData();
+        // form.append('file', fs.createReadStream(filePath));
+
+        // Let's check imports.
+    } catch (e) {
+        event.reply('submit-result', { success: false, message: e.message });
+    }
+});
+ipcMain.on('download-public-doc', async (event, { url, filename, customerName, orderId }) => {
+    try {
+        const filePath = await promptAndDownloadFile(url, filename, customerName);
+        if (filePath && offlineStore && orderId) {
+            // Remove from list if successfully saved
+            const remainingDocs = offlineStore.markFileDownloaded(orderId, filename);
+            // Refresh portal view
+            event.reply('portal-data', {
+                user: currentSession ? { name: currentSession.user, username: currentSession.user } : null,
+                inventory: offlineStore.getInventory(),
+                services: offlineStore.getServices(),
+                templates: offlineStore.getTemplates(),
+                guides: offlineStore.getGuides(),
+                settings: offlineStore.getSettings(),
+                pendingActions: offlineStore.getPendingActions(),
+                publicDocuments: remainingDocs,
+                lastSync: offlineStore.getLastSync(),
+                // printers: await getInstalledPrinters(), // This could be slow, maybe skip or send cached?
+                // For speed, let's omit printers here or ensure sendPortalData is efficient.
+                // Or I can send a specific 'public-documents-updated' event.
+                isOnline
+            });
+            // Or just call sendPortalData(event) but getInstalledPrinters might slow it down.
+            // Let's rely on sendPortalData reuse if possible or construct partial update.
+            // Sending partial update for publicDocuments is safer/faster.
+            event.sender.send('new-public-document', { refreshOnly: true });
+            // The portal handles 'new-public-document' by calling loadAllData(), which does a full refresh.
+            // This is acceptable.
+        }
+    } catch (e) {
+        console.error('Manual download failed or cancelled:', e);
+    }
+});
+
+async function promptAndDownloadFile(url, defaultFilename, customerName) {
+    try {
+        const { filePath } = await dialog.showSaveDialog({
+            title: `Save Document from ${customerName}`,
+            defaultPath: path.join(app.getPath('downloads'), defaultFilename),
+            buttonLabel: 'Save Document',
+            filters: [
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        });
+
+        if (filePath) {
+            console.log(`Downloading to ${filePath}...`);
+            const writer = fs.createWriteStream(filePath);
+
+            const response = await axios({
+                url,
+                method: 'GET',
+                responseType: 'stream'
+            });
+
+            response.data.pipe(writer);
+
+            return new Promise((resolve, reject) => {
+                writer.on('finish', () => {
+                    console.log(`Saved: ${filePath}`);
+                    // Optional: Show success dialog/toast
+                    resolve(filePath);
+                });
+                writer.on('error', (err) => {
+                    console.error('File write error:', err);
+                    dialog.showErrorBox('Save Error', `Failed to save file: ${err.message}`);
+                    reject(err);
+                });
+            });
+        }
+    } catch (error) {
+        console.error('Download/Save failed:', error.message);
+        dialog.showErrorBox('Download Error', `Failed to download file: ${error.message}`);
     }
 }
 

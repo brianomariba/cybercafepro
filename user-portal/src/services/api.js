@@ -6,8 +6,8 @@
 import axios from 'axios';
 import { io } from 'socket.io-client';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://api.hawkninegroup.com/api/v1';
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://api.hawkninegroup.com';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
 
 // Create axios instance with defaults
 const api = axios.create({
@@ -68,6 +68,13 @@ export const getDocuments = async (params = {}) => {
 
 export const downloadDocument = (documentId) => {
     return `${API_BASE_URL}/documents/${documentId}/download`;
+};
+
+// ==================== PUBLIC DOCUMENTS (LANDING PAGE UPLOADS) ====================
+
+export const getPublicDocumentRequests = async (params = {}) => {
+    const response = await api.get('/public/document-requests', { params });
+    return response.data;
 };
 
 // ==================== CONTENT ====================
@@ -192,7 +199,9 @@ export default {
     getServiceCategories,
     // Documents
     getDocuments,
+    getDocuments,
     downloadDocument,
+    getPublicDocumentRequests,
     // Content
     getTemplates,
     getCourses,

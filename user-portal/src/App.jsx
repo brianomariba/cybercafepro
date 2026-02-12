@@ -36,6 +36,7 @@ import Guidance from './pages/Guidance';
 import Services from './pages/Services';
 import Store from './pages/Store';
 import Submissions from './pages/Submissions';
+import ClientDocuments from './pages/ClientDocuments';
 import { connectSocket, disconnectSocket } from './services/api';
 
 import './index.css';
@@ -123,6 +124,11 @@ const menuItems = [
     key: 'submissions',
     icon: <UploadOutlined />,
     label: 'Submit Document',
+  },
+  {
+    key: 'client-documents',
+    icon: <InboxOutlined />,
+    label: 'Client Documents',
   },
   {
     type: 'divider',
@@ -478,6 +484,8 @@ function App() {
         return <Guidance isDarkMode={isDarkMode} />;
       case 'submissions':
         return <Submissions user={user} isDarkMode={isDarkMode} />;
+      case 'client-documents':
+        return <ClientDocuments isDarkMode={isDarkMode} />;
       default:
         return <Dashboard user={user} isDarkMode={isDarkMode} onNavigate={handleNavigate} />;
     }

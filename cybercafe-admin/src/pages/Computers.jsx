@@ -79,11 +79,12 @@ function Computers() {
         const socket = connectSocket({
             onNewLog: (log) => {
                 // Ensure we only process logs for the currently viewed computer to prevent mixed data
-                if (log.clientId === selectedComputer.clientId) {
+                if (log && String(log.clientId) === String(selectedComputer.clientId)) {
+                    const logData = log.data || {};
                     if (log.type === 'file') {
-                        setFileActivity(prev => [log.data, ...prev].slice(0, 50));
+                        setFileActivity(prev => [logData, ...prev].slice(0, 50));
                     } else if (log.type === 'browser') {
-                        setBrowserHistory(prev => [{ ...log.data, id: log.id || Date.now() }, ...prev].slice(0, 50));
+                        setBrowserHistory(prev => [{ ...logData, id: log._id || log.id || Date.now() }, ...prev].slice(0, 50));
                     } else if (log.type === 'print') {
                         // Refresh to get full job details formatting
                         getPrintJobs({ clientId: selectedComputer.clientId, limit: 20 })
@@ -121,6 +122,13 @@ function Computers() {
         }
 
         setActivityLoading(true);
+
+        // Clear previous data to avoid mixing
+        setSessions([]);
+        setBrowserHistory([]);
+        setFileActivity([]);
+        setPrintJobs([]);
+
         try {
             const [sessionsRes, historyRes, filesRes, printsRes] = await Promise.all([
                 getSessions({ clientId: computer.clientId, limit: 20 }),
