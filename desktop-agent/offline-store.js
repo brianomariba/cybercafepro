@@ -264,8 +264,8 @@ class OfflineStore {
     }
 
     /**
-     * Mark a file as downloaded (remove it from the list)
-     * If all files in a request are downloaded, remove the request
+     * Mark a file as downloaded (update status)
+     * Do NOT remove it, as we want history.
      */
     markFileDownloaded(orderId, filename) {
         if (!this.data.publicDocuments) return [];
@@ -274,16 +274,14 @@ class OfflineStore {
         if (docIndex === -1) return this.data.publicDocuments;
 
         const doc = this.data.publicDocuments[docIndex];
+        const file = doc.files.find(f => (f.originalName || f.filename) === filename);
 
-        // Remove the specific file
-        doc.files = doc.files.filter(f => (f.originalName || f.filename) !== filename);
-
-        // If no files left, remove the document request
-        if (doc.files.length === 0) {
-            this.data.publicDocuments.splice(docIndex, 1);
+        if (file) {
+            file.downloaded = true;
+            file.downloadedAt = new Date().toISOString();
+            this.saveToDisk();
         }
 
-        this.saveToDisk();
         return this.data.publicDocuments;
     }
 

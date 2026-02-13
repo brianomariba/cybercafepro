@@ -1279,10 +1279,14 @@
                     // However, we can't easily escape URL for onclick string context without being careful.
                     // A better way is to attach event listeners, but for this simple app, let's just escape the string arguments.
 
+                    const downloaded = f.downloaded ? '✅' : '';
+                    const btnLabel = f.downloaded ? '⬇️ Save Again' : '⬇️ Save';
+                    const btnClass = f.downloaded ? 'btn btn-small btn-secondary' : 'btn btn-small btn-primary'; // Highlight new ones
+
                     return `
                     <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">
-                        <span style="font-size: 13px;">📄 ${fileNameEscaped}</span>
-                        <button class="btn btn-small btn-secondary" onclick="downloadDocument('${downloadUrl}', '${fileNameEscaped.replace(/'/g, "\\'")}', '${customerNameEscaped.replace(/'/g, "\\'")}', '${orderIdEscaped}')">⬇️ Save</button>
+                        <span style="font-size: 13px;">${downloaded} 📄 ${fileNameEscaped}</span>
+                        <button class="${btnClass}" onclick="downloadDocument('${downloadUrl}', '${fileNameEscaped.replace(/'/g, "\\'")}', '${customerNameEscaped.replace(/'/g, "\\'")}', '${orderIdEscaped}')">${btnLabel}</button>
                     </div>`;
                 }).join('');
 
