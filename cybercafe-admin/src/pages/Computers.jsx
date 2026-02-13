@@ -46,6 +46,7 @@ function Computers() {
     const [viewMode, setViewMode] = useState('grid');
     const [filterStatus, setFilterStatus] = useState('all');
     const [searchText, setSearchText] = useState('');
+    const [hiddenComputers, setHiddenComputers] = useState(new Set());
 
     // Activity data for selected computer
     const [sessions, setSessions] = useState([]);
@@ -246,6 +247,9 @@ function Computers() {
     };
 
     const filteredComputers = computers.filter(c => {
+        // Persistently filter out hidden (disconnected) computers
+        if (hiddenComputers.has(c.clientId)) return false;
+
         const matchesStatus = filterStatus === 'all' ||
             (filterStatus === 'active' && c.status === 'active') ||
             (filterStatus === 'locked' && c.status === 'locked') ||
@@ -526,15 +530,16 @@ function Computers() {
                                 description="This will disconnect the computer from the server. The agent will stop sending data until restarted."
                                 onConfirm={async () => {
                                     try {
-                                        await disconnectComputer(selectedComputer.clientId, false);
+                                        // Send quit=true to ensure agent terminates and doesn't auto-reconnect
+                                        await disconnectComputer(selectedComputer.clientId, true);
                                         message.success(`Disconnect command sent to ${selectedComputer.hostname}`);
                                         setActivityDrawerOpen(false);
-                                        // Optimistically remove from list immediately
-                                        setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
 
-                                        // We deliberately do NOT call fetchComputers() immediately here to prevent 
-                                        // the computer from reappearing before the backend processes the removal/status change.
-                                        // The auto-refresh interval will eventually sync the state.
+                                        // Persistently remove from list for this session
+                                        setHiddenComputers(prev => new Set(prev).add(selectedComputer.clientId));
+
+                                        // Optimistically update current list as well
+                                        setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
                                     } catch (error) {
                                         message.error('Failed to disconnect computer');
                                     }
