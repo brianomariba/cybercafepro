@@ -136,9 +136,20 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
                 visitTime = new Date((row.time / 1000) - epochDiff).toISOString();
             }
 
+            // Clean title
+            let cleanTitle = row.title;
+            if (cleanTitle) {
+                cleanTitle = cleanTitle
+                    .replace(/ - Google Chrome$/i, '')
+                    .replace(/ - Microsoft Edge$/i, '')
+                    .replace(/ - Mozilla Firefox$/i, '')
+                    .replace(/ - Brave$/i, '')
+                    .replace(/ - YouTube$/, ''); // YouTube specific suffix
+            }
+
             results.push({
                 url: row.url,
-                title: row.title,
+                title: cleanTitle || row.title,
                 browser: browserName,
                 visitTime: visitTime,
                 timestamp: new Date().toISOString()

@@ -244,6 +244,16 @@ function getRecentPrintJobs() {
 }
 
 /**
+ * Enable Windows Print Service Operational Logging
+ * Required for history tracking of completed jobs
+ */
+function enablePrintLogging() {
+    exec('wevtutil sl Microsoft-Windows-PrintService/Operational /e:true', (req, res) => {
+        // Silently fail or succeed
+    });
+}
+
+/**
  * Get print history from Windows Event Log (completed jobs)
  * This captures jobs that have already finished printing
  */
@@ -258,7 +268,16 @@ function getPrintHistory(hoursBack = 24) {
             Select-Object -First 50 TimeCreated, Message |
             ForEach-Object {
                 $msg = $_.Message
-                $doc = if ($msg -match 'Document (.+?) owned') { $Matches[1] } else { 'Unknown' }
+                $id = 0
+                $doc = 'Unknown'
+                
+                if ($msg -match 'Document (\\d+), (.+?) owned') {
+                   $id = [int]$Matches[1]
+                   $doc = $Matches[2]
+                } elseif ($msg -match 'Document (.+?) owned') {
+                   $doc = $Matches[1]
+                }
+                
                 $user = if ($msg -match 'owned by (.+?) was') { $Matches[1] } else { 'Unknown' }
                 $printer = if ($msg -match 'printed on (.+?) through') { $Matches[1] } else { 'Unknown' }
                 $pages = if ($msg -match '(\\d+) page') { [int]$Matches[1] } else { 0 }
@@ -266,6 +285,7 @@ function getPrintHistory(hoursBack = 24) {
                 
                 [PSCustomObject]@{
                     TimeCreated = $_.TimeCreated
+                    Id = $id
                     Document = $doc
                     User = $user
                     Printer = $printer
@@ -295,6 +315,8 @@ function getPrintHistory(hoursBack = 24) {
                     }
 
                     return {
+                        id: h.Id || 0, // Extracted ID
+                        jobId: h.Id ? `${h.Printer}-${h.Id}` : null, // Reconstruct composite ID
                         timestamp: h.TimeCreated,
                         document: h.Document,
                         user: h.User,
@@ -413,5 +435,6 @@ module.exports = {
     getPrintHistory,
     getInstalledPrinters,
     getPrinterCapabilities,
-    clearPrinterCache
+    clearPrinterCache,
+    enablePrintLogging
 };

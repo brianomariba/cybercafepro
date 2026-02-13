@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Upload, Modal, message, Row, Col, Collapse, Badge, Empty, Tooltip, Progress, Tabs, List, Avatar } from 'antd';
 import { io } from 'socket.io-client';
 import {
@@ -81,6 +81,14 @@ function Documents() {
         setLoading(false);
     };
 
+    // Keep track of processed IDs to prevent duplicates even within same render cycle
+    const processedIdsRef = useRef(new Set());
+
+    useEffect(() => {
+        // Sync ref with current state
+        documents.forEach(doc => processedIdsRef.current.add(doc.id));
+    }, [documents]);
+
     useEffect(() => {
         fetchData();
 
@@ -94,6 +102,10 @@ function Documents() {
         });
 
         socket.on('document-shared', (newDoc) => {
+            // Check against set
+            if (processedIdsRef.current.has(newDoc.id)) return;
+            processedIdsRef.current.add(newDoc.id);
+
             setDocuments(prev => [newDoc, ...prev]);
             setStats(prev => ({ ...prev, total: prev.total + 1, pending: prev.pending + 1 }));
             message.info(`New document shared: ${newDoc.filename}`);

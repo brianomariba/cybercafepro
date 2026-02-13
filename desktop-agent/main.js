@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getInstalledPrinters } = require('./print-monitor');
+const { getRecentPrintJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getBrowserHistoryFromDB } = require('./browser-history');
 
 // Load Configuration
@@ -232,6 +232,9 @@ async function createWindows() {
         fileMonitor.start();
         console.log('[MONITOR] File system monitoring started');
     }
+
+    // --- ACTIVATION: PRINT LOGGING ---
+    enablePrintLogging(); // Ensure event logging is active for history tracking
 
     // --- SECURITY: PERSISTENT FOCUS ---
     setInterval(() => {
@@ -1316,10 +1319,17 @@ async function startDataCollection() {
                     lastHistorySyncTime = latestTime;
                 }
 
-                // Send items to server
-                for (const item of newItems) {
+                // Send items to server (Sorted Oldest -> Newest)
+                const sortedItems = newItems.sort((a, b) => new Date(a.visitTime) - new Date(b.visitTime));
+                let lastProcessedUrl = null;
+
+                for (const item of sortedItems) {
                     // Avoid duplicates with real-time tracker if recently sent
                     if (item.url === lastSentBrowserUrl) continue;
+
+                    // Avoid consecutive duplicates within this batch
+                    if (item.url === lastProcessedUrl) continue;
+                    lastProcessedUrl = item.url;
 
                     const historyPayload = {
                         type: 'browser',
@@ -1339,6 +1349,57 @@ async function startDataCollection() {
             }
         } catch (e) {
             console.error('[HISTORY] Sync failed:', e.message);
+        }
+    }, 60000);
+
+    // Periodic Print History Sync (every 60 seconds)
+    // Captures completed jobs missed by real-time polling
+    setInterval(async () => {
+        try {
+            // Fetch print history from the last hour
+            const history = await getPrintHistory(1);
+
+            // Filter new jobs based on ID or composite key
+            const newJobs = history.filter(job => {
+                // If we have a valid Job ID, check against sent set
+                if (job.jobId && sentPrintJobIds.has(job.jobId)) return false;
+
+                // If not in set, it's new
+                return true;
+            });
+
+            if (newJobs.length > 0) {
+                console.log(`[PRINT] Found ${newJobs.length} new/missed print jobs from History`);
+
+                for (const job of newJobs) {
+                    // Mark as sent
+                    if (job.jobId) sentPrintJobIds.add(job.jobId);
+
+                    const printPayload = {
+                        type: 'print',
+                        clientId: CLIENT_ID,
+                        hostname: os.hostname(),
+                        sessionId: currentSession?.id || null,
+                        sessionUser: currentSession?.user || null,
+                        data: {
+                            ...job,
+                            status: 'Completed (History)'
+                        }
+                    };
+
+                    // Send to server
+                    sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print History Log Failed:', e.message));
+
+                    // Also update current session if applicable
+                    if (currentSession) {
+                        // Check if job already exists in session via ID
+                        const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
+                        if (!exists) currentSession.printJobs.push(job);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('[PRINT] History Sync failed:', e.message);
         }
     }, 60000);
 }

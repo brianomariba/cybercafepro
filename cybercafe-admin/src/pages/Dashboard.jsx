@@ -85,11 +85,29 @@ function Dashboard() {
                 });
             },
             onSessionEvent: (data) => {
-                setSessions(prev => [data, ...prev.slice(0, 9)]);
+                setSessions(prev => {
+                    const idx = prev.findIndex(s => s.sessionId === data.sessionId);
+                    if (idx !== -1) {
+                        const newSessions = [...prev];
+                        newSessions[idx] = { ...newSessions[idx], ...data };
+                        return newSessions;
+                    }
+                    return [data, ...prev].slice(0, 9);
+                });
             },
             onNewLog: (log) => {
                 if (log.type === 'print') {
-                    setPrintJobs(prev => [log.data, ...prev.slice(0, 9)]);
+                    setPrintJobs(prev => {
+                        const jobData = log.data;
+                        if (!jobData) return prev;
+                        const idx = prev.findIndex(j => j.id === jobData.id);
+                        if (idx !== -1) {
+                            const newJobs = [...prev];
+                            newJobs[idx] = { ...newJobs[idx], ...jobData };
+                            return newJobs;
+                        }
+                        return [jobData, ...prev].slice(0, 9);
+                    });
                 }
             },
         });

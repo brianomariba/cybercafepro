@@ -89,7 +89,10 @@ function BrowserHistory() {
                         duration: null,
                         blocked: false,
                     };
-                    setHistory(prev => [newEntry, ...prev].slice(0, 200));
+                    setHistory(prev => {
+                        if (prev.some(item => item.id === newEntry.id)) return prev;
+                        return [newEntry, ...prev].slice(0, 200);
+                    });
                     setLastUpdate(new Date());
                 }
             }

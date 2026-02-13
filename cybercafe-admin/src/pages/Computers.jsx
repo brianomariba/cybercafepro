@@ -82,9 +82,21 @@ function Computers() {
                 if (log && String(log.clientId) === String(selectedComputer.clientId)) {
                     const logData = log.data || {};
                     if (log.type === 'file') {
-                        setFileActivity(prev => [logData, ...prev].slice(0, 50));
+                        setFileActivity(prev => {
+                            // Deduplicate based on timestamp and filename/name
+                            const isDuplicate = prev.some(f =>
+                                (f.timestamp === logData.timestamp || f.receivedAt === logData.timestamp) &&
+                                (f.name === logData.name || f.filename === logData.name)
+                            );
+                            if (isDuplicate) return prev;
+                            return [logData, ...prev].slice(0, 50);
+                        });
                     } else if (log.type === 'browser') {
-                        setBrowserHistory(prev => [{ ...logData, id: log._id || log.id || Date.now() }, ...prev].slice(0, 50));
+                        setBrowserHistory(prev => {
+                            const newId = log._id || log.id || Date.now();
+                            if (prev.some(item => item.id === newId)) return prev;
+                            return [{ ...logData, id: newId }, ...prev].slice(0, 50);
+                        });
                     } else if (log.type === 'print') {
                         // Refresh to get full job details formatting
                         getPrintJobs({ clientId: selectedComputer.clientId, limit: 20 })
