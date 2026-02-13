@@ -15,10 +15,33 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 
+// Global pricing configuration
+let pricing = {
+    printBW: 10,
+    printColor: 20,
+    sessionHourly: 60
+};
+
 // ==================== DATABASE CONNECTION ====================
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/hawknine';
 mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ Connected to MongoDB persistence layer'))
+    .then(() => {
+        console.log('✅ Connected to MongoDB persistence layer');
+
+        // Load pricing from DB
+        Settings.findOne({ key: 'pricing' }).then(setting => {
+            if (setting && setting.value) {
+                Object.assign(pricing, setting.value);
+                console.log('✅ Loaded pricing configuration from DB');
+            } else {
+                console.log('⚠️ Pricing not found in DB, using defaults');
+                // Initialize default pricing in DB
+                Settings.create({ key: 'pricing', value: pricing })
+                    .then(() => console.log('✅ Initialized default pricing in DB'))
+                    .catch(err => console.error('Failed to init pricing:', err));
+            }
+        }).catch(err => console.error('Failed to load pricing:', err));
+    })
     .catch(err => {
         console.error('❌ MongoDB connection error:', err);
         console.log('Falling back to limited local state...');
