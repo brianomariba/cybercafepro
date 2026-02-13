@@ -156,6 +156,9 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// ==================== STATIC FILES ====================
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // ==================== SECURITY: RATE LIMITING ====================
 
 // Simple in-memory rate limiter

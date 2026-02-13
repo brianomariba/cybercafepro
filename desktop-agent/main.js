@@ -206,10 +206,35 @@ function setupTray() {
     try {
         tray = new Tray(iconPath);
 
+        tray.setToolTip('HawkNine Security Agent');
         const updateTrayMenu = () => {
             const pendingCount = offlineStore ? offlineStore.getPendingActions().length : 0;
             const contextMenu = Menu.buildFromTemplate([
                 { label: `HawkNine Agent (${CLIENT_ID})`, enabled: false },
+                { label: `Status: ${socket && socket.connected ? '🟢 Connected' : '🔴 Disconnected'}`, enabled: false },
+                { type: 'separator' },
+                {
+                    label: 'Test Server Connection',
+                    click: () => {
+                        if (socket && socket.connected) {
+                            dialog.showMessageBox(null, {
+                                type: 'info',
+                                title: 'Connection Test',
+                                message: '✅ Agent is connected to server.',
+                                detail: `Socket ID: ${socket.id}\nClient ID: ${CLIENT_ID}\nServer: ${config.server.baseUrl}`
+                            });
+                        } else {
+                            dialog.showMessageBox(null, {
+                                type: 'error',
+                                title: 'Connection Test',
+                                message: '❌ Agent is NOT connected.',
+                                detail: `Server: ${config.server.baseUrl}\nCheck your internet or firewall.`
+                            });
+                            // Try reconnect
+                            if (socket) socket.connect();
+                        }
+                    }
+                },
                 { type: 'separator' },
                 {
                     label: isLocked ? 'Station Locked' : `Active: ${currentSession ? currentSession.user : 'User'}`,
