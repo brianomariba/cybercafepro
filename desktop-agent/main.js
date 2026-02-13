@@ -11,10 +11,10 @@ const os = require('os');
 const fs = require('fs');
 const { exec } = require('child_process');
 const { randomUUID: uuidv4 } = require('crypto');
-const { randomUUID: uuidv4 } = require('crypto');
+
 const io = require('socket.io-client');
 const FormData = require('form-data');
-const fs = require('fs');
+
 
 // SINGLE INSTANCE LOCK
 const gotTheLock = app.requestSingleInstanceLock();
