@@ -4,14 +4,17 @@
  */
 
 // API Configuration - Auto-detect production vs development
-const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-const API_BASE_URL = isProduction
-    ? 'https://api.hawkninegroup.com/api/v1'
-    : 'http://localhost:5000/api/v1';
+// FORCING PRODUCTION FOR TESTING: User is checking prod portal but running landing page locally.
+const isProduction = true; // window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+const API_BASE_URL = 'https://api.hawkninegroup.com/api/v1';
+// isProduction
+// ? 'https://api.hawkninegroup.com/api/v1'
+// : 'http://localhost:5000/api/v1';
 
-const PORTAL_URL = isProduction
-    ? 'https://portal.hawkninegroup.com'
-    : 'http://localhost:5173';
+const PORTAL_URL = 'https://portal.hawkninegroup.com';
+// isProduction
+// ? 'https://portal.hawkninegroup.com'
+// : 'http://localhost:5173';
 
 // Expose globally
 window.goToPortal = function (path) {

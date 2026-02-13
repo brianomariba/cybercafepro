@@ -16,7 +16,12 @@ const io = require('socket.io-client');
 const FormData = require('form-data');
 
 
+
 // SINGLE INSTANCE LOCK
+if (process.platform === 'win32') {
+    app.setAppUserModelId('com.hawkninegroup.agent');
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
     app.quit();
@@ -654,14 +659,12 @@ async function sendPortalData(event) {
         settings: offlineStore.getSettings(),
         pendingActions: offlineStore.getPendingActions(),
         publicDocuments: offlineStore.getPublicDocuments(), // Public uploads
-        settings: offlineStore.getSettings(),
-        pendingActions: offlineStore.getPendingActions(),
-        publicDocuments: offlineStore.getPublicDocuments(),
         submissions: offlineStore.getSubmissions(),
         lastSync: offlineStore.getLastSync(),
         printers,
         isOnline
     });
+    console.log(`[Portal] Data sent to renderer (Public Docs: ${offlineStore.getPublicDocuments().length})`);
 }
 
 // Helper: Fetch and cache data from server
@@ -1550,18 +1553,33 @@ async function handlePublicDocument(data) {
     }
 
     // Notify Portal if open
+    console.log(`[PublicDoc] Notifying portal window (valid: ${portalWindow && !portalWindow.isDestroyed()})`);
     if (portalWindow && !portalWindow.isDestroyed()) {
-        portalWindow.webContents.send('new-public-document', data);
+        try {
+            portalWindow.webContents.send('new-public-document', data);
+            console.log('[PublicDoc] Sent to portal window');
+        } catch (e) {
+            console.error('[PublicDoc] Failed to send to portal:', e);
+        }
+    } else {
+        console.log('[PublicDoc] Portal window not available');
     }
 
     // Show Notification
-    const { Notification } = require('electron');
+    const { Notification, dialog } = require('electron');
     if (Notification.isSupported()) {
         new Notification({
             title: 'New Document Upload',
             body: `${data.customerName} uploaded ${data.files.length} document(s).`
         }).show();
     }
+
+    // Force a visual alert for debugging/fail-safe
+    dialog.showMessageBox(null, {
+        type: 'info',
+        title: 'New Client Document',
+        message: `${data.customerName} has uploaded documents. Check the "Documents" tab.`
+    }).catch(e => console.error('Failed to show dialog:', e));
 
     // Process files sequentially (auto-prompt)
     for (const file of data.files) {
