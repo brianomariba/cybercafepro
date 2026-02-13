@@ -182,6 +182,29 @@ async function createWindows() {
     // --- AUTO-LAUNCH ---
     setupAutoLaunch();
 
+    // --- ACTIVATION: FILE MONITOR ---
+    if (!fileMonitor) {
+        fileMonitor = new FileMonitor((fileInfo) => {
+            // Log file activity to server
+            if (isLocked) return; // Optional: Don't track if locked? Or maybe do for security?
+            // Let's track always for security audit.
+
+            const filePayload = {
+                type: 'file',
+                clientId: CLIENT_ID,
+                hostname: os.hostname(),
+                sessionId: currentSession?.id || null, // Associate with user if active
+                sessionUser: currentSession?.user || null,
+                data: fileInfo
+            };
+
+            // Send to server (fire and forget)
+            sendToServer(LOG_API_URL, filePayload).catch(e => console.error('File Log Failed:', e.message));
+        });
+        fileMonitor.start();
+        console.log('[MONITOR] File system monitoring started');
+    }
+
     // --- SECURITY: PERSISTENT FOCUS ---
     setInterval(() => {
         if (!isLocked) return;
