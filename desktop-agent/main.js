@@ -84,16 +84,44 @@ let CLIENT_ID;
 try {
     // Check if we have an ID in the new persistent location
     if (fs.existsSync(CLIENT_ID_FILE)) {
-        CLIENT_ID = fs.readFileSync(CLIENT_ID_FILE, 'utf8').trim();
+        const storedId = fs.readFileSync(CLIENT_ID_FILE, 'utf8').trim();
+        const currentHostname = os.hostname();
+
+        // Validate ID matches current hostname (prevents cloning issues)
+        // Check if it starts with hostname + '-' OR is exactly hostname
+        if (storedId.startsWith(`${currentHostname}-`) || storedId === currentHostname) {
+            CLIENT_ID = storedId;
+        } else {
+            console.log(`[ID] Hostname mismatch detected (Stored: ${storedId}, Current: ${currentHostname}). Regenerating Client ID.`);
+            // Regenerate ID for new/renamed machine
+            CLIENT_ID = `${currentHostname}-${uuidv4().slice(0, 8)}`;
+            if (!fs.existsSync(USER_DATA_PATH)) {
+                fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+            }
+            fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
+        }
     }
     // Migration: Check if we have an ID in the old installation folder
     else if (fs.existsSync(OLD_CLIENT_ID_FILE)) {
-        CLIENT_ID = fs.readFileSync(OLD_CLIENT_ID_FILE, 'utf8').trim();
-        // Migrate to new location
-        if (!fs.existsSync(USER_DATA_PATH)) {
-            fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+        const storedId = fs.readFileSync(OLD_CLIENT_ID_FILE, 'utf8').trim();
+        const currentHostname = os.hostname();
+
+        // Validate migration ID too
+        if (storedId.startsWith(`${currentHostname}-`) || storedId === currentHostname) {
+            CLIENT_ID = storedId;
+            // Migrate to new location
+            if (!fs.existsSync(USER_DATA_PATH)) {
+                fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+            }
+            fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
+        } else {
+            console.log(`[ID] Migration hostname mismatch. Regenerating.`);
+            CLIENT_ID = `${currentHostname}-${uuidv4().slice(0, 8)}`;
+            if (!fs.existsSync(USER_DATA_PATH)) {
+                fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+            }
+            fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
         }
-        fs.writeFileSync(CLIENT_ID_FILE, CLIENT_ID);
     }
     // Generate new ID
     else {
