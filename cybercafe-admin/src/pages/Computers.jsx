@@ -529,7 +529,12 @@ function Computers() {
                                         await disconnectComputer(selectedComputer.clientId, false);
                                         message.success(`Disconnect command sent to ${selectedComputer.hostname}`);
                                         setActivityDrawerOpen(false);
-                                        fetchComputers();
+                                        // Optimistically remove from list immediately
+                                        setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
+
+                                        // We deliberately do NOT call fetchComputers() immediately here to prevent 
+                                        // the computer from reappearing before the backend processes the removal/status change.
+                                        // The auto-refresh interval will eventually sync the state.
                                     } catch (error) {
                                         message.error('Failed to disconnect computer');
                                     }
