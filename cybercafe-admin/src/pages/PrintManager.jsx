@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty } from 'antd';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty, Statistic, Progress } from 'antd';
 import {
     PrinterOutlined,
     FileTextOutlined,
@@ -18,7 +18,9 @@ import {
     DollarOutlined,
     WifiOutlined,
     AppstoreOutlined,
-    BarsOutlined
+    BarsOutlined,
+    BarChartOutlined,
+    PieChartOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -164,6 +166,11 @@ function PrintManager() {
         totalRevenue: totals.totalRevenue || printJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
     };
 
+    // Calculate total printers across all clients
+    const totalPrintersCount = printers.reduce((sum, client) => sum + (client.printers?.length || 0), 0);
+    const onlinePrintersCount = printers.reduce((sum, client) =>
+        sum + (client.printers?.filter(p => p.isOnline)?.length || 0), 0);
+
     const columns = [
         {
             title: 'Document',
@@ -263,6 +270,28 @@ function PrintManager() {
         },
     ];
 
+    // Helper: render a mini page counter bar for B&W vs Color
+    const renderPageBreakdown = (bwPages, colorPages) => {
+        const total = (bwPages || 0) + (colorPages || 0);
+        if (total === 0) return <Text type="secondary" style={{ fontSize: 12 }}>No pages today</Text>;
+        const bwPercent = Math.round((bwPages / total) * 100);
+        const colorPercent = 100 - bwPercent;
+
+        return (
+            <div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                    <Text style={{ fontSize: 12, color: '#b0b0c0' }}>⬛ {bwPages} B&W</Text>
+                    <Text style={{ fontSize: 12, color: '#e040fb' }}>🎨 {colorPages} Color</Text>
+                </div>
+                <div style={{ display: 'flex', height: 4, borderRadius: 2, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
+                    {bwPages > 0 && <div style={{ width: `${bwPercent}%`, background: '#b0b0c0' }} />}
+                    {colorPages > 0 && <div style={{ width: `${colorPercent}%`, background: '#e040fb' }} />}
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>{total} total pages today</Text>
+            </div>
+        );
+    };
+
     return (
         <div>
             {/* Page Header */}
@@ -317,6 +346,13 @@ function PrintManager() {
                         <div className="stat-value">{formatKSH(stats.totalRevenue)}</div>
                     </div>
                     <div className="stat-label">Print Revenue</div>
+                </div>
+                <div className="stat-card" style={{ borderLeft: '3px solid #00d4ff' }}>
+                    <div className="stat-header">
+                        <div className="stat-icon blue"><PrinterOutlined /></div>
+                        <div className="stat-value">{onlinePrintersCount}<span style={{ fontSize: 14, color: '#b0b0c0' }}>/{totalPrintersCount}</span></div>
+                    </div>
+                    <div className="stat-label">Printers Online</div>
                 </div>
             </div>
 
@@ -383,7 +419,7 @@ function PrintManager() {
                     },
                     {
                         key: 'printers',
-                        label: <span><PrinterOutlined /> Connected Printers</span>,
+                        label: <span><PrinterOutlined /> Connected Printers ({totalPrintersCount})</span>,
                         children: (
                             <Row gutter={[24, 24]}>
                                 {printers.length === 0 && (
@@ -402,6 +438,9 @@ function PrintManager() {
                                                 <Space>
                                                     <DesktopOutlined style={{ color: '#00d4ff' }} />
                                                     <span>{client.hostname}</span>
+                                                    <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>
+                                                        {client.printers?.length || 0} printers
+                                                    </Tag>
                                                 </Space>
                                             }
                                             extra={<Text type="secondary" style={{ fontSize: 12 }}>Last seen: {dayjs(client.lastUpdated).fromNow()}</Text>}
@@ -433,10 +472,12 @@ function PrintManager() {
                                                                 <Space>
                                                                     <Text strong>{printer.name}</Text>
                                                                     {printer.isColor && <Tag color="magenta" style={{ margin: 0, fontSize: 10 }}>Color</Tag>}
+                                                                    {printer.isDefault && <Tag color="gold" style={{ margin: 0, fontSize: 10 }}>Default</Tag>}
+                                                                    {printer.isNetwork && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>Network</Tag>}
                                                                 </Space>
                                                             }
                                                             description={
-                                                                <Space direction="vertical" size={0}>
+                                                                <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                                                     <Space size="small">
                                                                         <Badge
                                                                             status={printer.isOnline ? "success" : "error"}
@@ -444,6 +485,27 @@ function PrintManager() {
                                                                         />
                                                                     </Space>
                                                                     <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
+                                                                    {/* Show page counters */}
+                                                                    {(printer.totalPagesPrinted > 0 || printer.totalJobsPrinted > 0) && (
+                                                                        <div style={{ display: 'flex', gap: 12, marginTop: 2 }}>
+                                                                            <Tooltip title="Lifetime pages printed (from system counters)">
+                                                                                <Text style={{ fontSize: 11, color: '#00d4ff' }}>
+                                                                                    📄 {printer.totalPagesPrinted?.toLocaleString()} pages
+                                                                                </Text>
+                                                                            </Tooltip>
+                                                                            <Tooltip title="Lifetime jobs printed (from system counters)">
+                                                                                <Text style={{ fontSize: 11, color: '#b0b0c0' }}>
+                                                                                    🖨️ {printer.totalJobsPrinted?.toLocaleString()} jobs
+                                                                                </Text>
+                                                                            </Tooltip>
+                                                                        </div>
+                                                                    )}
+                                                                    {/* Show today's B&W vs Color breakdown */}
+                                                                    {printer.todayStats && (printer.todayStats.totalPages > 0) && (
+                                                                        <div style={{ marginTop: 4 }}>
+                                                                            {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
+                                                                        </div>
+                                                                    )}
                                                                 </Space>
                                                             }
                                                         />
@@ -501,8 +563,17 @@ function PrintManager() {
                                     <Text type="secondary">Print Type</Text>
                                     <div>
                                         <Tag color={selectedJob.colorType === 'color' ? 'magenta' : 'default'}>
-                                            {selectedJob.colorType === 'color' ? 'Color' : 'B&W'}
+                                            {selectedJob.colorType === 'color' ? '🎨 Color' : '⬛ B&W'}
                                         </Tag>
+                                    </div>
+                                </div>
+                            </Col>
+                            <Col span={24}>
+                                <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
+                                    <Text type="secondary">Printer</Text>
+                                    <div style={{ fontWeight: 600 }}>
+                                        <PrinterOutlined style={{ marginRight: 8, color: '#00d4ff' }} />
+                                        {selectedJob.printerName}
                                     </div>
                                 </div>
                             </Col>
@@ -530,16 +601,91 @@ function PrintManager() {
                 open={printerDetailsVisible}
                 onCancel={() => setPrinterDetailsVisible(false)}
                 footer={[<Button key="close" onClick={() => setPrinterDetailsVisible(false)}>Close</Button>]}
+                width={520}
             >
                 {selectedPrinter && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12, textAlign: 'center' }}>
                             <PrinterOutlined style={{ fontSize: 48, color: getPrinterStatusColor(selectedPrinter.status, selectedPrinter.isOnline), marginBottom: 16 }} />
                             <Title level={4} style={{ margin: 0 }}>{selectedPrinter.name}</Title>
-                            <Tag color={selectedPrinter.isOnline ? 'success' : 'error'} style={{ marginTop: 8 }}>
-                                {selectedPrinter.status || 'Unknown'}
-                            </Tag>
+                            <Space style={{ marginTop: 8 }}>
+                                <Tag color={selectedPrinter.isOnline ? 'success' : 'error'}>
+                                    {selectedPrinter.status || 'Unknown'}
+                                </Tag>
+                                {selectedPrinter.isColor && <Tag color="magenta">Color Capable</Tag>}
+                                {selectedPrinter.isDefault && <Tag color="gold">Default Printer</Tag>}
+                                {selectedPrinter.isNetwork && <Tag color="cyan">Network</Tag>}
+                            </Space>
                         </div>
+
+                        {/* Page Counter Stats */}
+                        {(selectedPrinter.totalPagesPrinted > 0 || selectedPrinter.totalJobsPrinted > 0 ||
+                            selectedPrinter.todayStats?.totalPages > 0) && (
+                                <div style={{ padding: 16, background: 'rgba(0, 212, 255, 0.05)', borderRadius: 12 }}>
+                                    <Text strong style={{ marginBottom: 12, display: 'block', color: '#00d4ff' }}>
+                                        <BarChartOutlined style={{ marginRight: 8 }} />
+                                        Page Statistics
+                                    </Text>
+                                    <Row gutter={[16, 12]}>
+                                        <Col span={12}>
+                                            <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                                                <div style={{ fontSize: 24, fontWeight: 700, color: '#00d4ff' }}>
+                                                    {(selectedPrinter.totalPagesPrinted || 0).toLocaleString()}
+                                                </div>
+                                                <Text type="secondary" style={{ fontSize: 11 }}>Lifetime Pages</Text>
+                                            </div>
+                                        </Col>
+                                        <Col span={12}>
+                                            <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                                                <div style={{ fontSize: 24, fontWeight: 700, color: '#b0b0c0' }}>
+                                                    {(selectedPrinter.totalJobsPrinted || 0).toLocaleString()}
+                                                </div>
+                                                <Text type="secondary" style={{ fontSize: 11 }}>Lifetime Jobs</Text>
+                                            </div>
+                                        </Col>
+                                    </Row>
+                                    {selectedPrinter.todayStats && selectedPrinter.todayStats.totalPages > 0 && (
+                                        <div style={{ marginTop: 12, padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8 }}>
+                                            <Text strong style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>Today's Breakdown</Text>
+                                            <Row gutter={[8, 8]}>
+                                                <Col span={8}>
+                                                    <div style={{ textAlign: 'center' }}>
+                                                        <div style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>
+                                                            {selectedPrinter.todayStats.totalPages}
+                                                        </div>
+                                                        <Text type="secondary" style={{ fontSize: 10 }}>Total</Text>
+                                                    </div>
+                                                </Col>
+                                                <Col span={8}>
+                                                    <div style={{ textAlign: 'center' }}>
+                                                        <div style={{ fontSize: 18, fontWeight: 700, color: '#b0b0c0' }}>
+                                                            {selectedPrinter.todayStats.bwPages}
+                                                        </div>
+                                                        <Text type="secondary" style={{ fontSize: 10 }}>⬛ B&W</Text>
+                                                    </div>
+                                                </Col>
+                                                <Col span={8}>
+                                                    <div style={{ textAlign: 'center' }}>
+                                                        <div style={{ fontSize: 18, fontWeight: 700, color: '#e040fb' }}>
+                                                            {selectedPrinter.todayStats.colorPages}
+                                                        </div>
+                                                        <Text type="secondary" style={{ fontSize: 10 }}>🎨 Color</Text>
+                                                    </div>
+                                                </Col>
+                                            </Row>
+                                            {renderPageBreakdown(selectedPrinter.todayStats.bwPages, selectedPrinter.todayStats.colorPages)}
+                                        </div>
+                                    )}
+                                    {selectedPrinter.jobErrors > 0 && (
+                                        <div style={{ marginTop: 8 }}>
+                                            <Text type="danger" style={{ fontSize: 12 }}>
+                                                <ExclamationCircleOutlined style={{ marginRight: 4 }} />
+                                                {selectedPrinter.jobErrors} job errors
+                                            </Text>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>
@@ -566,6 +712,18 @@ function PrintManager() {
                                 <Text type="secondary">Type</Text>
                                 <Text>{selectedPrinter.type}</Text>
                             </div>
+                            {selectedPrinter.location && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>
+                                    <Text type="secondary">Location</Text>
+                                    <Text>{selectedPrinter.location}</Text>
+                                </div>
+                            )}
+                            {selectedPrinter.averagePagesPerMinute > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>
+                                    <Text type="secondary">Speed</Text>
+                                    <Text>{selectedPrinter.averagePagesPerMinute} ppm</Text>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}

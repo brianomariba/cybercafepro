@@ -19,60 +19,70 @@ function getActiveTabUrl() {
     return new Promise((resolve) => {
         // PowerShell script to get URL from browser address bar using UI Automation
         const psCommand = `
-            Add-Type -AssemblyName UIAutomationClient
-            Add-Type -AssemblyName UIAutomationTypes
+            # PowerShell script to get URL from browser address bar using UI Automation with enhanced reliability
+
+        $controlType = [System.Windows.Automation.AutomationElement]:: ControlTypeProperty
             
-            $automationId = [System.Windows.Automation.AutomationElement]::AutomationIdProperty
-            $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
-            $classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
-            $controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+            # get focused element
+        try {
+            $focused = [System.Windows.Automation.AutomationElement]:: FocusedElement
+        } catch { return '' }
+
+        if (-not $focused) { return '' }
             
-            # Get focused window
-            $root = [System.Windows.Automation.AutomationElement]::FocusedElement
-            if (-not $root) { return '' }
-            
-            # Walk up to find browser window
-            $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-            $current = $root
-            $browserWindow = $null
-            
-            while ($current -ne $null) {
-                $className = $current.GetCurrentPropertyValue($classProperty)
-                if ($className -match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|Firefox') {
-                    $browserWindow = $current
-                    break
-                }
-                $current = $walker.GetParent($current)
+            # Find the browser window from the focused element
+    $walker = [System.Windows.Automation.TreeWalker]:: ControlViewWalker
+    $current = $focused
+    $browserWindow = $null
+
+    while ($current - ne $null) {
+        try {
+            $className = $current.GetCurrentPropertyValue($classProperty)
+            if ($className - match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|MozillaWindowClass|Brave') {
+                $browserWindow = $current
+                break
             }
+            $current = $walker.GetParent($current)
+        } catch { break }
+    }
+
+    if (-not $browserWindow) { return '' }
             
-            if (-not $browserWindow) { return '' }
-            
-            # Find the address bar (Edit control with URL pattern)
-            $condition = New-Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]::Edit)
-            $editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
-            
-            foreach ($edit in $editElements) {
-                try {
-                    $pattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                    if ($pattern) {
-                        $value = $pattern.Current.Value
-                        if ($value -match '^https?://|^www\\.') {
-                            return $value
-                        }
-                    }
-                } catch { }
-                
-                # Try Name property as fallback
+            # Define search conditions for Address Bar
+            # 1. Look for 'Edit' controls(standard address bars)
+            $conditionEdit = New - Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]:: Edit)
+    $editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]:: Descendants, $conditionEdit)
+
+    foreach($edit in $editElements) {
+        try {
+                    # Try ValuePattern(most reliable for Chrome / Edge)
+                $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]:: Pattern)
+            if ($valPattern) {
+                $url = $valPattern.Current.Value
+                if ($url - match '^https?://|^www\.|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}') {
+                    return $url
+                }
+            }
+        } catch { }
+
+        try {
+                    # Try Name property(fallback for some browsers)
                 $name = $edit.GetCurrentPropertyValue($nameProperty)
-                if ($name -match '^https?://|^www\\.') {
-                    return $name
-                }
+            if ($name - match '^https?://|^www\.|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}') {
+                return $name
             }
+        } catch { }
+    }
             
-            return ''
+            # 2. Chrome / Edge sometimes hide the URL in a generic 'Administrator' or 'Document' pane if UI Automation is restricted
+            # But the ValuePattern check above usually catches the address bar "Edit" control.
+
+        return ''
         `;
 
-        exec(`powershell -Command "${psCommand.replace(/\n/g, ' ').replace(/"/g, '\\"')}"`, { timeout: 3000 }, (error, stdout, stderr) => {
+        // Escape double quotes and remove newlines for PowerShell execution
+        const safeCommand = psCommand.replace(/\n/g, ' ').replace(/"/g, '\\"');
+        exec(`powershell -Command "${safeCommand}"`, { timeout: 3000 }, (error, stdout, stderr) => {
             if (error || !stdout || stdout.trim() === '') {
                 resolve(null);
                 return;
@@ -224,7 +234,9 @@ const CATEGORY_DOMAINS = {
     // Entertainment
     entertainment: ['spotify.com', 'soundcloud.com', 'pandora.com', 'twitch.tv', 'crunchyroll.com', 'funimation.com'],
     // News
-    news: ['cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'theguardian.com', 'reuters.com', 'apnews.com', 'aljazeera.com']
+    news: ['cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'theguardian.com', 'reuters.com', 'apnews.com', 'aljazeera.com', 'nation.africa', 'standardmedia.co.ke'],
+    // Government & Services
+    government: ['ecitizen.go.ke', 'kra.go.ke', 'nhif.or.ke', 'nssf.or.ke', 'kenya-law.org', 'judiciary.go.ke', 'immigration.go.ke', 'president.go.ke']
 };
 
 /**

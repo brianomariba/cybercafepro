@@ -2415,7 +2415,7 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
 
 /**
  * GET /api/v1/admin/printers
- * Returns latest connected printers per computer
+ * Returns latest connected printers per computer with page counters and usage stats
  */
 app.get('/api/v1/admin/printers', async (req, res) => {
     try {
@@ -2426,7 +2426,7 @@ app.get('/api/v1/admin/printers', async (req, res) => {
         if (clientId) query.clientId = clientId;
 
         // Aggregate to get the most recent printer log per clientId
-        const printers = await Log.aggregate([
+        const printerLogs = await Log.aggregate([
             { $match: query },
             { $sort: { receivedAt: -1 } },
             {
@@ -2434,6 +2434,7 @@ app.get('/api/v1/admin/printers', async (req, res) => {
                     _id: '$clientId',
                     hostname: { $first: '$hostname' },
                     printers: { $first: '$data.printers' },
+                    summary: { $first: '$data.summary' },
                     lastUpdated: { $first: '$receivedAt' }
                 }
             },
@@ -2442,13 +2443,82 @@ app.get('/api/v1/admin/printers', async (req, res) => {
                     clientId: '$_id',
                     hostname: 1,
                     printers: 1,
+                    summary: 1,
                     lastUpdated: 1,
                     _id: 0
                 }
             }
         ]);
 
-        res.json(printers);
+        // Enrich with today's print job statistics from Log collection
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const clientIds = printerLogs.map(p => p.clientId);
+
+        // Get today's print job logs for these clients
+        const todayPrintQuery = {
+            type: 'print',
+            receivedAt: { $gte: todayStart }
+        };
+        if (clientId) {
+            todayPrintQuery.clientId = clientId;
+        } else if (clientIds.length > 0) {
+            todayPrintQuery.clientId = { $in: clientIds };
+        }
+
+        const todayPrintLogs = await Log.find(todayPrintQuery).lean();
+
+        // Aggregate today's stats per client and per printer
+        const clientPrinterStats = {};
+        for (const log of todayPrintLogs) {
+            const cId = log.clientId;
+            const printerName = log.data?.printer || 'Unknown';
+            const key = `${cId}::${printerName}`;
+
+            if (!clientPrinterStats[key]) {
+                clientPrinterStats[key] = {
+                    clientId: cId,
+                    printerName,
+                    totalPages: 0,
+                    bwPages: 0,
+                    colorPages: 0,
+                    totalJobs: 0
+                };
+            }
+
+            const pages = log.data?.totalPages || log.data?.pages || 1;
+            clientPrinterStats[key].totalPages += pages;
+            clientPrinterStats[key].totalJobs += 1;
+
+            if (log.data?.printType === 'color') {
+                clientPrinterStats[key].colorPages += pages;
+            } else {
+                clientPrinterStats[key].bwPages += pages;
+            }
+        }
+
+        // Merge today's stats into printer data
+        const enrichedPrinterLogs = printerLogs.map(client => {
+            const enrichedPrinters = (client.printers || []).map(printer => {
+                const key = `${client.clientId}::${printer.name}`;
+                const todayStats = clientPrinterStats[key] || {
+                    totalPages: 0, bwPages: 0, colorPages: 0, totalJobs: 0
+                };
+
+                return {
+                    ...printer,
+                    todayStats
+                };
+            });
+
+            return {
+                ...client,
+                printers: enrichedPrinters
+            };
+        });
+
+        res.json(enrichedPrinterLogs);
     } catch (error) {
         console.error('Fetch Printers Error:', error);
         res.status(500).json({ error: 'Failed to fetch printers' });

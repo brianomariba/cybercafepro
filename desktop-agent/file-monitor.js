@@ -53,60 +53,63 @@ class FileMonitor {
     }
 
     _getEmptySummary() {
-        return {
-            documents: { count: 0, totalSize: 0, files: [] },
-            spreadsheets: { count: 0, totalSize: 0, files: [] },
-            presentations: { count: 0, totalSize: 0, files: [] },
-            images: { count: 0, totalSize: 0, files: [] },
-            videos: { count: 0, totalSize: 0, files: [] },
-            audio: { count: 0, totalSize: 0, files: [] },
-            archives: { count: 0, totalSize: 0, files: [] },
-            code: { count: 0, totalSize: 0, files: [] },
-            executables: { count: 0, totalSize: 0, files: [] },
-            other: { count: 0, totalSize: 0, files: [] }
-        };
+        // Initialize all categories with empty stats
+        const categories = [
+            'documents', 'spreadsheets', 'presentations', 'images',
+            'videos', 'audio', 'archives', 'code', 'executables', 'other'
+        ];
+        const summary = {};
+        categories.forEach(cat => {
+            summary[cat] = { count: 0, totalSize: 0, files: [] };
+        });
+        return summary;
     }
 
     start() {
         const homeDir = os.homedir();
+        // Watch common user directories
         const directoriesToWatch = [
             path.join(homeDir, 'Documents'),
             path.join(homeDir, 'Downloads'),
             path.join(homeDir, 'Desktop'),
             path.join(homeDir, 'Pictures'),
-            path.join(homeDir, 'Videos')
+            path.join(homeDir, 'Videos'),
+            path.join(homeDir, 'Music')
         ];
 
+        // Reset summary on start
         this.categorySummary = this._getEmptySummary();
+        this.watchers = [];
 
         directoriesToWatch.forEach(dir => {
             if (fs.existsSync(dir)) {
                 try {
-                    // Windows supports recursive: true which is very efficient
+                    // Windows: recursive true is efficient
                     const watcher = fs.watch(dir, { recursive: true }, (eventType, filename) => {
                         if (filename) {
+                            // fs.watch returns filename relative to the watched dir
                             this._handleEvent(dir, eventType, filename);
                         }
                     });
                     this.watchers.push(watcher);
-                    console.log(`Watching: ${dir}`);
+                    console.log(`[FILE] Watching: ${dir}`);
                 } catch (e) {
-                    console.error(`Failed to watch ${dir}:`, e.message);
+                    // Directory might be locked or not accessible
                 }
             }
         });
     }
 
     _handleEvent(rootDir, eventType, filename) {
+        // Debounce simplistic check
         const filePath = path.join(rootDir, filename);
 
-        // Basic filtering
+        // Filter ignored patterns
         if (this.ignoredPatterns.some(pattern => pattern.test(filename))) return;
 
-        // We only care about certain events for the agent report
-        // Note: fs.watch 'rename' is used for both creation and deletion
         try {
-            if (!fs.existsSync(filePath)) return; // Probably deleted or temp file gone
+            // Check existence (file might be deleted immediately after creation)
+            if (!fs.existsSync(filePath)) return;
 
             const stats = fs.statSync(filePath);
             if (stats.isDirectory()) return;
@@ -114,10 +117,17 @@ class FileMonitor {
             const ext = path.extname(filename);
             const category = getFileCategory(ext);
 
+            // Avoid duplicate events for same file within short window
+            const lastFile = this.trackedFiles[this.trackedFiles.length - 1];
+            if (lastFile && lastFile.path === filePath && (Date.now() - new Date(lastFile.timestamp).getTime() < 1000)) {
+                return;
+            }
+
             const fileInfo = {
-                name: filename,
+                name: path.basename(filename),
                 path: filePath,
-                folder: path.basename(path.dirname(filePath)),
+                folder: path.basename(path.dirname(filePath)), // Immediate parent folder
+                rootFolder: path.basename(rootDir), // Watched root
                 extension: ext,
                 category: category,
                 size: formatBytes(stats.size),
@@ -126,29 +136,28 @@ class FileMonitor {
                 timestamp: new Date().toISOString()
             };
 
-            // Avoid reporting the same file modification too many times in a row
-            const lastFile = this.trackedFiles[this.trackedFiles.length - 1];
-            if (lastFile && lastFile.path === filePath && (Date.now() - new Date(lastFile.timestamp) < 2000)) {
-                return;
-            }
-
             this.trackedFiles.push(fileInfo);
 
+            // Update category summary
             if (this.categorySummary[category]) {
                 this.categorySummary[category].count++;
                 this.categorySummary[category].totalSize += stats.size;
+                // Keep track of recent files in this category
                 this.categorySummary[category].files.push({
                     name: fileInfo.name,
                     size: fileInfo.size,
-                    timestamp: fileInfo.timestamp
+                    timestamp: fileInfo.timestamp,
+                    action: fileInfo.action
                 });
             }
 
+            // Real-time callback
             if (this.onFileDetected) {
                 this.onFileDetected(fileInfo);
             }
+
         } catch (e) {
-            // File might have been moved/deleted between events
+            // Ignore errors (file access, permission, etc)
         }
     }
 
@@ -162,23 +171,26 @@ class FileMonitor {
     }
 
     getCategorySummary() {
-        const summary = {};
+        const result = {};
         for (const [cat, data] of Object.entries(this.categorySummary)) {
-            summary[cat] = {
-                count: data.count,
-                totalSize: formatBytes(data.totalSize),
-                totalSizeBytes: data.totalSize,
-                files: data.files.slice(-5) // Only last 5 for summary
-            };
+            // Only include categories that have activity
+            if (data.count > 0) {
+                result[cat] = {
+                    count: data.count,
+                    totalSize: formatBytes(data.totalSize),
+                    totalSizeBytes: data.totalSize,
+                    recentFiles: data.files.slice(-10).reverse() // Last 10 files, newest first
+                };
+            }
         }
-        return summary;
+        return result;
     }
 
     getStats() {
-        const totalSize = this.trackedFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
+        const totalBytes = this.trackedFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
         return {
             totalFiles: this.trackedFiles.length,
-            totalSize: formatBytes(totalSize),
+            totalSize: formatBytes(totalBytes),
             totalSizeBytes: totalSize,
             created: this.trackedFiles.filter(f => f.action === 'created').length,
             modified: this.trackedFiles.filter(f => f.action === 'modified').length

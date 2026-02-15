@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging } = require('./print-monitor');
+const { getRecentPrintJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getBrowserHistoryFromDB } = require('./browser-history');
 
 // Load Configuration
@@ -1227,14 +1227,15 @@ async function startDataCollection() {
             } catch (e) { }
 
             // Send printer information periodically (every 5 heartbeats = ~50 seconds)
+            // Enhanced: includes page counters and 24h usage stats per printer
             try {
                 if (!global.printerLogCounter) global.printerLogCounter = 0;
                 global.printerLogCounter++;
 
                 if (global.printerLogCounter >= 5) {
                     global.printerLogCounter = 0;
-                    const printers = await getInstalledPrinters();
-                    if (printers.length > 0) {
+                    const allPrinterData = await getAllPrinterData();
+                    if (allPrinterData.printers.length > 0) {
                         const printerPayload = {
                             type: 'printers',
                             clientId: CLIENT_ID,
@@ -1242,7 +1243,8 @@ async function startDataCollection() {
                             sessionId: currentSession?.id || null,
                             sessionUser: currentSession?.user || null,
                             data: {
-                                printers: printers,
+                                printers: allPrinterData.printers,
+                                summary: allPrinterData.summary,
                                 timestamp: new Date().toISOString()
                             }
                         };
