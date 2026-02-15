@@ -1704,25 +1704,57 @@ async function handlePublicDocument(data) {
         console.log('[PublicDoc] Portal window not available');
     }
 
-    // Show Notification
-    const { Notification, dialog } = require('electron');
+    // Show System Tray Notification
+    const { Notification } = require('electron');
     if (Notification.isSupported()) {
-        new Notification({
-            title: 'New Document Upload',
-            body: `${data.customerName} uploaded ${data.files.length} document(s).`
-        }).show();
+        const notification = new Notification({
+            title: '📄 New Document from Client',
+            body: `${data.customerName} uploaded ${data.files.length} file(s) for ${(data.serviceType || 'service').replace(/-/g, ' ')}.\nChoose where to save.`,
+            urgency: 'critical'
+        });
+        notification.show();
     }
 
-    // Force a visual alert for debugging/fail-safe
-    dialog.showMessageBox(null, {
+    // Build detail text for popup
+    const fileListText = data.files.map(f => `  • ${f.originalName || f.filename}`).join('\n');
+    const instructionsText = data.instructions ? `\n\nInstructions: ${data.instructions}` : '';
+    const serviceLabel = (data.serviceType || 'General').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+    // Show info dialog with all customer/order details
+    await dialog.showMessageBox(null, {
         type: 'info',
-        title: 'New Client Document',
-        message: `${data.customerName} has uploaded documents. Check the "Documents" tab.`
+        title: '✅ New Document Upload - Ready to Work',
+        message: `Customer: ${data.customerName}\nPhone: ${data.customerPhone || 'N/A'}\nService: ${serviceLabel}\nOrder: ${data.orderId || 'N/A'}`,
+        detail: `Files (${data.files.length}):\n${fileListText}${instructionsText}\n\nYou will be prompted to choose a save location for each file.`,
+        buttons: ['OK'],
+        defaultId: 0
     }).catch(e => console.error('Failed to show dialog:', e));
 
-    // Process files sequentially (auto-prompt)
+    // Prompt save dialog for each file, then open it
+    let savedCount = 0;
     for (const file of data.files) {
-        await promptAndDownloadFile(file.downloadUrl, file.originalName || file.filename, data.customerName);
+        const fileName = file.originalName || file.filename;
+        const filePath = await promptAndDownloadFile(file.downloadUrl, fileName, data.customerName);
+        if (filePath) {
+            savedCount++;
+            // Mark as downloaded in offline store
+            if (offlineStore && data.orderId) {
+                offlineStore.markFileDownloaded(data.orderId, fileName);
+            }
+            // Open the file with its default application
+            shell.openPath(filePath).then(err => {
+                if (err) console.error(`[PublicDoc] Failed to open ${fileName}:`, err);
+                else console.log(`[PublicDoc] Opened: ${fileName}`);
+            });
+        }
+    }
+
+    // Show completion notification
+    if (savedCount > 0 && Notification.isSupported()) {
+        new Notification({
+            title: '✅ Documents Ready',
+            body: `${savedCount} of ${data.files.length} file(s) from ${data.customerName} saved and opened.`
+        }).show();
     }
 }
 

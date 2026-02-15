@@ -172,10 +172,10 @@ function App() {
         setNotificationCount(prev => prev + 1);
 
         // Show popup notification
-        notification.info({
+        notification.success({
           message: (
             <Space>
-              <InboxOutlined style={{ color: '#00B4D8', fontSize: 18 }} />
+              <InboxOutlined style={{ color: '#52c41a', fontSize: 18 }} />
               <span>{newNotification.title}</span>
             </Space>
           ),

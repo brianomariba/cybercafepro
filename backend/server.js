@@ -4059,6 +4059,23 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
             }
         });
 
+        // 3. Notify Desktop Agents (immediate pop-up + auto-download)
+        io.emit('agent-public-document-notification', {
+            orderId: request.orderId,
+            customerName,
+            customerPhone: customerPhone.replace(/\s/g, ''),
+            serviceType,
+            instructions: instructions || '',
+            files: categorizedFiles.map(f => ({
+                filename: f.filename,
+                originalName: f.originalName,
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                size: f.size,
+                docType: f.docType
+            })),
+            timestamp: request.createdAt
+        });
+
         console.log(`[PUBLIC] New document request: ${orderId} from ${customerName} (${customerPhone}) - PDF:${typeSummary.pdf} Word:${typeSummary.word} Excel:${typeSummary.excel}`);
 
         res.json({
@@ -5378,12 +5395,15 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
 
         console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName} (emitted to users: ${io.engine.clientsCount})`);
 
-        // Notify Desktop Agents
+        // Notify Desktop Agents (with full context: instructions, service, phone)
         io.emit('agent-public-document-notification', {
             orderId: newRequest.orderId,
             customerName: newRequest.customerName,
+            customerPhone: newRequest.customerPhone,
+            serviceType: newRequest.serviceType,
+            instructions: newRequest.instructions || '',
             files: newRequest.files.map(f => ({
-                filename: f.filename, // Stored filename
+                filename: f.filename,
                 originalName: f.originalName,
                 downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
                 size: f.size
@@ -5536,6 +5556,7 @@ app.get('/api/v1/admin/document-requests/stats', requireAdminAuth, async (req, r
         res.status(500).json({ error: 'Stats failed' });
     }
 });
+
 
 
 // ==================== USER DOCUMENT SUBMISSIONS ====================

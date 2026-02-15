@@ -19,65 +19,59 @@ function getActiveTabUrl() {
     return new Promise((resolve) => {
         // PowerShell script to get URL from browser address bar using UI Automation
         const psCommand = `
-            # PowerShell script to get URL from browser address bar using UI Automation with enhanced reliability
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 
-        $controlType = [System.Windows.Automation.AutomationElement]:: ControlTypeProperty
-            
-            # get focused element
-        try {
-            $focused = [System.Windows.Automation.AutomationElement]:: FocusedElement
-        } catch { return '' }
+$classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
+$controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+$nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
 
-        if (-not $focused) { return '' }
-            
-            # Find the browser window from the focused element
-    $walker = [System.Windows.Automation.TreeWalker]:: ControlViewWalker
-    $current = $focused
-    $browserWindow = $null
+try {
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+} catch { return '' }
 
-    while ($current - ne $null) {
-        try {
-            $className = $current.GetCurrentPropertyValue($classProperty)
-            if ($className - match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|MozillaWindowClass|Brave') {
-                $browserWindow = $current
-                break
+if (-not $focused) { return '' }
+
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$current = $focused
+$browserWindow = $null
+
+while ($current -ne $null) {
+    try {
+        $className = $current.GetCurrentPropertyValue($classProperty)
+        if ($className -match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|MozillaWindowClass|Brave') {
+            $browserWindow = $current
+            break
+        }
+        $current = $walker.GetParent($current)
+    } catch { break }
+}
+
+if (-not $browserWindow) { return '' }
+
+$conditionEdit = New-Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]::Edit)
+$editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $conditionEdit)
+
+foreach ($edit in $editElements) {
+    try {
+        $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        if ($valPattern) {
+            $url = $valPattern.Current.Value
+            if ($url -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
+                return $url
             }
-            $current = $walker.GetParent($current)
-        } catch { break }
-    }
+        }
+    } catch { }
 
-    if (-not $browserWindow) { return '' }
-            
-            # Define search conditions for Address Bar
-            # 1. Look for 'Edit' controls(standard address bars)
-            $conditionEdit = New - Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]:: Edit)
-    $editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]:: Descendants, $conditionEdit)
+    try {
+        $name = $edit.GetCurrentPropertyValue($nameProperty)
+        if ($name -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
+            return $name
+        }
+    } catch { }
+}
 
-    foreach($edit in $editElements) {
-        try {
-                    # Try ValuePattern(most reliable for Chrome / Edge)
-                $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]:: Pattern)
-            if ($valPattern) {
-                $url = $valPattern.Current.Value
-                if ($url - match '^https?://|^www\.|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}') {
-                    return $url
-                }
-            }
-        } catch { }
-
-        try {
-                    # Try Name property(fallback for some browsers)
-                $name = $edit.GetCurrentPropertyValue($nameProperty)
-            if ($name - match '^https?://|^www\.|^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}') {
-                return $name
-            }
-        } catch { }
-    }
-            
-            # 2. Chrome / Edge sometimes hide the URL in a generic 'Administrator' or 'Document' pane if UI Automation is restricted
-            # But the ValuePattern check above usually catches the address bar "Edit" control.
-
-        return ''
+return ''
         `;
 
         // Escape double quotes and remove newlines for PowerShell execution

@@ -109,6 +109,13 @@ const ClientDocuments = ({ isDarkMode }) => {
                                     <ClockCircleOutlined style={{ marginRight: 4 }} />
                                     {new Date(req.createdAt).toLocaleDateString()}
                                 </Text>
+                                {req.instructions && (
+                                    <div style={{ marginTop: 8, padding: '8px', background: isDarkMode ? 'rgba(255,255,255,0.05)' : '#f8fafc', borderRadius: 4 }}>
+                                        <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', display: 'block' }}>
+                                            "{req.instructions}"
+                                        </Text>
+                                    </div>
+                                )}
                             </div>
 
                             <Divider style={{ margin: '12px 0', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#f0f0f0' }} />
