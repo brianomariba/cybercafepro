@@ -27,6 +27,42 @@ function getFileCategory(ext) {
     return 'other';
 }
 
+// Detect file source based on its path
+function detectFileSource(filePath) {
+    const normalizedPath = filePath.replace(/\\/g, '/').toLowerCase();
+
+    // WhatsApp Desktop / WhatsApp Web downloads
+    if (normalizedPath.includes('whatsapp') || normalizedPath.includes('wa ')) {
+        return 'whatsapp';
+    }
+    // Telegram downloads
+    if (normalizedPath.includes('telegram')) {
+        return 'telegram';
+    }
+    // USB / Removable drives (non-C: drive letters on Windows)
+    const driveLetter = normalizedPath.charAt(0);
+    if (driveLetter !== 'c' && /^[d-z]/.test(driveLetter) && normalizedPath.charAt(1) === ':') {
+        return 'usb';
+    }
+    // Browser downloads folder
+    if (normalizedPath.includes('/downloads/') || normalizedPath.endsWith('/downloads')) {
+        return 'browser_download';
+    }
+    // Email attachments (Outlook, Thunderbird temp folders)
+    if (normalizedPath.includes('outlook') || normalizedPath.includes('thunderbird') || normalizedPath.includes('mail')) {
+        return 'email';
+    }
+    // Desktop (could be drag-drop or manual)
+    if (normalizedPath.includes('/desktop/')) {
+        return 'desktop';
+    }
+    // Documents folder (user created or app-generated)
+    if (normalizedPath.includes('/documents/')) {
+        return 'documents';
+    }
+    return 'local';
+}
+
 // Format bytes to human readable
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -123,6 +159,8 @@ class FileMonitor {
                 return;
             }
 
+            const source = detectFileSource(filePath);
+
             const fileInfo = {
                 name: path.basename(filename),
                 path: filePath,
@@ -130,6 +168,7 @@ class FileMonitor {
                 rootFolder: path.basename(rootDir), // Watched root
                 extension: ext,
                 category: category,
+                source: source,
                 size: formatBytes(stats.size),
                 sizeBytes: stats.size,
                 action: eventType === 'rename' ? 'created' : 'modified',
@@ -188,12 +227,28 @@ class FileMonitor {
 
     getStats() {
         const totalBytes = this.trackedFiles.reduce((sum, f) => sum + (f.sizeBytes || 0), 0);
+
+        // Count by category
+        const byCategory = {};
+        for (const f of this.trackedFiles) {
+            byCategory[f.category] = (byCategory[f.category] || 0) + 1;
+        }
+
+        // Count by source
+        const bySource = {};
+        for (const f of this.trackedFiles) {
+            const src = f.source || 'local';
+            bySource[src] = (bySource[src] || 0) + 1;
+        }
+
         return {
             totalFiles: this.trackedFiles.length,
             totalSize: formatBytes(totalBytes),
-            totalSizeBytes: totalSize,
+            totalSizeBytes: totalBytes,
             created: this.trackedFiles.filter(f => f.action === 'created').length,
-            modified: this.trackedFiles.filter(f => f.action === 'modified').length
+            modified: this.trackedFiles.filter(f => f.action === 'modified').length,
+            byCategory,
+            bySource
         };
     }
 

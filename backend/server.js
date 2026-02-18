@@ -2204,6 +2204,20 @@ app.post('/api/v1/agent/log', async (req, res) => {
             };
         }
 
+        // Deduplicate browser logs: skip if same clientId+url was logged within the last 2 minutes
+        if (type === 'browser' && enhancedData?.url) {
+            const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+            const duplicate = await Log.findOne({
+                type: 'browser',
+                clientId,
+                'data.url': enhancedData.url,
+                receivedAt: { $gte: twoMinutesAgo }
+            });
+            if (duplicate) {
+                return res.json({ success: true, deduplicated: true });
+            }
+        }
+
         const logEntry = await Log.create({
             type,
             clientId,
@@ -4566,24 +4580,8 @@ io.on('connection', async (socket) => {
             io.emit('agent-connected', { clientId, hostname, socketId: socket.id });
         });
 
-        // Handle agent response (e.g. screenshot)
-        socket.on('agent-response', (data) => {
-            if (data.type === 'screenshot') {
-                console.log(`[SOCKET] Screenshot received from ${socket.clientId}`);
-                // Broadcast to admin dashboard
-                io.emit('agent-screenshot', {
-                    clientId: socket.clientId,
-                    screenshot: data.screenshot,
-                    timestamp: Date.now()
-                });
-            } else {
-                // Generic forwarding
-                io.emit('agent-response', {
-                    clientId: socket.clientId,
-                    ...data
-                });
-            }
-        });
+        // NOTE: agent-response is handled by the primary io.on('connection') handler above
+        // (which covers screenshot, error, and document-downloaded events comprehensively)
 
         // If not an agent, treat as admin dashboard
         if (!socket.isAgent) {

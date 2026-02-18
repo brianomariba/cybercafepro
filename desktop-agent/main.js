@@ -151,7 +151,8 @@ let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
-let lastSentBrowserUrl = ''; // Track last sent URL to avoid duplicates
+let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
+const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
 let isOnline = true; // Track online status
 
@@ -866,6 +867,8 @@ async function startSession(username) {
     urlTracker.reset();
     resetDeviceTracking();
     connectedUsbDevices = [];
+    sentBrowserUrls.clear();
+    sentPrintJobIds.clear();
 
     currentSession = {
         id: uuidv4(),
@@ -1134,10 +1137,13 @@ async function startDataCollection() {
                             // Pass the actual URL if we got it, otherwise let it extract from title
                             const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, actualUrl || currentApp.url);
 
-                            // Send Real-Time Browser Log if we got valid data
-                            if (browserData && browserData.url !== lastSentBrowserUrl) {
-                                lastSentBrowserUrl = browserData.url;
-                                const browserPayload = {
+                        // Send Real-Time Browser Log if we got valid data (deduplicated)
+                                            const now = Date.now();
+                                            const alreadySent = browserData && sentBrowserUrls.has(browserData.url) &&
+                                                (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
+                                            if (browserData && !alreadySent) {
+                                                sentBrowserUrls.set(browserData.url, now);
+                                                const browserPayload = {
                                     type: 'browser',
                                     clientId: CLIENT_ID,
                                     hostname: os.hostname(),
@@ -1326,12 +1332,15 @@ async function startDataCollection() {
                 let lastProcessedUrl = null;
 
                 for (const item of sortedItems) {
-                    // Avoid duplicates with real-time tracker if recently sent
-                    if (item.url === lastSentBrowserUrl) continue;
+                    const now = Date.now();
+                    // Skip if this URL was already sent within the dedup window (by real-time or a previous DB sync)
+                    if (sentBrowserUrls.has(item.url) && (now - sentBrowserUrls.get(item.url)) < BROWSER_DEDUP_WINDOW_MS) continue;
 
                     // Avoid consecutive duplicates within this batch
                     if (item.url === lastProcessedUrl) continue;
                     lastProcessedUrl = item.url;
+
+                    sentBrowserUrls.set(item.url, now);
 
                     const historyPayload = {
                         type: 'browser',
@@ -1704,29 +1713,56 @@ async function handlePublicDocument(data) {
         console.log('[PublicDoc] Portal window not available');
     }
 
-    // Show System Tray Notification
+    // 1. Show green tray notification (visible even when station is locked)
     const { Notification } = require('electron');
+    const serviceLabel = (data.serviceType || 'General').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const fileListText = data.files.map(f => `  • ${f.originalName || f.filename}`).join('\n');
+    const instructionsText = data.instructions ? `\n\nInstructions: ${data.instructions}` : '';
+
     if (Notification.isSupported()) {
         const notification = new Notification({
             title: '📄 New Document from Client',
-            body: `${data.customerName} uploaded ${data.files.length} file(s) for ${(data.serviceType || 'service').replace(/-/g, ' ')}.\nChoose where to save.`,
+            body: `${data.customerName} uploaded ${data.files.length} file(s) for ${serviceLabel}.\nOrder: ${data.orderId || 'N/A'}`,
             urgency: 'critical'
         });
+
+        // When tray notification is clicked, show the full detail dialog + save prompts
+        notification.on('click', () => {
+            showDocumentDetailAndSave(data, serviceLabel, fileListText, instructionsText);
+        });
+
         notification.show();
     }
 
-    // Build detail text for popup
-    const fileListText = data.files.map(f => `  • ${f.originalName || f.filename}`).join('\n');
-    const instructionsText = data.instructions ? `\n\nInstructions: ${data.instructions}` : '';
-    const serviceLabel = (data.serviceType || 'General').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    // 2. Also send a notification to the lock-screen / main window UI
+    //    so the attendant sees a green indicator even on the lock screen
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('public-document-arrived', {
+            orderId: data.orderId,
+            customerName: data.customerName,
+            serviceType: serviceLabel,
+            fileCount: data.files.length,
+            timestamp: data.timestamp || new Date().toISOString()
+        });
+    }
 
-    // Show info dialog with all customer/order details
+    // 3. If the station is NOT locked, immediately show the detail dialog + save prompts
+    if (!isLocked) {
+        await showDocumentDetailAndSave(data, serviceLabel, fileListText, instructionsText);
+    }
+    // If locked, the attendant can click the tray notification or unlock first
+}
+
+async function showDocumentDetailAndSave(data, serviceLabel, fileListText, instructionsText) {
+    const { Notification } = require('electron');
+
+    // Show info dialog with full customer/order details
     await dialog.showMessageBox(null, {
         type: 'info',
         title: '✅ New Document Upload - Ready to Work',
         message: `Customer: ${data.customerName}\nPhone: ${data.customerPhone || 'N/A'}\nService: ${serviceLabel}\nOrder: ${data.orderId || 'N/A'}`,
         detail: `Files (${data.files.length}):\n${fileListText}${instructionsText}\n\nYou will be prompted to choose a save location for each file.`,
-        buttons: ['OK'],
+        buttons: ['Save Files Now'],
         defaultId: 0
     }).catch(e => console.error('Failed to show dialog:', e));
 
@@ -1737,11 +1773,9 @@ async function handlePublicDocument(data) {
         const filePath = await promptAndDownloadFile(file.downloadUrl, fileName, data.customerName);
         if (filePath) {
             savedCount++;
-            // Mark as downloaded in offline store
             if (offlineStore && data.orderId) {
                 offlineStore.markFileDownloaded(data.orderId, fileName);
             }
-            // Open the file with its default application
             shell.openPath(filePath).then(err => {
                 if (err) console.error(`[PublicDoc] Failed to open ${fileName}:`, err);
                 else console.log(`[PublicDoc] Opened: ${fileName}`);

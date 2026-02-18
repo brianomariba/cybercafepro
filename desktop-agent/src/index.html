@@ -295,10 +295,92 @@
             font-size: 11px;
             color: #64748B;
         }
+
+        /* Green notification banner for incoming documents */
+        .doc-notification {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, rgba(0, 200, 83, 0.95), rgba(0, 150, 60, 0.95));
+            border: 1px solid rgba(0, 255, 100, 0.4);
+            border-radius: 14px;
+            padding: 16px 28px;
+            z-index: 99999;
+            box-shadow: 0 8px 32px rgba(0, 200, 83, 0.4);
+            animation: slideDown 0.4s ease-out;
+            max-width: 500px;
+            cursor: pointer;
+        }
+
+        .doc-notification.visible {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .doc-notification .notif-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+            animation: pulse-ring 1.5s infinite;
+        }
+
+        .doc-notification .notif-body h4 {
+            margin: 0 0 4px 0;
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .doc-notification .notif-body p {
+            margin: 0;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        .doc-notification .notif-close {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        @keyframes slideDown {
+            from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
+            to   { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+
+        @keyframes pulse-ring {
+            0%   { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
+            70%  { box-shadow: 0 0 0 12px rgba(255, 255, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
     </style>
 </head>
 
 <body>
+
+    <!-- Green notification banner (visible on both lock screen and widget) -->
+    <div id="docNotification" class="doc-notification">
+        <div class="notif-icon">📄</div>
+        <div class="notif-body">
+            <h4 id="notifTitle">New Document Upload</h4>
+            <p id="notifBody">Loading...</p>
+        </div>
+        <button class="notif-close" onclick="dismissNotification()">&times;</button>
+    </div>
 
     <!-- LOCK SCREEN VIEW -->
     <div id="lock-screen" class="view-section active">
@@ -464,7 +546,30 @@
             document.getElementById('username').focus();
         });
 
+        // Public document upload notification (green banner)
+        let notifTimeout = null;
+        ipcRenderer.on('public-document-arrived', (event, data) => {
+            const el = document.getElementById('docNotification');
+            const title = document.getElementById('notifTitle');
+            const body = document.getElementById('notifBody');
 
+            title.innerText = `📄 New Order: ${data.orderId}`;
+            body.innerText = `${data.customerName} uploaded ${data.fileCount} file(s) for ${data.serviceType}`;
+
+            el.classList.add('visible');
+
+            // Auto-dismiss after 15 seconds
+            if (notifTimeout) clearTimeout(notifTimeout);
+            notifTimeout = setTimeout(() => dismissNotification(), 15000);
+        });
+
+        function dismissNotification() {
+            const el = document.getElementById('docNotification');
+            el.classList.remove('visible');
+            if (notifTimeout) { clearTimeout(notifTimeout); notifTimeout = null; }
+        }
+        // Expose for onclick
+        window.dismissNotification = dismissNotification;
 
     </script>
 </body>

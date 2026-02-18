@@ -28,7 +28,7 @@ import {
     DisconnectOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, sendCommand, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -53,6 +53,7 @@ function Computers() {
     const [browserHistory, setBrowserHistory] = useState([]);
     const [fileActivity, setFileActivity] = useState([]);
     const [printJobs, setPrintJobs] = useState([]);
+    const [installedPrinters, setInstalledPrinters] = useState([]);
     const [activityLoading, setActivityLoading] = useState(false);
 
     // Fetch computers
@@ -110,15 +111,17 @@ function Computers() {
                     setScreenshotData(data.screenshot);
                     setScreenshotTimestamp(data.timestamp);
                     setScreenshotLoading(false);
+                    setScreenshotTimer(prev => { if (prev) clearTimeout(prev); return null; });
                     if (!screenshotVisible) {
                         setScreenshotVisible(true);
-                        message.success('Screenshot captured');
                     }
+                    message.success('Screenshot captured');
                 }
             },
             onAgentError: (data) => {
                 if (selectedComputer && data.clientId === selectedComputer.clientId) {
                     setScreenshotLoading(false);
+                    setScreenshotTimer(prev => { if (prev) clearTimeout(prev); return null; });
                     message.error(`Failed to capture screenshot: ${data.message}`);
                 }
             }
@@ -141,18 +144,25 @@ function Computers() {
         setBrowserHistory([]);
         setFileActivity([]);
         setPrintJobs([]);
+        setInstalledPrinters([]);
 
         try {
-            const [sessionsRes, historyRes, filesRes, printsRes] = await Promise.all([
+            const [sessionsRes, historyRes, filesRes, printsRes, printersRes] = await Promise.all([
                 getSessions({ clientId: computer.clientId, limit: 20 }),
                 getBrowserHistory({ clientId: computer.clientId, limit: 50 }),
                 getFileActivity({ clientId: computer.clientId, limit: 50 }),
                 getPrintJobs({ clientId: computer.clientId, limit: 20 }),
+                getPrinters({ clientId: computer.clientId }).catch(() => []),
             ]);
             setSessions(sessionsRes || []);
             setBrowserHistory(historyRes || []);
             setFileActivity(filesRes || []);
             setPrintJobs(printsRes?.jobs || []);
+            // Printers endpoint returns array of { _id, hostname, printers, summary, lastUpdated }
+            const printerData = Array.isArray(printersRes) && printersRes.length > 0
+                ? (printersRes[0]?.printers || [])
+                : [];
+            setInstalledPrinters(printerData);
         } catch (error) {
             console.error('Failed to fetch activity:', error);
         }
@@ -186,6 +196,7 @@ function Computers() {
     const [screenshotData, setScreenshotData] = useState(null);
     const [screenshotTimestamp, setScreenshotTimestamp] = useState(null);
     const [screenshotLoading, setScreenshotLoading] = useState(false);
+    const [screenshotTimer, setScreenshotTimer] = useState(null);
 
     const handleSendFileClick = () => {
         setUploadFile(null);
@@ -219,21 +230,21 @@ function Computers() {
         setScreenshotData(null);
         setScreenshotVisible(true);
 
-        // Timeout handler
+        // Clear any previous timeout
+        if (screenshotTimer) clearTimeout(screenshotTimer);
+
+        // Timeout handler - will be cleared when screenshot arrives or error occurs
         const timer = setTimeout(() => {
-            setScreenshotLoading(loading => {
-                if (loading) {
-                    message.error('Screenshot request timed out. The agent may be unresponsive.');
-                    return false;
-                }
-                return loading;
-            });
+            setScreenshotLoading(false);
+            message.error('Screenshot request timed out. The agent may be unresponsive.');
         }, 15000);
+        setScreenshotTimer(timer);
 
         try {
             await sendCommand(selectedComputer.clientId, 'screenshot');
         } catch (error) {
             clearTimeout(timer);
+            setScreenshotTimer(null);
             message.error('Failed to request screenshot');
             setScreenshotLoading(false);
             setScreenshotVisible(false);
@@ -713,6 +724,22 @@ function Computers() {
                                         return acc;
                                     }, {});
 
+                                    const sourceSummary = fileActivity.reduce((acc, file) => {
+                                        const src = file.source || 'local';
+                                        if (src !== 'local' && src !== 'documents' && src !== 'desktop') {
+                                            acc[src] = (acc[src] || 0) + 1;
+                                        }
+                                        return acc;
+                                    }, {});
+
+                                    const sourceConfig = {
+                                        whatsapp: { color: '#25D366', label: 'WhatsApp' },
+                                        telegram: { color: '#0088cc', label: 'Telegram' },
+                                        usb: { color: '#ff9500', label: 'USB' },
+                                        browser_download: { color: '#00b4d8', label: 'Downloads' },
+                                        email: { color: '#7b2cbf', label: 'Email' },
+                                    };
+
                                     const typeConfig = {
                                         pdf: { color: '#e74c3c', icon: '📄', label: 'PDFs' },
                                         image: { color: '#3498db', icon: '🖼️', label: 'Images' },
@@ -730,27 +757,48 @@ function Computers() {
                                             {fileActivity.length > 0 && (
                                                 <div style={{
                                                     display: 'flex',
-                                                    flexWrap: 'wrap',
+                                                    flexDirection: 'column',
                                                     gap: 8,
                                                     marginBottom: 16,
                                                     padding: '12px',
                                                     background: 'rgba(255, 149, 0, 0.1)',
                                                     borderRadius: 8
                                                 }}>
-                                                    {Object.entries(summary).map(([type, count]) => (
-                                                        <Tag
-                                                            key={type}
-                                                            style={{
-                                                                background: typeConfig[type]?.color || '#95a5a6',
-                                                                border: 'none',
-                                                                color: 'white',
-                                                                padding: '4px 10px',
-                                                                fontSize: 12
-                                                            }}
-                                                        >
-                                                            {typeConfig[type]?.icon} {typeConfig[type]?.label}: {count}
-                                                        </Tag>
-                                                    ))}
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                                        {Object.entries(summary).map(([type, count]) => (
+                                                            <Tag
+                                                                key={type}
+                                                                style={{
+                                                                    background: typeConfig[type]?.color || '#95a5a6',
+                                                                    border: 'none',
+                                                                    color: 'white',
+                                                                    padding: '4px 10px',
+                                                                    fontSize: 12
+                                                                }}
+                                                            >
+                                                                {typeConfig[type]?.icon} {typeConfig[type]?.label}: {count}
+                                                            </Tag>
+                                                        ))}
+                                                    </div>
+                                                    {Object.keys(sourceSummary).length > 0 && (
+                                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 8 }}>
+                                                            <Text type="secondary" style={{ fontSize: 11, marginRight: 4 }}>Sources:</Text>
+                                                            {Object.entries(sourceSummary).map(([src, count]) => (
+                                                                <Tag
+                                                                    key={src}
+                                                                    style={{
+                                                                        background: sourceConfig[src]?.color || '#6b6b80',
+                                                                        border: 'none',
+                                                                        color: 'white',
+                                                                        padding: '2px 8px',
+                                                                        fontSize: 11
+                                                                    }}
+                                                                >
+                                                                    {sourceConfig[src]?.label || src}: {count}
+                                                                </Tag>
+                                                            ))}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                             <List
@@ -781,10 +829,30 @@ function Computers() {
                                                                     </Text>
                                                                 }
                                                                 description={
-                                                                    <Space size="small">
+                                                                    <Space size="small" wrap>
                                                                         <Tag color={config?.color} style={{ fontSize: 10 }}>
                                                                             {config?.label || file.category || 'file'}
                                                                         </Tag>
+                                                                        {file.source && file.source !== 'local' && (
+                                                                            <Tag
+                                                                                color={
+                                                                                    file.source === 'whatsapp' ? 'green' :
+                                                                                    file.source === 'usb' ? 'orange' :
+                                                                                    file.source === 'browser_download' ? 'blue' :
+                                                                                    file.source === 'email' ? 'purple' :
+                                                                                    file.source === 'telegram' ? 'cyan' :
+                                                                                    'default'
+                                                                                }
+                                                                                style={{ fontSize: 10 }}
+                                                                            >
+                                                                                {file.source === 'whatsapp' ? 'WhatsApp' :
+                                                                                 file.source === 'usb' ? 'USB' :
+                                                                                 file.source === 'browser_download' ? 'Download' :
+                                                                                 file.source === 'email' ? 'Email' :
+                                                                                 file.source === 'telegram' ? 'Telegram' :
+                                                                                 file.source}
+                                                                            </Tag>
+                                                                        )}
                                                                         <Text type="secondary" style={{ fontSize: 11 }}>
                                                                             {file.size || file.sizeFormatted || ''}
                                                                         </Text>
@@ -804,6 +872,82 @@ function Computers() {
                                     );
                                 })()}
                             </Panel>
+
+                            {/* Installed Printers */}
+                            {installedPrinters.length > 0 && (
+                                <Panel
+                                    header={
+                                        <Space>
+                                            <PrinterOutlined style={{ color: '#7b2cbf' }} />
+                                            <span>Installed Printers</span>
+                                            <Badge count={installedPrinters.length} style={{ backgroundColor: '#7b2cbf' }} />
+                                        </Space>
+                                    }
+                                    key="printers"
+                                >
+                                    <List
+                                        size="small"
+                                        dataSource={installedPrinters}
+                                        renderItem={printer => (
+                                            <List.Item>
+                                                <List.Item.Meta
+                                                    avatar={
+                                                        <Avatar
+                                                            size="small"
+                                                            style={{
+                                                                background: printer.isOnline
+                                                                    ? (printer.isColor ? '#7b2cbf' : '#6b6b80')
+                                                                    : '#ff3b5c'
+                                                            }}
+                                                        >
+                                                            <PrinterOutlined />
+                                                        </Avatar>
+                                                    }
+                                                    title={
+                                                        <Space size="small">
+                                                            <Text>{printer.name}</Text>
+                                                            {printer.isDefault && <Tag color="blue">Default</Tag>}
+                                                        </Space>
+                                                    }
+                                                    description={
+                                                        <Space size="small" wrap>
+                                                            <Tag color={printer.isOnline ? 'success' : 'error'}>
+                                                                {printer.isOnline ? 'Online' : 'Offline'}
+                                                            </Tag>
+                                                            <Tag color={printer.isColor ? 'magenta' : 'default'}>
+                                                                {printer.isColor ? 'Color' : 'B&W'}
+                                                            </Tag>
+                                                            {printer.isNetwork && <Tag color="cyan">Network</Tag>}
+                                                            <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                {printer.driver}
+                                                            </Text>
+                                                        </Space>
+                                                    }
+                                                />
+                                                <div style={{ textAlign: 'right', minWidth: 80 }}>
+                                                    {(printer.totalPagesPrinted > 0 || printer.last24h?.totalPages > 0) && (
+                                                        <div>
+                                                            {printer.last24h?.totalPages > 0 && (
+                                                                <Text style={{ fontSize: 11, display: 'block' }}>
+                                                                    24h: <Text strong>{printer.last24h.totalPages}</Text> pg
+                                                                    {printer.last24h.colorPages > 0 && (
+                                                                        <Text type="secondary"> ({printer.last24h.colorPages} color)</Text>
+                                                                    )}
+                                                                </Text>
+                                                            )}
+                                                            {printer.totalPagesPrinted > 0 && (
+                                                                <Text type="secondary" style={{ fontSize: 10 }}>
+                                                                    Lifetime: {printer.totalPagesPrinted} pg
+                                                                </Text>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </List.Item>
+                                        )}
+                                    />
+                                </Panel>
+                            )}
 
                             {/* Print Jobs */}
                             <Panel
