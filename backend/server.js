@@ -4229,7 +4229,7 @@ app.put('/api/v1/admin/document-requests/:orderId/status', async (req, res) => {
  * GET /api/v1/admin/document-requests/stats
  * Document request statistics grouped by file type
  */
-app.get('/api/v1/admin/document-requests/stats', (req, res) => {
+app.get('/api/v1/admin/document-requests/stats', async (req, res) => {
     try {
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
