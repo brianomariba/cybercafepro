@@ -4010,7 +4010,9 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
                 sizeFormatted: formatBytes(f.size),
                 mimetype: f.mimetype,
                 path: f.path,
-                docType: docType // pdf, word, excel
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                docType: docType, // pdf, word, excel
+                type: docType // Frontend compatibility
             };
         });
 
@@ -4059,13 +4061,7 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
 
         // 2. Emit to user portal (all users get notified about new work available)
         io.emit('new-document-for-users', {
-            orderId: request.orderId,
-            serviceType: request.serviceType,
-            fileCount: request.totalFiles,
-            typeSummary: request.typeSummary,
-            instructions: request.instructions,
-            status: 'pending',
-            createdAt: request.createdAt,
+            ...request,
             notification: {
                 title: 'New Document Request',
                 message: `New ${serviceType} job: ${files.length} file(s) awaiting processing`,

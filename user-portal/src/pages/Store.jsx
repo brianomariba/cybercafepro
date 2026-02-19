@@ -36,15 +36,19 @@ function Store({ isDarkMode }) {
         fetchData();
 
         // Real-time updates when stock changes
-        const socket = connectSocket({
-            onConnect: () => console.log('Store: Connected for updates'),
-        });
+        const socket = connectSocket();
 
-        socket.on('low-stock-alert', () => {
+        const handleLowStock = () => {
             fetchData(); // Refresh when stock changes
-        });
+        };
 
-        return () => socket?.disconnect();
+        socket.on('low-stock-alert', handleLowStock);
+
+        return () => {
+            if (socket) {
+                socket.off('low-stock-alert', handleLowStock);
+            }
+        };
     }, []);
 
     const handleBuyClick = (item) => {

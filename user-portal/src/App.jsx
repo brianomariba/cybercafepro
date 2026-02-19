@@ -156,106 +156,111 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const socket = connectSocket({
-      onNewDocumentRequest: (data) => {
-        const { typeSummary, serviceType, fileCount, notification: notif, orderId, createdAt, files, customerName } = data;
+    const handleNewDocument = (data) => {
+      const { typeSummary, serviceType, fileCount, notification: notif, orderId, createdAt, files, customerName } = data;
 
-        // Add to notifications list with full document data
-        const newNotification = {
-          key: orderId || Date.now().toString(),
-          title: notif?.title || 'New Document Request',
-          message: notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`,
-          typeSummary,
-          createdAt: createdAt || new Date().toISOString(),
-          orderId,
-          files: files || [],
-          customerName,
-          serviceType,
-        };
+      // Add to notifications list with full document data
+      const newNotification = {
+        key: orderId || Date.now().toString(),
+        title: notif?.title || 'New Document Request',
+        message: notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`,
+        typeSummary,
+        createdAt: createdAt || new Date().toISOString(),
+        orderId,
+        files: files || [],
+        customerName,
+        serviceType,
+      };
 
-        setDocumentNotifications(prev => [newNotification, ...prev.slice(0, 9)]); // Keep last 10
-        setNotificationCount(prev => prev + 1);
+      setDocumentNotifications(prev => [newNotification, ...prev.slice(0, 9)]); // Keep last 10
+      setNotificationCount(prev => prev + 1);
 
-        // Show popup notification with download button
-        const notificationKey = `doc-${orderId}`;
-        notification.success({
-          key: notificationKey,
-          message: (
-            <Space>
-              <InboxOutlined style={{ color: '#52c41a', fontSize: 18 }} />
-              <span>{newNotification.title}</span>
+      // Show popup notification with download button
+      const notificationKey = `doc-${orderId}`;
+      notification.success({
+        key: notificationKey,
+        message: (
+          <Space>
+            <InboxOutlined style={{ color: '#52c41a', fontSize: 18 }} />
+            <span>{newNotification.title}</span>
+          </Space>
+        ),
+        description: (
+          <div>
+            <div style={{ marginBottom: 8 }}>{newNotification.message}</div>
+            <Space size={4} wrap>
+              {typeSummary?.pdf > 0 && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: 'rgba(255, 59, 92, 0.15)',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  color: '#ff3b5c',
+                  fontSize: 12
+                }}>
+                  <FilePdfOutlined /> {typeSummary.pdf}
+                </span>
+              )}
+              {typeSummary?.word > 0 && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: 'rgba(0, 212, 255, 0.15)',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  color: '#00d4ff',
+                  fontSize: 12
+                }}>
+                  <FileWordOutlined /> {typeSummary.word}
+                </span>
+              )}
+              {typeSummary?.excel > 0 && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: 'rgba(0, 255, 136, 0.15)',
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  color: '#00ff88',
+                  fontSize: 12
+                }}>
+                  <FileExcelOutlined /> {typeSummary.excel}
+                </span>
+              )}
             </Space>
-          ),
-          description: (
-            <div>
-              <div style={{ marginBottom: 8 }}>{newNotification.message}</div>
-              <Space size={4} wrap>
-                {typeSummary?.pdf > 0 && (
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    background: 'rgba(255, 59, 92, 0.15)',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    color: '#ff3b5c',
-                    fontSize: 12
-                  }}>
-                    <FilePdfOutlined /> {typeSummary.pdf}
-                  </span>
-                )}
-                {typeSummary?.word > 0 && (
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    background: 'rgba(0, 212, 255, 0.15)',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    color: '#00d4ff',
-                    fontSize: 12
-                  }}>
-                    <FileWordOutlined /> {typeSummary.word}
-                  </span>
-                )}
-                {typeSummary?.excel > 0 && (
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    background: 'rgba(0, 255, 136, 0.15)',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    color: '#00ff88',
-                    fontSize: 12
-                  }}>
-                    <FileExcelOutlined /> {typeSummary.excel}
-                  </span>
-                )}
-              </Space>
-              <div style={{ marginTop: 8 }}>
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<DownloadOutlined />}
-                  onClick={() => {
-                    setSelectedKey('client-documents');
-                    notification.close(notificationKey);
-                  }}
-                >
-                  View & Download
-                </Button>
-              </div>
+            <div style={{ marginTop: 8 }}>
+              <Button
+                type="primary"
+                size="small"
+                icon={<DownloadOutlined />}
+                onClick={() => {
+                  setSelectedKey('client-documents');
+                  notification.close(notificationKey);
+                }}
+              >
+                View & Download
+              </Button>
             </div>
-          ),
-          placement: 'topRight',
-          duration: 8,
-        });
-      },
+          </div>
+        ),
+        placement: 'topRight',
+        duration: 8,
+      });
+    };
+
+    const socket = connectSocket({
+      onNewDocumentRequest: handleNewDocument,
     });
 
     return () => {
-      if (socket) socket.disconnect();
+      if (socket) {
+        socket.off('new-document-for-users', handleNewDocument);
+        // We generally keep the socket connection open as it's a singleton
+      }
     };
   }, [isAuthenticated]);
 
@@ -385,7 +390,7 @@ function App() {
     ...documentNotifications.map((notif) => ({
       key: notif.key,
       label: (
-        <div 
+        <div
           style={{ maxWidth: 300, padding: '4px 0', cursor: 'pointer' }}
           onClick={() => setSelectedKey('client-documents')}
         >

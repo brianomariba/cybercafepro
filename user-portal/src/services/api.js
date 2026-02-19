@@ -110,47 +110,28 @@ export const userLogout = async () => {
 let socket = null;
 
 export const connectSocket = (callbacks = {}) => {
-    if (socket) {
-        socket.disconnect();
+    if (!socket) {
+        socket = io(SOCKET_URL, {
+            transports: ['websocket', 'polling']
+        });
+
+        socket.on('connect', () => {
+            console.log('Connected to HawkNine Server');
+            if (callbacks.onConnect) callbacks.onConnect();
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from HawkNine Server');
+            if (callbacks.onDisconnect) callbacks.onDisconnect();
+        });
     }
 
-    socket = io(SOCKET_URL, {
-        transports: ['websocket', 'polling']
-    });
-
-    socket.on('connect', () => {
-        console.log('Connected to HawkNine Server');
-        if (callbacks.onConnect) callbacks.onConnect();
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Disconnected from HawkNine Server');
-        if (callbacks.onDisconnect) callbacks.onDisconnect();
-    });
-
-    // Task events
-    socket.on('task-assigned', (data) => {
-        if (callbacks.onTaskAssigned) callbacks.onTaskAssigned(data);
-    });
-
-    socket.on('task-updated', (data) => {
-        if (callbacks.onTaskUpdated) callbacks.onTaskUpdated(data);
-    });
-
-    // Document events
-    socket.on('document-for-agent', (data) => {
-        if (callbacks.onDocumentReceived) callbacks.onDocumentReceived(data);
-    });
-
-    // New document request from landing page (customer uploads)
-    socket.on('new-document-for-users', (data) => {
-        if (callbacks.onNewDocumentRequest) callbacks.onNewDocumentRequest(data);
-    });
-
-    // Document request status updates
-    socket.on('document-request-updated', (data) => {
-        if (callbacks.onDocumentRequestUpdated) callbacks.onDocumentRequestUpdated(data);
-    });
+    // Attach listeners if callbacks provided
+    if (callbacks.onTaskAssigned) socket.on('task-assigned', callbacks.onTaskAssigned);
+    if (callbacks.onTaskUpdated) socket.on('task-updated', callbacks.onTaskUpdated);
+    if (callbacks.onDocumentReceived) socket.on('document-for-agent', callbacks.onDocumentReceived);
+    if (callbacks.onNewDocumentRequest) socket.on('new-document-for-users', callbacks.onNewDocumentRequest);
+    if (callbacks.onDocumentRequestUpdated) socket.on('document-request-updated', callbacks.onDocumentRequestUpdated);
 
     return socket;
 };

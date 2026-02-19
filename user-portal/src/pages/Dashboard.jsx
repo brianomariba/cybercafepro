@@ -99,53 +99,19 @@ function Dashboard({ user, onNavigate }) {
         fetchTasks();
 
         // Connect to real-time updates
+        const handleTaskUpdate = () => fetchTasks();
+
         const socket = connectSocket({
-            onTaskAssigned: () => fetchTasks(),
-            onTaskUpdated: () => fetchTasks(),
-            onNewDocumentRequest: (data) => {
-                // Show notification for new document uploads from landing page
-                const { typeSummary, serviceType, fileCount, notification: notif } = data;
-
-                // Build file type description
-                const fileTypes = [];
-                if (typeSummary?.pdf > 0) fileTypes.push(`${typeSummary.pdf} PDF`);
-                if (typeSummary?.word > 0) fileTypes.push(`${typeSummary.word} Word`);
-                if (typeSummary?.excel > 0) fileTypes.push(`${typeSummary.excel} Excel`);
-
-                notification.info({
-                    message: (
-                        <Space>
-                            <InboxOutlined style={{ color: '#00B4D8', fontSize: 18 }} />
-                            <span>{notif?.title || 'New Document Request'}</span>
-                        </Space>
-                    ),
-                    description: (
-                        <div>
-                            <div style={{ marginBottom: 8 }}>
-                                {notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`}
-                            </div>
-                            <Space size={4}>
-                                {typeSummary?.pdf > 0 && (
-                                    <Tag icon={<FilePdfOutlined />} color="#ff3b5c">{typeSummary.pdf}</Tag>
-                                )}
-                                {typeSummary?.word > 0 && (
-                                    <Tag icon={<FileWordOutlined />} color="#00d4ff">{typeSummary.word}</Tag>
-                                )}
-                                {typeSummary?.excel > 0 && (
-                                    <Tag icon={<FileExcelOutlined />} color="#00ff88">{typeSummary.excel}</Tag>
-                                )}
-                            </Space>
-                        </div>
-                    ),
-                    placement: 'topRight',
-                    duration: 8,
-                });
-            },
+            onTaskAssigned: handleTaskUpdate,
+            onTaskUpdated: handleTaskUpdate,
         });
 
         return () => {
             clearInterval(timer);
-            if (socket) socket.disconnect();
+            if (socket) {
+                socket.off('task-assigned', handleTaskUpdate);
+                socket.off('task-updated', handleTaskUpdate);
+            }
         };
     }, []);
 

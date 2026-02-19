@@ -62,12 +62,10 @@ function Submissions({ user }) {
         fetchSubmissions();
 
         // Listen for real-time updates
-        const socket = connectSocket({
-            onConnect: () => console.log('Connected for submission updates'),
-        });
+        const socket = connectSocket();
 
         // Listen for submission review events
-        socket.on('submission-reviewed', (data) => {
+        const handleReview = (data) => {
             if (data.submittedBy === user?.username) {
                 if (data.status === 'approved') {
                     message.success(`Your submission "${data.title}" has been approved! 🎉`);
@@ -76,9 +74,15 @@ function Submissions({ user }) {
                 }
                 fetchSubmissions();
             }
-        });
+        };
 
-        return () => socket?.disconnect();
+        socket.on('submission-reviewed', handleReview);
+
+        return () => {
+            if (socket) {
+                socket.off('submission-reviewed', handleReview);
+            }
+        };
     }, [user]);
 
     // Handle form submission

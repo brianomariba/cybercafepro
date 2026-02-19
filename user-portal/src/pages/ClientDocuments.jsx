@@ -36,24 +36,31 @@ const ClientDocuments = ({ isDarkMode }) => {
         loadData();
 
         // Socket listener for real-time updates
-        const socket = connectSocket({
-            onNewDocumentRequest: (newDoc) => {
-                console.log('New document received via socket:', newDoc);
-                // Ensure the new document has the required structure
-                if (newDoc && newDoc.orderId) {
-                    setRequests(prev => {
-                        // Avoid duplicates
-                        const exists = prev.find(r => r.orderId === newDoc.orderId);
-                        if (exists) {
-                            return prev;
-                        }
-                        return [newDoc, ...prev];
-                    });
-                }
+        const onNewDoc = (newDoc) => {
+            console.log('New document received via socket:', newDoc);
+            // Ensure the new document has the required structure
+            if (newDoc && newDoc.orderId) {
+                setRequests(prev => {
+                    // Avoid duplicates
+                    const exists = prev.find(r => r.orderId === newDoc.orderId);
+                    if (exists) {
+                        return prev;
+                    }
+                    return [newDoc, ...prev];
+                });
             }
+        };
+
+        const socket = connectSocket({
+            onNewDocumentRequest: onNewDoc
         });
 
-        // We don't disconnect the shared socket service
+        // Cleanup listener on unmount
+        return () => {
+            if (socket) {
+                socket.off('new-document-for-users', onNewDoc);
+            }
+        };
     }, []);
 
     const getFileIcon = (type) => {
@@ -106,111 +113,111 @@ const ClientDocuments = ({ isDarkMode }) => {
                         </Col>
 
                         {requests.map(req => (
-                    <Col xs={24} sm={24} md={12} lg={8} key={req.orderId}>
-                        <Card
-                            hoverable
-                            style={{
-                                background: isDarkMode ? '#023047' : '#fff',
-                                border: isDarkMode ? '1px solid rgba(0, 180, 216, 0.2)' : '1px solid #f0f0f0',
-                                height: '100%'
-                            }}
-                        >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-                                <Space>
-                                    <UserOutlined style={{ color: '#00B4D8' }} />
-                                    <Text strong style={{ color: isDarkMode ? '#fff' : '#000' }}>{req.customerName}</Text>
-                                </Space>
-                                <Tag color="blue">{req.serviceType}</Tag>
-                            </div>
-
-                            <div style={{ marginBottom: 16 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>ID: {req.orderId}</Text>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        {new Date(req.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </Text>
-                                </div>
-                                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-                                    <ClockCircleOutlined style={{ marginRight: 4 }} />
-                                    {new Date(req.createdAt).toLocaleDateString()}
-                                </Text>
-                                {req.instructions && (
-                                    <div style={{ marginTop: 8, padding: '8px', background: isDarkMode ? 'rgba(255,255,255,0.05)' : '#f8fafc', borderRadius: 4 }}>
-                                        <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', display: 'block' }}>
-                                            "{req.instructions}"
-                                        </Text>
+                            <Col xs={24} sm={24} md={12} lg={8} key={req.orderId}>
+                                <Card
+                                    hoverable
+                                    style={{
+                                        background: isDarkMode ? '#023047' : '#fff',
+                                        border: isDarkMode ? '1px solid rgba(0, 180, 216, 0.2)' : '1px solid #f0f0f0',
+                                        height: '100%'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                                        <Space>
+                                            <UserOutlined style={{ color: '#00B4D8' }} />
+                                            <Text strong style={{ color: isDarkMode ? '#fff' : '#000' }}>{req.customerName}</Text>
+                                        </Space>
+                                        <Tag color="blue">{req.serviceType}</Tag>
                                     </div>
-                                )}
-                            </div>
 
-                            <Divider style={{ margin: '12px 0', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#f0f0f0' }} />
-
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                {req.files && req.files.length > 0 ? (
-                                    req.files.map((file, idx) => (
-                                        <div key={idx} style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            padding: '8px',
-                                            background: isDarkMode ? 'rgba(0,0,0,0.2)' : '#f8fafc',
-                                            borderRadius: 6
-                                        }}>
-                                            <div style={{ fontSize: 20, marginRight: 12 }}>{getFileIcon(file.type || 'other')}</div>
-                                            <div style={{ flex: 1, overflow: 'hidden' }}>
-                                                <Text ellipsis style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
-                                                    {file.originalName || file.filename || 'Unknown file'}
+                                    <div style={{ marginBottom: 16 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>ID: {req.orderId}</Text>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                                {new Date(req.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </Text>
+                                        </div>
+                                        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                                            <ClockCircleOutlined style={{ marginRight: 4 }} />
+                                            {new Date(req.createdAt).toLocaleDateString()}
+                                        </Text>
+                                        {req.instructions && (
+                                            <div style={{ marginTop: 8, padding: '8px', background: isDarkMode ? 'rgba(255,255,255,0.05)' : '#f8fafc', borderRadius: 4 }}>
+                                                <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', display: 'block' }}>
+                                                    "{req.instructions}"
                                                 </Text>
                                             </div>
-                                            <Tooltip title="Download">
-                                                <Button
-                                                    type="text"
-                                                    icon={<DownloadOutlined />}
-                                                    size="small"
-                                                    onClick={() => {
-                                                        if (file.downloadUrl) {
-                                                            const link = document.createElement('a');
-                                                            link.href = file.downloadUrl;
-                                                            link.download = file.originalName || file.filename || 'download';
-                                                            link.target = '_blank';
-                                                            document.body.appendChild(link);
-                                                            link.click();
-                                                            document.body.removeChild(link);
-                                                        } else {
-                                                            console.error('No download URL for file:', file);
-                                                        }
-                                                    }}
-                                                    style={{ color: '#00B4D8' }}
-                                                />
-                                            </Tooltip>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', padding: '8px' }}>
-                                        No files available
-                                    </Text>
-                                )}
-                            </div>
-                            </Card>
-                        </Col>
-                    ))}
-                </Row>
+                                        )}
+                                    </div>
 
-                {requests.length === 0 && (
-                    <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description={
-                            <div>
-                                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                                    No documents found
-                                </Text>
-                                <Text type="secondary" style={{ fontSize: 12 }}>
-                                    Documents uploaded from the landing page will appear here
-                                </Text>
-                            </div>
-                        }
-                        style={{ marginTop: 40 }}
-                    />
-                )}
+                                    <Divider style={{ margin: '12px 0', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#f0f0f0' }} />
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        {req.files && req.files.length > 0 ? (
+                                            req.files.map((file, idx) => (
+                                                <div key={idx} style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    padding: '8px',
+                                                    background: isDarkMode ? 'rgba(0,0,0,0.2)' : '#f8fafc',
+                                                    borderRadius: 6
+                                                }}>
+                                                    <div style={{ fontSize: 20, marginRight: 12 }}>{getFileIcon(file.type || 'other')}</div>
+                                                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                                                        <Text ellipsis style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
+                                                            {file.originalName || file.filename || 'Unknown file'}
+                                                        </Text>
+                                                    </div>
+                                                    <Tooltip title="Download">
+                                                        <Button
+                                                            type="text"
+                                                            icon={<DownloadOutlined />}
+                                                            size="small"
+                                                            onClick={() => {
+                                                                if (file.downloadUrl) {
+                                                                    const link = document.createElement('a');
+                                                                    link.href = file.downloadUrl;
+                                                                    link.download = file.originalName || file.filename || 'download';
+                                                                    link.target = '_blank';
+                                                                    document.body.appendChild(link);
+                                                                    link.click();
+                                                                    document.body.removeChild(link);
+                                                                } else {
+                                                                    console.error('No download URL for file:', file);
+                                                                }
+                                                            }}
+                                                            style={{ color: '#00B4D8' }}
+                                                        />
+                                                    </Tooltip>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', padding: '8px' }}>
+                                                No files available
+                                            </Text>
+                                        )}
+                                    </div>
+                                </Card>
+                            </Col>
+                        ))}
+                    </Row>
+
+                    {requests.length === 0 && (
+                        <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={
+                                <div>
+                                    <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                                        No documents found
+                                    </Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        Documents uploaded from the landing page will appear here
+                                    </Text>
+                                </div>
+                            }
+                            style={{ marginTop: 40 }}
+                        />
+                    )}
                 </>
             )}
         </div>
