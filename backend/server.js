@@ -3968,7 +3968,7 @@ const categorizeDocumentType = (filename, mimetype) => {
  * POST /api/v1/public/document-request
  * Public endpoint for customers to submit document work requests
  */
-app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res) => {
+app.post('/api/v1/public/document-request', upload.array('files', 10), async (req, res) => {
     try {
         const { serviceType, customerName, customerPhone, instructions, source } = req.body;
         const files = req.files || [];
