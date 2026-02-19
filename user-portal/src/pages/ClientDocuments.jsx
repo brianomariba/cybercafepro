@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Typography, Space, Button, Tag, Divider, Statistic, Row, Col, Tooltip, Empty } from 'antd';
+import { Card, Typography, Space, Button, Tag, Divider, Statistic, Row, Col, Tooltip, Empty, Spin } from 'antd';
 import {
     FilePdfOutlined, FileWordOutlined, FileExcelOutlined, FileOutlined,
     DownloadOutlined, ClockCircleOutlined, UserOutlined, InboxOutlined
@@ -60,27 +60,33 @@ const ClientDocuments = ({ isDarkMode }) => {
                 <Button onClick={loadData} icon={<DownloadOutlined />}>Refresh</Button>
             </div>
 
-            <Row gutter={[16, 16]}>
-                <Col span={24}>
-                    <Card bordered={false} style={{ background: isDarkMode ? 'rgba(255,255,255,0.05)' : '#fff', borderRadius: 12 }}>
-                        <div style={{ display: 'flex', gap: 24 }}>
-                            <Statistic
-                                title="Total Requests"
-                                value={requests.length}
-                                prefix={<InboxOutlined />}
-                                valueStyle={{ color: isDarkMode ? '#fff' : '#000' }}
-                            />
-                            <Statistic
-                                title="Total Files"
-                                value={requests.reduce((acc, r) => acc + (r.fileCount || 0), 0)}
-                                prefix={<FileOutlined />}
-                                valueStyle={{ color: isDarkMode ? '#fff' : '#000' }}
-                            />
-                        </div>
-                    </Card>
-                </Col>
+            {loading ? (
+                <div style={{ textAlign: 'center', padding: '60px 0' }}>
+                    <Spin size="large" />
+                </div>
+            ) : (
+                <>
+                    <Row gutter={[16, 16]}>
+                        <Col span={24}>
+                            <Card bordered={false} style={{ background: isDarkMode ? 'rgba(255,255,255,0.05)' : '#fff', borderRadius: 12 }}>
+                                <div style={{ display: 'flex', gap: 24 }}>
+                                    <Statistic
+                                        title="Total Requests"
+                                        value={requests.length}
+                                        prefix={<InboxOutlined />}
+                                        valueStyle={{ color: isDarkMode ? '#fff' : '#000' }}
+                                    />
+                                    <Statistic
+                                        title="Total Files"
+                                        value={requests.reduce((acc, r) => acc + (r.fileCount || 0), 0)}
+                                        prefix={<FileOutlined />}
+                                        valueStyle={{ color: isDarkMode ? '#fff' : '#000' }}
+                                    />
+                                </div>
+                            </Card>
+                        </Col>
 
-                {requests.map(req => (
+                        {requests.map(req => (
                     <Col xs={24} sm={24} md={12} lg={8} key={req.orderId}>
                         <Card
                             hoverable
@@ -140,25 +146,34 @@ const ClientDocuments = ({ isDarkMode }) => {
                                                 type="text"
                                                 icon={<DownloadOutlined />}
                                                 size="small"
-                                                href={file.downloadUrl}
-                                                target="_blank"
+                                                onClick={() => {
+                                                    const link = document.createElement('a');
+                                                    link.href = file.downloadUrl;
+                                                    link.download = file.originalName || file.filename;
+                                                    link.target = '_blank';
+                                                    document.body.appendChild(link);
+                                                    link.click();
+                                                    document.body.removeChild(link);
+                                                }}
                                                 style={{ color: '#00B4D8' }}
                                             />
                                         </Tooltip>
                                     </div>
                                 ))}
                             </div>
-                        </Card>
-                    </Col>
-                ))}
-            </Row>
+                            </Card>
+                        </Col>
+                    ))}
+                </Row>
 
-            {requests.length === 0 && !loading && (
-                <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description={<Text type="secondary">No documents found</Text>}
-                    style={{ marginTop: 40 }}
-                />
+                {requests.length === 0 && (
+                    <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={<Text type="secondary">No documents found</Text>}
+                        style={{ marginTop: 40 }}
+                    />
+                )}
+                </>
             )}
         </div>
     );

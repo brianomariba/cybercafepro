@@ -5371,6 +5371,14 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             else typeSummary.other++;
         });
 
+        // Get base URL for download links (production or from request)
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
         // Notify user portal (e.g., reception desk view)
         io.emit('new-document-for-users', {
             orderId: newRequest.orderId,
@@ -5381,7 +5389,7 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             files: files.map(f => ({
                 filename: f.filename,
                 originalName: f.originalname || f.name, // Usually originalname from multer
-                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
                 type: getDocType(f.mimetype, f.originalname)
             })),
             notification: {
@@ -5403,7 +5411,7 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             files: newRequest.files.map(f => ({
                 filename: f.filename,
                 originalName: f.originalName,
-                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
                 size: f.size
             })),
             timestamp: newRequest.createdAt
@@ -5427,6 +5435,14 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(limit);
 
+        // Get base URL for download links (production or from request)
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
         // Format to match socket event payload
         const formatted = requests.map(doc => {
             const files = doc.files || [];
@@ -5447,7 +5463,7 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
                 files: files.map(f => ({
                     filename: f.filename,
                     originalName: f.originalName || f.originalname || f.name,
-                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                    downloadUrl: `${baseUrl}/uploads/${f.filename}`,
                     type: getDocType(f.mimetype, f.originalName || f.originalname || f.filename)
                 })),
                 notification: {

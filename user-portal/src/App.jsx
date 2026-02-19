@@ -25,6 +25,7 @@ import {
   FileExcelOutlined,
   ShopOutlined,
   UploadOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
 
 import Login from './pages/Login';
@@ -157,22 +158,28 @@ function App() {
 
     const socket = connectSocket({
       onNewDocumentRequest: (data) => {
-        const { typeSummary, serviceType, fileCount, notification: notif, orderId, createdAt } = data;
+        const { typeSummary, serviceType, fileCount, notification: notif, orderId, createdAt, files, customerName } = data;
 
-        // Add to notifications list
+        // Add to notifications list with full document data
         const newNotification = {
           key: orderId || Date.now().toString(),
           title: notif?.title || 'New Document Request',
           message: notif?.message || `${fileCount} file(s) uploaded for ${serviceType?.replace(/-/g, ' ')}`,
           typeSummary,
           createdAt: createdAt || new Date().toISOString(),
+          orderId,
+          files: files || [],
+          customerName,
+          serviceType,
         };
 
         setDocumentNotifications(prev => [newNotification, ...prev.slice(0, 9)]); // Keep last 10
         setNotificationCount(prev => prev + 1);
 
-        // Show popup notification
+        // Show popup notification with download button
+        const notificationKey = `doc-${orderId}`;
         notification.success({
+          key: notificationKey,
           message: (
             <Space>
               <InboxOutlined style={{ color: '#52c41a', fontSize: 18 }} />
@@ -182,7 +189,7 @@ function App() {
           description: (
             <div>
               <div style={{ marginBottom: 8 }}>{newNotification.message}</div>
-              <Space size={4}>
+              <Space size={4} wrap>
                 {typeSummary?.pdf > 0 && (
                   <span style={{
                     display: 'inline-flex',
@@ -226,6 +233,19 @@ function App() {
                   </span>
                 )}
               </Space>
+              <div style={{ marginTop: 8 }}>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={() => {
+                    setSelectedKey('client-documents');
+                    notification.close(notificationKey);
+                  }}
+                >
+                  View & Download
+                </Button>
+              </div>
             </div>
           ),
           placement: 'topRight',
@@ -365,17 +385,20 @@ function App() {
     ...documentNotifications.map((notif) => ({
       key: notif.key,
       label: (
-        <div style={{ maxWidth: 300, padding: '4px 0' }}>
+        <div 
+          style={{ maxWidth: 300, padding: '4px 0', cursor: 'pointer' }}
+          onClick={() => setSelectedKey('client-documents')}
+        >
           <Space align="start">
             <InboxOutlined style={{ color: '#00B4D8', fontSize: 16, marginTop: 3 }} />
-            <div>
+            <div style={{ flex: 1 }}>
               <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b', display: 'block' }}>
                 {notif.title}
               </Text>
               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
                 {notif.message}
               </Text>
-              <Space size={4}>
+              <Space size={4} wrap>
                 {notif.typeSummary?.pdf > 0 && (
                   <span style={{
                     display: 'inline-flex', alignItems: 'center', gap: 3,
@@ -404,6 +427,20 @@ function App() {
                   </span>
                 )}
               </Space>
+              <div style={{ marginTop: 6 }}>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  style={{ padding: 0, height: 'auto', color: '#00B4D8' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedKey('client-documents');
+                  }}
+                >
+                  View Documents
+                </Button>
+              </div>
               <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4 }}>
                 {getRelativeTime(notif.createdAt)}
               </Text>
