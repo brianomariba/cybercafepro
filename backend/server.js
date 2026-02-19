@@ -375,7 +375,7 @@ const authRateLimit = rateLimit({
 // ==================== DATA STORES ====================
 // Real-time tracking stores
 const computers = new Map();          // clientId -> computer status
-const documentRequests = [];          // Transient document request tracking (until handled)
+//ptr const documentRequests = [];          // Transient document request tracking (deprecated in favor of MongoDB)
 const sharedDocuments = [];           // Transient shared documents tracking
 
 // Sessions (handled by MongoDB AuthSession and VerificationCode models)
@@ -4024,7 +4024,7 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
         };
 
         // Create request record
-        const request = {
+        const requestData = {
             orderId,
             serviceType,
             customerName,
@@ -4036,13 +4036,12 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
             totalFiles: files.length,
             totalSize: files.reduce((sum, f) => sum + f.size, 0),
             totalSizeFormatted: formatBytes(files.reduce((sum, f) => sum + f.size, 0)),
-            status: 'pending', // pending, processing, ready, completed, cancelled
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            status: 'pending',
+            createdAt: new Date(),
+            updatedAt: new Date()
         };
 
-        documentRequests.unshift(request);
-        if (documentRequests.length > 500) documentRequests.pop();
+        const newRequest = await DocumentRequest.create(requestData);
 
         // =============================================
         // NOTIFICATIONS
@@ -4050,7 +4049,7 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
 
         // 1. Emit to admin dashboard (new document request notification)
         io.emit('new-document-request', {
-            ...request,
+            ...newRequest.toObject(),
             notification: {
                 title: 'New Document Upload',
                 message: `${customerName} uploaded ${files.length} file(s) for ${serviceType}`,
@@ -4061,7 +4060,7 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
 
         // 2. Emit to user portal (all users get notified about new work available)
         io.emit('new-document-for-users', {
-            ...request,
+            ...newRequest.toObject(),
             notification: {
                 title: 'New Document Request',
                 message: `New ${serviceType} job: ${files.length} file(s) awaiting processing`,
@@ -4071,9 +4070,9 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
 
         // 3. Notify Desktop Agents (immediate pop-up + auto-download)
         io.emit('agent-public-document-notification', {
-            orderId: request.orderId,
+            orderId: newRequest.orderId,
             customerName,
-            customerPhone: customerPhone.replace(/\s/g, ''),
+            customerPhone: newRequest.customerPhone,
             serviceType,
             instructions: instructions || '',
             files: categorizedFiles.map(f => ({
@@ -4083,10 +4082,10 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
                 size: f.size,
                 docType: f.docType
             })),
-            timestamp: request.createdAt
+            timestamp: newRequest.createdAt
         });
 
-        console.log(`[PUBLIC] New document request: ${orderId} from ${customerName} (${customerPhone}) - PDF:${typeSummary.pdf} Word:${typeSummary.word} Excel:${typeSummary.excel}`);
+        console.log(`[PUBLIC] New document request saved to DB: ${orderId}`);
 
         res.json({
             success: true,
@@ -4100,71 +4099,130 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), (req, res
 });
 
 /**
+ * GET /api/v1/public/document-requests
+ * Fetch all public document requests for user portal
+ */
+app.get('/api/v1/public/document-requests', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const requests = await DocumentRequest.find().sort({ createdAt: -1 }).limit(parseInt(limit));
+
+        // Add downloadURL to files for frontend
+        const mappedRequests = requests.map(req => {
+            const reqObj = req.toObject();
+            if (reqObj.files) {
+                reqObj.files = reqObj.files.map(f => ({
+                    ...f,
+                    type: f.docType || 'other', // Frontend compatibility
+                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (error) {
+        console.error('Fetch requests error:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
  * GET /api/v1/public/track/:orderId
  * Track status of a document request
  */
-app.get('/api/v1/public/track/:orderId', (req, res) => {
-    const { orderId } = req.params;
+app.get('/api/v1/public/track/:orderId', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const request = await DocumentRequest.findOne({ orderId });
 
-    const request = documentRequests.find(r => r.orderId === orderId);
+        if (!request) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
 
-    if (!request) {
-        return res.status(404).json({ error: 'Order not found' });
+        res.json({
+            orderId: request.orderId,
+            status: request.status,
+            serviceType: request.serviceType,
+            filesCount: request.files.length,
+            createdAt: request.createdAt,
+            updatedAt: request.updatedAt
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-
-    res.json({
-        orderId: request.orderId,
-        status: request.status,
-        serviceType: request.serviceType,
-        filesCount: request.files.length,
-        createdAt: request.createdAt,
-        updatedAt: request.updatedAt
-    });
 });
 
 /**
  * GET /api/v1/admin/document-requests
  * Admin endpoint to view all document requests
  */
-app.get('/api/v1/admin/document-requests', (req, res) => {
-    const { status, limit = 50 } = req.query;
+app.get('/api/v1/admin/document-requests', async (req, res) => {
+    try {
+        const { status, limit = 50 } = req.query;
+        let query = {};
+        if (status) {
+            query.status = status;
+        }
 
-    let results = documentRequests;
-    if (status) {
-        results = results.filter(r => r.status === status);
+        const requests = await DocumentRequest.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        // Add downloadURL
+        const mappedRequests = requests.map(req => {
+            const reqObj = req.toObject();
+            if (reqObj.files) {
+                reqObj.files = reqObj.files.map(f => ({
+                    ...f,
+                    type: f.docType || 'other',
+                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (error) {
+        console.error('Admin Fetch requests error:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
     }
-
-    res.json(results.slice(0, parseInt(limit)));
 });
 
 /**
  * PUT /api/v1/admin/document-requests/:orderId/status
  * Update status of a document request
  */
-app.put('/api/v1/admin/document-requests/:orderId/status', (req, res) => {
-    const { orderId } = req.params;
-    const { status, notes } = req.body;
+app.put('/api/v1/admin/document-requests/:orderId/status', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status, notes } = req.body;
 
-    const validStatuses = ['pending', 'processing', 'ready', 'completed', 'cancelled'];
-    if (!validStatuses.includes(status)) {
-        return res.status(400).json({ error: 'Invalid status' });
+        const validStatuses = ['pending', 'processing', 'ready', 'completed', 'cancelled'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+
+        const request = await DocumentRequest.findOne({ orderId });
+        if (!request) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        request.status = status;
+        if (notes !== undefined) request.notes = notes;
+        request.updatedAt = new Date();
+        await request.save();
+
+        // Emit update
+        io.emit('document-request-updated', { orderId, status, updatedAt: request.updatedAt });
+
+        console.log(`[PUBLIC] Order ${orderId} status updated to: ${status}`);
+
+        res.json({ success: true, request });
+    } catch (error) {
+        console.error('Update status error:', error);
+        res.status(500).json({ error: 'Failed to update status' });
     }
-
-    const request = documentRequests.find(r => r.orderId === orderId);
-    if (!request) {
-        return res.status(404).json({ error: 'Order not found' });
-    }
-
-    request.status = status;
-    request.notes = notes || request.notes;
-    request.updatedAt = new Date().toISOString();
-
-    // Emit update
-    io.emit('document-request-updated', { orderId, status, updatedAt: request.updatedAt });
-
-    console.log(`[PUBLIC] Order ${orderId} status updated to: ${status}`);
-
-    res.json({ success: true, request });
 });
 
 /**
@@ -4178,23 +4236,33 @@ app.get('/api/v1/admin/document-requests/stats', (req, res) => {
         const weekStart = new Date(now);
         weekStart.setDate(weekStart.getDate() - 7);
 
-        // Filter by time periods
-        const allRequests = documentRequests;
-        const todayRequests = documentRequests.filter(r => new Date(r.createdAt) >= todayStart);
-        const weekRequests = documentRequests.filter(r => new Date(r.createdAt) >= weekStart);
+        // Fetch all requests from DB
+        const allRequests = await DocumentRequest.find();
+
+        const todayRequests = allRequests.filter(r => new Date(r.createdAt) >= todayStart);
+        const weekRequests = allRequests.filter(r => new Date(r.createdAt) >= weekStart);
 
         // Calculate totals by document type
         const calculateTypeTotals = (requests) => {
             let pdf = 0, word = 0, excel = 0, totalFiles = 0, totalSize = 0;
 
             for (const request of requests) {
-                if (request.typeSummary) {
-                    pdf += request.typeSummary.pdf || 0;
-                    word += request.typeSummary.word || 0;
-                    excel += request.typeSummary.excel || 0;
+                const files = request.files || [];
+
+                // Count from files array since typeSummary might not be persisted in all records
+                // Use safe checking for docType
+                pdf += files.filter(f => (f.docType || '').toLowerCase().includes('pdf')).length;
+                word += files.filter(f => (f.docType || '').toLowerCase().includes('word') || (f.docType || '').toLowerCase().includes('document')).length;
+                excel += files.filter(f => (f.docType || '').toLowerCase().includes('excel') || (f.docType || '').toLowerCase().includes('sheet')).length;
+
+                totalFiles += files.length;
+
+                // Use stored totalSize or recalculate
+                let currentTotalSize = request.totalSize || 0;
+                if (currentTotalSize === 0 && files.length > 0) {
+                    currentTotalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
                 }
-                totalFiles += request.totalFiles || request.files?.length || 0;
-                totalSize += request.totalSize || 0;
+                totalSize += currentTotalSize;
             }
 
             return { pdf, word, excel, totalFiles, totalSize, totalSizeFormatted: formatBytes(totalSize) };
