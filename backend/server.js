@@ -5386,12 +5386,14 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             serviceType: newRequest.serviceType,
             fileCount: files.length,
             typeSummary,
+            instructions: newRequest.instructions || '',
             files: files.map(f => ({
                 filename: f.filename,
                 originalName: f.originalname || f.name, // Usually originalname from multer
                 downloadUrl: `${baseUrl}/uploads/${f.filename}`,
                 type: getDocType(f.mimetype, f.originalname)
             })),
+            instructions: newRequest.instructions || '',
             notification: {
                 title: 'New Document Request',
                 message: `${files.length} file(s) from ${customerName} for ${serviceType}`
@@ -5449,7 +5451,10 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
             const typeSummary = { pdf: 0, word: 0, excel: 0, other: 0 };
 
             files.forEach(f => {
-                const type = getDocType(f.mimetype, f.originalName || f.originalname || f.filename);
+                // Handle both mimeType (from model) and mimetype (from multer)
+                const mime = f.mimeType || f.mimetype || '';
+                const name = f.originalName || f.originalname || f.filename || '';
+                const type = getDocType(mime, name);
                 if (typeSummary[type] !== undefined) typeSummary[type]++;
                 else typeSummary.other++;
             });
@@ -5460,12 +5465,18 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
                 serviceType: doc.serviceType || 'General',
                 fileCount: files.length,
                 typeSummary,
-                files: files.map(f => ({
-                    filename: f.filename,
-                    originalName: f.originalName || f.originalname || f.name,
-                    downloadUrl: `${baseUrl}/uploads/${f.filename}`,
-                    type: getDocType(f.mimetype, f.originalName || f.originalname || f.filename)
-                })),
+                instructions: doc.instructions || '',
+                files: files.map(f => {
+                    // Handle both mimeType (from model) and mimetype (from multer)
+                    const mime = f.mimeType || f.mimetype || '';
+                    const name = f.originalName || f.originalname || f.filename || '';
+                    return {
+                        filename: f.filename,
+                        originalName: f.originalName || f.originalname || f.name,
+                        downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                        type: getDocType(mime, name)
+                    };
+                }),
                 notification: {
                     title: 'Document Request',
                     message: `${files.length} file(s) from ${doc.customerName} for ${doc.serviceType}`

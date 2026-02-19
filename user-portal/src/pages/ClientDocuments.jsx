@@ -16,9 +16,17 @@ const ClientDocuments = ({ isDarkMode }) => {
         try {
             setLoading(true);
             const data = await getPublicDocumentRequests();
-            setRequests(data);
+            console.log('Loaded document requests:', data);
+            // Ensure data is an array
+            if (Array.isArray(data)) {
+                setRequests(data);
+            } else {
+                console.warn('Expected array but got:', typeof data, data);
+                setRequests([]);
+            }
         } catch (error) {
             console.error('Failed to load documents:', error);
+            setRequests([]);
         } finally {
             setLoading(false);
         }
@@ -30,7 +38,18 @@ const ClientDocuments = ({ isDarkMode }) => {
         // Socket listener for real-time updates
         const socket = connectSocket({
             onNewDocumentRequest: (newDoc) => {
-                setRequests(prev => [newDoc, ...prev]);
+                console.log('New document received via socket:', newDoc);
+                // Ensure the new document has the required structure
+                if (newDoc && newDoc.orderId) {
+                    setRequests(prev => {
+                        // Avoid duplicates
+                        const exists = prev.find(r => r.orderId === newDoc.orderId);
+                        if (exists) {
+                            return prev;
+                        }
+                        return [newDoc, ...prev];
+                    });
+                }
             }
         });
 
@@ -127,39 +146,49 @@ const ClientDocuments = ({ isDarkMode }) => {
                             <Divider style={{ margin: '12px 0', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#f0f0f0' }} />
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                {(req.files || []).map((file, idx) => (
-                                    <div key={idx} style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        padding: '8px',
-                                        background: isDarkMode ? 'rgba(0,0,0,0.2)' : '#f8fafc',
-                                        borderRadius: 6
-                                    }}>
-                                        <div style={{ fontSize: 20, marginRight: 12 }}>{getFileIcon(file.type)}</div>
-                                        <div style={{ flex: 1, overflow: 'hidden' }}>
-                                            <Text ellipsis style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
-                                                {file.originalName || file.filename}
-                                            </Text>
+                                {req.files && req.files.length > 0 ? (
+                                    req.files.map((file, idx) => (
+                                        <div key={idx} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            padding: '8px',
+                                            background: isDarkMode ? 'rgba(0,0,0,0.2)' : '#f8fafc',
+                                            borderRadius: 6
+                                        }}>
+                                            <div style={{ fontSize: 20, marginRight: 12 }}>{getFileIcon(file.type || 'other')}</div>
+                                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                                                <Text ellipsis style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
+                                                    {file.originalName || file.filename || 'Unknown file'}
+                                                </Text>
+                                            </div>
+                                            <Tooltip title="Download">
+                                                <Button
+                                                    type="text"
+                                                    icon={<DownloadOutlined />}
+                                                    size="small"
+                                                    onClick={() => {
+                                                        if (file.downloadUrl) {
+                                                            const link = document.createElement('a');
+                                                            link.href = file.downloadUrl;
+                                                            link.download = file.originalName || file.filename || 'download';
+                                                            link.target = '_blank';
+                                                            document.body.appendChild(link);
+                                                            link.click();
+                                                            document.body.removeChild(link);
+                                                        } else {
+                                                            console.error('No download URL for file:', file);
+                                                        }
+                                                    }}
+                                                    style={{ color: '#00B4D8' }}
+                                                />
+                                            </Tooltip>
                                         </div>
-                                        <Tooltip title="Download">
-                                            <Button
-                                                type="text"
-                                                icon={<DownloadOutlined />}
-                                                size="small"
-                                                onClick={() => {
-                                                    const link = document.createElement('a');
-                                                    link.href = file.downloadUrl;
-                                                    link.download = file.originalName || file.filename;
-                                                    link.target = '_blank';
-                                                    document.body.appendChild(link);
-                                                    link.click();
-                                                    document.body.removeChild(link);
-                                                }}
-                                                style={{ color: '#00B4D8' }}
-                                            />
-                                        </Tooltip>
-                                    </div>
-                                ))}
+                                    ))
+                                ) : (
+                                    <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', padding: '8px' }}>
+                                        No files available
+                                    </Text>
+                                )}
                             </div>
                             </Card>
                         </Col>
@@ -169,7 +198,16 @@ const ClientDocuments = ({ isDarkMode }) => {
                 {requests.length === 0 && (
                     <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description={<Text type="secondary">No documents found</Text>}
+                        description={
+                            <div>
+                                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                                    No documents found
+                                </Text>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                    Documents uploaded from the landing page will appear here
+                                </Text>
+                            </div>
+                        }
                         style={{ marginTop: 40 }}
                     />
                 )}
