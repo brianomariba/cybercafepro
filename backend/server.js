@@ -5646,6 +5646,207 @@ app.get('/api/v1/admin/document-requests/stats', requireAdminAuth, async (req, r
     }
 });
 
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/received
+ * Mark that a document request was received by a specific agent/computer
+ */
+app.put('/api/v1/admin/document-requests/:orderId/received', async (req, res) => {
+    try {
+        const { hostname, clientId } = req.body;
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            {
+                receivedBy: {
+                    hostname: hostname || 'Unknown',
+                    clientId: clientId || 'Unknown',
+                    receivedAt: new Date()
+                },
+                updatedAt: new Date()
+            },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, receivedBy: request.receivedBy });
+        console.log(`[DOCUMENT REQUEST] ${req.params.orderId} received by agent ${hostname} (${clientId})`);
+
+        res.json({ success: true, request });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Mark received failed:', error);
+        res.status(500).json({ error: 'Failed to mark as received' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests/analytics
+ * Comprehensive analytics for landing page document submissions
+ */
+app.get('/api/v1/admin/document-requests/analytics', requireAdminAuth, async (req, res) => {
+    try {
+        const requests = await DocumentRequest.find({}).sort({ createdAt: -1 });
+
+        // Basic counters
+        let totalSubmissions = requests.length;
+        let totalFiles = 0;
+        let totalSize = 0;
+        let receivedCount = 0;
+        let pendingCount = 0;
+        let processingCount = 0;
+        let completedCount = 0;
+
+        // By service type
+        const byServiceType = {};
+        // By agent/computer
+        const byAgent = {};
+        // By date (last 30 days)
+        const byDate = {};
+        // Top customers
+        const byCustomer = {};
+        // File type breakdown
+        const byFileType = { pdf: 0, word: 0, excel: 0, other: 0 };
+
+        // Today's date for "today" stats
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        let todaySubmissions = 0;
+        let todayFiles = 0;
+
+        // This week
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        let weekSubmissions = 0;
+
+        // This month
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        let monthSubmissions = 0;
+
+        for (const req of requests) {
+            const reqDate = new Date(req.createdAt);
+            const dateKey = reqDate.toISOString().split('T')[0]; // YYYY-MM-DD
+
+            // Date grouping (last 30 days)
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            if (reqDate >= thirtyDaysAgo) {
+                byDate[dateKey] = (byDate[dateKey] || 0) + 1;
+            }
+
+            // Today / Week / Month
+            if (reqDate >= today) {
+                todaySubmissions++;
+                todayFiles += req.totalFiles || 0;
+            }
+            if (reqDate >= weekStart) weekSubmissions++;
+            if (reqDate >= monthStart) monthSubmissions++;
+
+            // Status counts
+            if (req.status === 'pending') pendingCount++;
+            else if (req.status === 'processing') processingCount++;
+            else if (req.status === 'completed') completedCount++;
+
+            // Received by agent
+            if (req.receivedBy && req.receivedBy.hostname) {
+                receivedCount++;
+                const agentKey = req.receivedBy.hostname;
+                if (!byAgent[agentKey]) {
+                    byAgent[agentKey] = { hostname: agentKey, clientId: req.receivedBy.clientId, count: 0, files: 0 };
+                }
+                byAgent[agentKey].count++;
+                byAgent[agentKey].files += req.totalFiles || 0;
+            }
+
+            // Service type
+            const svcType = req.serviceType || 'unknown';
+            byServiceType[svcType] = (byServiceType[svcType] || 0) + 1;
+
+            // Customer
+            const custName = req.customerName || 'Unknown';
+            if (!byCustomer[custName]) {
+                byCustomer[custName] = { name: custName, phone: req.customerPhone, count: 0, files: 0 };
+            }
+            byCustomer[custName].count++;
+            byCustomer[custName].files += req.totalFiles || 0;
+
+            // Files
+            totalFiles += req.totalFiles || 0;
+            totalSize += req.totalSize || 0;
+
+            for (const file of req.files || []) {
+                const docType = file.docType || 'other';
+                if (byFileType[docType] !== undefined) byFileType[docType]++;
+                else byFileType.other++;
+            }
+        }
+
+        // Format size
+        const formatSize = (bytes) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+            return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+        };
+
+        // Sort date entries
+        const sortedDates = Object.entries(byDate)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, count]) => ({ date, count }));
+
+        // Sort agents by count
+        const sortedAgents = Object.values(byAgent)
+            .sort((a, b) => b.count - a.count);
+
+        // Sort customers by count (top 10)
+        const topCustomers = Object.values(byCustomer)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10);
+
+        // Service type array
+        const serviceTypes = Object.entries(byServiceType)
+            .map(([type, count]) => ({ type, count }))
+            .sort((a, b) => b.count - a.count);
+
+        // Recent submissions (last 10)
+        const recentSubmissions = requests.slice(0, 10).map(r => ({
+            orderId: r.orderId,
+            customerName: r.customerName,
+            customerPhone: r.customerPhone,
+            serviceType: r.serviceType,
+            totalFiles: r.totalFiles,
+            status: r.status,
+            receivedBy: r.receivedBy || null,
+            createdAt: r.createdAt
+        }));
+
+        res.json({
+            overview: {
+                totalSubmissions,
+                totalFiles,
+                totalSize: formatSize(totalSize),
+                receivedCount,
+                unreceived: totalSubmissions - receivedCount,
+                pendingCount,
+                processingCount,
+                completedCount
+            },
+            today: {
+                submissions: todaySubmissions,
+                files: todayFiles
+            },
+            thisWeek: weekSubmissions,
+            thisMonth: monthSubmissions,
+            byDate: sortedDates,
+            byAgent: sortedAgents,
+            byServiceType: serviceTypes,
+            byFileType,
+            topCustomers,
+            recentSubmissions
+        });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Analytics failed:', error);
+        res.status(500).json({ error: 'Analytics failed' });
+    }
+});
 
 
 // ==================== USER DOCUMENT SUBMISSIONS ====================

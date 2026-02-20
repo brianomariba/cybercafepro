@@ -1137,13 +1137,13 @@ async function startDataCollection() {
                             // Pass the actual URL if we got it, otherwise let it extract from title
                             const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, actualUrl || currentApp.url);
 
-                        // Send Real-Time Browser Log if we got valid data (deduplicated)
-                                            const now = Date.now();
-                                            const alreadySent = browserData && sentBrowserUrls.has(browserData.url) &&
-                                                (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
-                                            if (browserData && !alreadySent) {
-                                                sentBrowserUrls.set(browserData.url, now);
-                                                const browserPayload = {
+                            // Send Real-Time Browser Log if we got valid data (deduplicated)
+                            const now = Date.now();
+                            const alreadySent = browserData && sentBrowserUrls.has(browserData.url) &&
+                                (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
+                            if (browserData && !alreadySent) {
+                                sentBrowserUrls.set(browserData.url, now);
+                                const browserPayload = {
                                     type: 'browser',
                                     clientId: CLIENT_ID,
                                     hostname: os.hostname(),
@@ -1698,6 +1698,19 @@ async function handlePublicDocument(data) {
     // Save to store for history
     if (offlineStore) {
         offlineStore.addPublicDocument(data);
+    }
+
+    // Mark this document as received by this agent on the server
+    if (data.orderId && config && config.server && config.server.baseUrl) {
+        try {
+            await axios.put(`${config.server.baseUrl}/api/v1/admin/document-requests/${data.orderId}/received`, {
+                hostname: os.hostname(),
+                clientId: CLIENT_ID
+            }, { timeout: 5000 });
+            console.log(`[PublicDoc] Marked as received by ${os.hostname()}`);
+        } catch (e) {
+            console.error('[PublicDoc] Failed to mark as received:', e.message);
+        }
     }
 
     // Notify Portal if open

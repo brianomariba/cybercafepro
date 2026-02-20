@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload, Image, Spin } from 'antd';
 import {
@@ -28,7 +28,7 @@ import {
     DisconnectOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, requestScreenshot, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -74,14 +74,19 @@ function Computers() {
         return () => clearInterval(interval);
     }, []);
 
+    // Ref to track selected computer for socket callbacks (avoids stale closures)
+    const selectedComputerRef = React.useRef(null);
+    React.useEffect(() => { selectedComputerRef.current = selectedComputer; }, [selectedComputer]);
+
     // Real-time activity updates for selected computer
     useEffect(() => {
         if (!selectedComputer || !activityDrawerOpen) return;
 
         const socket = connectSocket({
             onNewLog: (log) => {
+                const current = selectedComputerRef.current;
                 // Ensure we only process logs for the currently viewed computer to prevent mixed data
-                if (log && String(log.clientId) === String(selectedComputer.clientId)) {
+                if (log && current && String(log.clientId) === String(current.clientId)) {
                     const logData = log.data || {};
                     if (log.type === 'file') {
                         setFileActivity(prev => {
@@ -101,25 +106,26 @@ function Computers() {
                         });
                     } else if (log.type === 'print') {
                         // Refresh to get full job details formatting
-                        getPrintJobs({ clientId: selectedComputer.clientId, limit: 20 })
+                        getPrintJobs({ clientId: current.clientId, limit: 20 })
                             .then(res => setPrintJobs(res.jobs || []));
                     }
                 }
             },
             onScreenshot: (data) => {
-                if (selectedComputer && data.clientId === selectedComputer.clientId) {
+                const current = selectedComputerRef.current;
+                if (current && data.clientId === current.clientId) {
+                    console.log('[SCREENSHOT] Received screenshot data, size:', data.screenshot?.length);
                     setScreenshotData(data.screenshot);
                     setScreenshotTimestamp(data.timestamp);
                     setScreenshotLoading(false);
                     setScreenshotTimer(prev => { if (prev) clearTimeout(prev); return null; });
-                    if (!screenshotVisible) {
-                        setScreenshotVisible(true);
-                    }
+                    setScreenshotVisible(true);
                     message.success('Screenshot captured');
                 }
             },
             onAgentError: (data) => {
-                if (selectedComputer && data.clientId === selectedComputer.clientId) {
+                const current = selectedComputerRef.current;
+                if (current && data.clientId === current.clientId) {
                     setScreenshotLoading(false);
                     setScreenshotTimer(prev => { if (prev) clearTimeout(prev); return null; });
                     message.error(`Failed to capture screenshot: ${data.message}`);
@@ -241,13 +247,22 @@ function Computers() {
         setScreenshotTimer(timer);
 
         try {
-            await sendCommand(selectedComputer.clientId, 'screenshot');
+            // Use the targeted screenshot endpoint which sends directly to the agent's socket
+            await requestScreenshot(selectedComputer.clientId);
+            console.log('[SCREENSHOT] Request sent to', selectedComputer.clientId);
         } catch (error) {
             clearTimeout(timer);
             setScreenshotTimer(null);
-            message.error('Failed to request screenshot');
-            setScreenshotLoading(false);
-            setScreenshotVisible(false);
+            console.error('[SCREENSHOT] Request failed:', error);
+            // Fall back to broadcast command if targeted endpoint fails (agent not in registry)
+            try {
+                console.log('[SCREENSHOT] Falling back to broadcast command...');
+                await sendCommand(selectedComputer.clientId, 'screenshot');
+            } catch (err2) {
+                message.error('Failed to request screenshot - computer may be offline');
+                setScreenshotLoading(false);
+                setScreenshotVisible(false);
+            }
         }
     };
 
@@ -837,20 +852,20 @@ function Computers() {
                                                                             <Tag
                                                                                 color={
                                                                                     file.source === 'whatsapp' ? 'green' :
-                                                                                    file.source === 'usb' ? 'orange' :
-                                                                                    file.source === 'browser_download' ? 'blue' :
-                                                                                    file.source === 'email' ? 'purple' :
-                                                                                    file.source === 'telegram' ? 'cyan' :
-                                                                                    'default'
+                                                                                        file.source === 'usb' ? 'orange' :
+                                                                                            file.source === 'browser_download' ? 'blue' :
+                                                                                                file.source === 'email' ? 'purple' :
+                                                                                                    file.source === 'telegram' ? 'cyan' :
+                                                                                                        'default'
                                                                                 }
                                                                                 style={{ fontSize: 10 }}
                                                                             >
                                                                                 {file.source === 'whatsapp' ? 'WhatsApp' :
-                                                                                 file.source === 'usb' ? 'USB' :
-                                                                                 file.source === 'browser_download' ? 'Download' :
-                                                                                 file.source === 'email' ? 'Email' :
-                                                                                 file.source === 'telegram' ? 'Telegram' :
-                                                                                 file.source}
+                                                                                    file.source === 'usb' ? 'USB' :
+                                                                                        file.source === 'browser_download' ? 'Download' :
+                                                                                            file.source === 'email' ? 'Email' :
+                                                                                                file.source === 'telegram' ? 'Telegram' :
+                                                                                                    file.source}
                                                                             </Tag>
                                                                         )}
                                                                         <Text type="secondary" style={{ fontSize: 11 }}>

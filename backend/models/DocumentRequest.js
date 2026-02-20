@@ -28,6 +28,11 @@ const DocumentRequestSchema = new mongoose.Schema({
     totalFiles: { type: Number, default: 0 },
     totalSize: { type: Number, default: 0 },
     notes: { type: String }, // Admin notes
+    receivedBy: {
+        hostname: { type: String },
+        clientId: { type: String },
+        receivedAt: { type: Date }
+    },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });

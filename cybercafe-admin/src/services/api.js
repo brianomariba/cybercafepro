@@ -255,6 +255,11 @@ export const sendCommand = async (clientId, command, params = {}) => {
     return response.data;
 };
 
+export const requestScreenshot = async (clientId) => {
+    const response = await api.post(`/admin/computers/${clientId}/screenshot`);
+    return response.data;
+};
+
 // ==================== SERVICES ====================
 
 export const getServices = async () => {
@@ -390,6 +395,11 @@ export const getDocumentRequestStats = async () => {
 
 export const updateDocumentRequestStatus = async (orderId, status, notes = '') => {
     const response = await api.put(`/admin/document-requests/${orderId}/status`, { status, notes });
+    return response.data;
+};
+
+export const getDocumentRequestAnalytics = async () => {
+    const response = await api.get('/admin/document-requests/analytics');
     return response.data;
 };
 
@@ -640,6 +650,7 @@ export default {
     getDocumentRequests,
     getDocumentRequestStats,
     updateDocumentRequestStatus,
+    getDocumentRequestAnalytics,
     connectSocket,
     disconnectSocket,
 

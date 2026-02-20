@@ -21,9 +21,18 @@ import {
     ReloadOutlined,
     CheckCircleOutlined,
     SyncOutlined,
+    BarChartOutlined,
+    RiseOutlined,
+    TeamOutlined,
+    CalendarOutlined,
+    FundOutlined,
+    PhoneOutlined,
+    CloudUploadOutlined,
+    AppstoreOutlined,
+    DatabaseOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getDocuments, getDocumentStats, uploadDocument, sendDocumentToComputer, downloadDocument, deleteDocument, getComputers } from '../services/api';
+import { getDocuments, getDocumentStats, uploadDocument, sendDocumentToComputer, downloadDocument, deleteDocument, getComputers, getDocumentRequestAnalytics } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -48,6 +57,57 @@ const getFileIcon = (mimetype, filename) => {
     return <FileTextOutlined style={{ color: '#6b6b80', fontSize: 24 }} />;
 };
 
+// Mini bar chart component
+const MiniBarChart = ({ data, maxBars = 14 }) => {
+    if (!data || data.length === 0) return <Empty description="No data yet" style={{ padding: '20px 0' }} />;
+
+    const displayData = data.slice(-maxBars);
+    const maxVal = Math.max(...displayData.map(d => d.count), 1);
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 120, padding: '0 4px' }}>
+            {displayData.map((item, i) => {
+                const height = Math.max((item.count / maxVal) * 100, 4);
+                const dateLabel = dayjs(item.date).format('D');
+                const fullDate = dayjs(item.date).format('MMM D');
+                return (
+                    <Tooltip key={i} title={`${fullDate}: ${item.count} submission${item.count !== 1 ? 's' : ''}`}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                            <div
+                                style={{
+                                    width: '100%',
+                                    height: `${height}px`,
+                                    background: 'linear-gradient(180deg, #00d4ff 0%, #0088cc 100%)',
+                                    borderRadius: '4px 4px 0 0',
+                                    minWidth: 12,
+                                    transition: 'height 0.3s ease',
+                                    cursor: 'pointer',
+                                    opacity: 0.85,
+                                }}
+                                onMouseEnter={(e) => { e.target.style.opacity = 1; }}
+                                onMouseLeave={(e) => { e.target.style.opacity = 0.85; }}
+                            />
+                            <Text type="secondary" style={{ fontSize: 9, marginTop: 4 }}>{dateLabel}</Text>
+                        </div>
+                    </Tooltip>
+                );
+            })}
+        </div>
+    );
+};
+
+// Status info helper
+const getStatusInfo = (status) => {
+    switch (status) {
+        case 'pending': return { color: 'orange', icon: <ClockCircleOutlined />, label: 'Pending' };
+        case 'processing': return { color: 'blue', icon: <SyncOutlined spin />, label: 'Processing' };
+        case 'ready': return { color: 'purple', icon: <CheckCircleOutlined />, label: 'Ready' };
+        case 'completed': return { color: 'green', icon: <CheckCircleOutlined />, label: 'Completed' };
+        case 'cancelled': return { color: 'red', label: 'Cancelled' };
+        default: return { color: 'default', label: status };
+    }
+};
+
 function Documents() {
     const [documents, setDocuments] = useState([]);
     const [computers, setComputers] = useState([]);
@@ -55,6 +115,11 @@ function Documents() {
     const [loading, setLoading] = useState(false);
     const [searchText, setSearchText] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
+    const [activeTab, setActiveTab] = useState('sharing');
+
+    // Analytics state
+    const [analytics, setAnalytics] = useState(null);
+    const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
     // Send document modal
     const [sendModalVisible, setSendModalVisible] = useState(false);
@@ -81,6 +146,18 @@ function Documents() {
         setLoading(false);
     };
 
+    // Fetch analytics
+    const fetchAnalytics = async () => {
+        setAnalyticsLoading(true);
+        try {
+            const data = await getDocumentRequestAnalytics();
+            setAnalytics(data);
+        } catch (error) {
+            console.error('Failed to fetch analytics:', error);
+        }
+        setAnalyticsLoading(false);
+    };
+
     // Keep track of processed IDs to prevent duplicates even within same render cycle
     const processedIdsRef = useRef(new Set());
 
@@ -91,6 +168,7 @@ function Documents() {
 
     useEffect(() => {
         fetchData();
+        fetchAnalytics();
 
         // Connect to socket for real-time updates
         const socket = io(import.meta.env.VITE_SOCKET_URL || 'https://api.hawkninegroup.com', {
@@ -122,6 +200,15 @@ function Documents() {
                     downloaded: prev.downloaded + 1
                 }));
             }
+        });
+
+        // Also listen for new document requests (landing page) to refresh analytics
+        socket.on('new-document-request', () => {
+            fetchAnalytics();
+        });
+
+        socket.on('document-request-updated', () => {
+            fetchAnalytics();
         });
 
         return () => {
@@ -183,7 +270,7 @@ function Documents() {
         }
     };
 
-    // Table columns
+    // Table columns for document sharing
     const columns = [
         {
             title: 'Document',
@@ -274,20 +361,101 @@ function Documents() {
         },
     ];
 
+    // Analytics columns for recent submissions
+    const analyticsColumns = [
+        {
+            title: 'Order ID',
+            dataIndex: 'orderId',
+            key: 'orderId',
+            width: 130,
+            render: (id) => (
+                <Text strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#00d4ff', fontSize: 12 }}>{id}</Text>
+            ),
+        },
+        {
+            title: 'Customer',
+            key: 'customer',
+            render: (_, record) => (
+                <Space>
+                    <Avatar size="small" style={{ background: '#7b2cbf' }}>
+                        {record.customerName?.charAt(0).toUpperCase()}
+                    </Avatar>
+                    <div>
+                        <Text strong style={{ display: 'block', fontSize: 13 }}>{record.customerName}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                            <PhoneOutlined /> {record.customerPhone}
+                        </Text>
+                    </div>
+                </Space>
+            ),
+        },
+        {
+            title: 'Service',
+            dataIndex: 'serviceType',
+            key: 'serviceType',
+            width: 120,
+            render: (type) => (
+                <Tag style={{ textTransform: 'capitalize' }}>{type?.replace(/-/g, ' ')}</Tag>
+            ),
+        },
+        {
+            title: 'Files',
+            dataIndex: 'totalFiles',
+            key: 'totalFiles',
+            width: 70,
+            render: (count) => (
+                <Badge count={count || 0} style={{ backgroundColor: '#00d4ff' }} />
+            ),
+        },
+        {
+            title: 'Status',
+            dataIndex: 'status',
+            key: 'status',
+            width: 110,
+            render: (status) => {
+                const info = getStatusInfo(status);
+                return <Tag icon={info.icon} color={info.color}>{info.label}</Tag>;
+            },
+        },
+        {
+            title: 'Received By',
+            dataIndex: 'receivedBy',
+            key: 'receivedBy',
+            width: 140,
+            render: (receivedBy) => receivedBy?.hostname ? (
+                <Space>
+                    <Avatar size="small" icon={<DesktopOutlined />} style={{ background: '#00ff88' }} />
+                    <div>
+                        <Text strong style={{ fontSize: 12 }}>{receivedBy.hostname}</Text>
+                        <br />
+                        <Text type="secondary" style={{ fontSize: 10 }}>
+                            {dayjs(receivedBy.receivedAt).format('HH:mm')}
+                        </Text>
+                    </div>
+                </Space>
+            ) : (
+                <Tag color="default">Not yet</Tag>
+            ),
+        },
+        {
+            title: 'Submitted',
+            dataIndex: 'createdAt',
+            key: 'createdAt',
+            width: 100,
+            render: (time) => (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                    {dayjs(time).format('MMM D, HH:mm')}
+                </Text>
+            ),
+        },
+    ];
+
     // Online computers for sending
     const onlineComputers = computers.filter(c => c.isOnline);
 
-    return (
-        <div>
-            {/* Page Header */}
-            <div className="page-header">
-                <div className="page-title">
-                    <FileOutlined className="icon" />
-                    <h1>Document Sharing</h1>
-                </div>
-                <p className="page-subtitle">Send and receive documents between users and computers</p>
-            </div>
-
+    // Render document sharing tab content
+    const renderSharingTab = () => (
+        <>
             {/* Stats */}
             <div className="stats-row">
                 <div className="stat-card blue">
@@ -463,6 +631,352 @@ function Documents() {
                     </Card>
                 </Col>
             </Row>
+        </>
+    );
+
+    // Render analytics tab content
+    const renderAnalyticsTab = () => {
+        const ov = analytics?.overview || {};
+        const todayData = analytics?.today || {};
+
+        return (
+            <>
+                {/* Overview Stats */}
+                <div className="stats-row">
+                    <div className="stat-card blue">
+                        <div className="stat-header">
+                            <div className="stat-icon blue"><CloudUploadOutlined /></div>
+                        </div>
+                        <div className="stat-value">{ov.totalSubmissions || 0}</div>
+                        <div className="stat-label">Total Submissions</div>
+                    </div>
+
+                    <div className="stat-card cyan" style={{ borderTopColor: '#00e5ff' }}>
+                        <div className="stat-header">
+                            <div className="stat-icon" style={{ background: 'rgba(0, 229, 255, 0.15)', color: '#00e5ff' }}><CalendarOutlined /></div>
+                        </div>
+                        <div className="stat-value">{todayData.submissions || 0}</div>
+                        <div className="stat-label">Today</div>
+                    </div>
+
+                    <div className="stat-card orange">
+                        <div className="stat-header">
+                            <div className="stat-icon orange"><FileOutlined /></div>
+                        </div>
+                        <div className="stat-value">{ov.totalFiles || 0}</div>
+                        <div className="stat-label">Total Files</div>
+                    </div>
+
+                    <div className="stat-card green">
+                        <div className="stat-header">
+                            <div className="stat-icon green"><DesktopOutlined /></div>
+                        </div>
+                        <div className="stat-value">{ov.receivedCount || 0}</div>
+                        <div className="stat-label">Received by Agents</div>
+                    </div>
+
+                    <div className="stat-card pink" style={{ borderTopColor: '#ff3b5c' }}>
+                        <div className="stat-header">
+                            <div className="stat-icon" style={{ background: 'rgba(255, 59, 92, 0.15)', color: '#ff3b5c' }}><ClockCircleOutlined /></div>
+                        </div>
+                        <div className="stat-value">{ov.pendingCount || 0}</div>
+                        <div className="stat-label">Pending</div>
+                    </div>
+                </div>
+
+                <Row gutter={[24, 24]}>
+                    {/* Left Column - Charts & Breakdowns */}
+                    <Col xs={24} lg={8}>
+                        {/* Submissions Over Time */}
+                        <Card
+                            title={
+                                <Space>
+                                    <FundOutlined style={{ color: '#00d4ff' }} />
+                                    <span>Submissions Over Time</span>
+                                </Space>
+                            }
+                            extra={<Text type="secondary" style={{ fontSize: 11 }}>Last 30 days</Text>}
+                        >
+                            <MiniBarChart data={analytics?.byDate || []} />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                                <div style={{ textAlign: 'center' }}>
+                                    <Text type="secondary" style={{ fontSize: 11 }}>This Week</Text>
+                                    <Title level={4} style={{ margin: 0, color: '#00d4ff' }}>{analytics?.thisWeek || 0}</Title>
+                                </div>
+                                <div style={{ textAlign: 'center' }}>
+                                    <Text type="secondary" style={{ fontSize: 11 }}>This Month</Text>
+                                    <Title level={4} style={{ margin: 0, color: '#7b2cbf' }}>{analytics?.thisMonth || 0}</Title>
+                                </div>
+                                <div style={{ textAlign: 'center' }}>
+                                    <Text type="secondary" style={{ fontSize: 11 }}>Total Size</Text>
+                                    <Title level={4} style={{ margin: 0, color: '#00ff88' }}>{ov.totalSize || '0 B'}</Title>
+                                </div>
+                            </div>
+                        </Card>
+
+                        {/* Agent Reception Breakdown */}
+                        <Card
+                            title={
+                                <Space>
+                                    <DesktopOutlined style={{ color: '#00ff88' }} />
+                                    <span>Agent Reception</span>
+                                </Space>
+                            }
+                            style={{ marginTop: 24 }}
+                        >
+                            {(!analytics?.byAgent || analytics.byAgent.length === 0) ? (
+                                <Empty description="No agent receptions yet" />
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                    {analytics.byAgent.map((agent, idx) => (
+                                        <div key={idx} style={{
+                                            display: 'flex', alignItems: 'center', gap: 12,
+                                            padding: 12, background: 'rgba(0, 255, 136, 0.05)', borderRadius: 10,
+                                            border: '1px solid rgba(0, 255, 136, 0.1)'
+                                        }}>
+                                            <Avatar icon={<DesktopOutlined />} style={{
+                                                background: idx === 0 ? '#00ff88' : idx === 1 ? '#00d4ff' : '#7b2cbf'
+                                            }} />
+                                            <div style={{ flex: 1 }}>
+                                                <Text strong>{agent.hostname}</Text>
+                                                <Progress
+                                                    percent={ov.totalSubmissions ? Math.round((agent.count / ov.totalSubmissions) * 100) : 0}
+                                                    strokeColor={idx === 0 ? '#00ff88' : idx === 1 ? '#00d4ff' : '#7b2cbf'}
+                                                    size="small"
+                                                />
+                                            </div>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <Text strong style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 16 }}>{agent.count}</Text>
+                                                <br />
+                                                <Text type="secondary" style={{ fontSize: 10 }}>{agent.files} files</Text>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    {/* Unreceived indicator */}
+                                    {ov.unreceived > 0 && (
+                                        <div style={{
+                                            display: 'flex', alignItems: 'center', gap: 12,
+                                            padding: 12, background: 'rgba(255, 149, 0, 0.05)', borderRadius: 10,
+                                            border: '1px solid rgba(255, 149, 0, 0.15)'
+                                        }}>
+                                            <Avatar icon={<ClockCircleOutlined />} style={{ background: '#ff9500' }} />
+                                            <div style={{ flex: 1 }}>
+                                                <Text type="secondary">Not yet received</Text>
+                                            </div>
+                                            <Text strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#ff9500', fontSize: 16 }}>{ov.unreceived}</Text>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </Card>
+
+                        {/* File Type Breakdown */}
+                        <Card
+                            title={
+                                <Space>
+                                    <AppstoreOutlined style={{ color: '#7b2cbf' }} />
+                                    <span>File Types</span>
+                                </Space>
+                            }
+                            style={{ marginTop: 24 }}
+                        >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                {[
+                                    { icon: <FilePdfOutlined />, label: 'PDF', count: analytics?.byFileType?.pdf || 0, color: '#ff3b5c' },
+                                    { icon: <FileWordOutlined />, label: 'Word', count: analytics?.byFileType?.word || 0, color: '#00d4ff' },
+                                    { icon: <FileExcelOutlined />, label: 'Excel', count: analytics?.byFileType?.excel || 0, color: '#00ff88' },
+                                    { icon: <FileOutlined />, label: 'Other', count: analytics?.byFileType?.other || 0, color: '#6b6b80' },
+                                ].map((ft, idx) => {
+                                    const totalFileCount = (analytics?.byFileType?.pdf || 0) + (analytics?.byFileType?.word || 0) + (analytics?.byFileType?.excel || 0) + (analytics?.byFileType?.other || 0);
+                                    return (
+                                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                            <div style={{
+                                                width: 36, height: 36, borderRadius: 8,
+                                                background: `${ft.color}15`, display: 'flex',
+                                                alignItems: 'center', justifyContent: 'center',
+                                                color: ft.color, fontSize: 18
+                                            }}>
+                                                {ft.icon}
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <Text strong>{ft.label}</Text>
+                                                <Progress
+                                                    percent={totalFileCount ? Math.round((ft.count / totalFileCount) * 100) : 0}
+                                                    strokeColor={ft.color}
+                                                    size="small"
+                                                />
+                                            </div>
+                                            <Text style={{ fontFamily: 'JetBrains Mono, monospace', color: ft.color }}>{ft.count}</Text>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </Card>
+                    </Col>
+
+                    {/* Right Column - Tables */}
+                    <Col xs={24} lg={16}>
+                        {/* Service Type Breakdown */}
+                        <Card
+                            title={
+                                <Space>
+                                    <BarChartOutlined style={{ color: '#ff9500' }} />
+                                    <span>By Service Type</span>
+                                </Space>
+                            }
+                        >
+                            {(!analytics?.byServiceType || analytics.byServiceType.length === 0) ? (
+                                <Empty description="No service data yet" />
+                            ) : (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                                    {analytics.byServiceType.map((svc, idx) => {
+                                        const colors = ['#00d4ff', '#7b2cbf', '#ff3b5c', '#00ff88', '#ff9500', '#e91e63'];
+                                        const color = colors[idx % colors.length];
+                                        return (
+                                            <div key={idx} style={{
+                                                flex: '1 1 calc(33.33% - 12px)', minWidth: 140,
+                                                padding: 16, borderRadius: 12,
+                                                background: `${color}08`,
+                                                border: `1px solid ${color}22`,
+                                                textAlign: 'center'
+                                            }}>
+                                                <Title level={3} style={{ margin: 0, color }}>{svc.count}</Title>
+                                                <Text style={{ textTransform: 'capitalize', fontSize: 12 }}>
+                                                    {svc.type?.replace(/-/g, ' ')}
+                                                </Text>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </Card>
+
+                        {/* Top Customers */}
+                        <Card
+                            title={
+                                <Space>
+                                    <TeamOutlined style={{ color: '#7b2cbf' }} />
+                                    <span>Top Customers</span>
+                                </Space>
+                            }
+                            style={{ marginTop: 24 }}
+                        >
+                            {(!analytics?.topCustomers || analytics.topCustomers.length === 0) ? (
+                                <Empty description="No customer data yet" />
+                            ) : (
+                                <List
+                                    size="small"
+                                    dataSource={analytics.topCustomers}
+                                    renderItem={(customer, idx) => (
+                                        <List.Item
+                                            style={{
+                                                padding: '10px 12px',
+                                                borderRadius: 8,
+                                                marginBottom: 4,
+                                                background: idx < 3 ? 'rgba(123, 44, 191, 0.05)' : 'transparent'
+                                            }}
+                                        >
+                                            <List.Item.Meta
+                                                avatar={
+                                                    <Avatar style={{ background: idx === 0 ? '#ffd700' : idx === 1 ? '#c0c0c0' : idx === 2 ? '#cd7f32' : '#7b2cbf' }}>
+                                                        {idx < 3 ? (idx + 1) : customer.name?.charAt(0).toUpperCase()}
+                                                    </Avatar>
+                                                }
+                                                title={<Text strong>{customer.name}</Text>}
+                                                description={
+                                                    <Space>
+                                                        <PhoneOutlined />
+                                                        <Text type="secondary" style={{ fontSize: 12 }}>{customer.phone}</Text>
+                                                    </Space>
+                                                }
+                                            />
+                                            <div style={{ textAlign: 'right' }}>
+                                                <Text strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#00d4ff' }}>{customer.count}</Text>
+                                                <Text type="secondary" style={{ fontSize: 11 }}> requests</Text>
+                                                <br />
+                                                <Text type="secondary" style={{ fontSize: 11 }}>{customer.files} files</Text>
+                                            </div>
+                                        </List.Item>
+                                    )}
+                                />
+                            )}
+                        </Card>
+
+                        {/* Recent Submissions Table */}
+                        <Card
+                            title={
+                                <Space>
+                                    <InboxOutlined style={{ color: '#00d4ff' }} />
+                                    <span>Recent Landing Page Submissions</span>
+                                    <Badge count={analytics?.overview?.totalSubmissions || 0} style={{ backgroundColor: '#00d4ff' }} />
+                                </Space>
+                            }
+                            extra={
+                                <Tooltip title="Refresh Analytics">
+                                    <Button icon={<ReloadOutlined />} onClick={fetchAnalytics} loading={analyticsLoading} />
+                                </Tooltip>
+                            }
+                            style={{ marginTop: 24 }}
+                        >
+                            <Table
+                                columns={analyticsColumns}
+                                dataSource={analytics?.recentSubmissions || []}
+                                rowKey="orderId"
+                                pagination={false}
+                                size="small"
+                                loading={analyticsLoading}
+                                locale={{ emptyText: <Empty description="No submissions from landing page yet" /> }}
+                            />
+                        </Card>
+                    </Col>
+                </Row>
+            </>
+        );
+    };
+
+    return (
+        <div>
+            {/* Page Header */}
+            <div className="page-header">
+                <div className="page-title">
+                    <FileOutlined className="icon" />
+                    <h1>Document Sharing</h1>
+                </div>
+                <p className="page-subtitle">Send and receive documents between users and computers</p>
+            </div>
+
+            {/* Tabs */}
+            <Tabs
+                activeKey={activeTab}
+                onChange={setActiveTab}
+                style={{ marginBottom: 24 }}
+                items={[
+                    {
+                        key: 'sharing',
+                        label: (
+                            <Space>
+                                <SendOutlined />
+                                <span>Document Sharing</span>
+                            </Space>
+                        ),
+                        children: renderSharingTab(),
+                    },
+                    {
+                        key: 'analytics',
+                        label: (
+                            <Space>
+                                <BarChartOutlined />
+                                <span>Landing Page Analytics</span>
+                                {analytics?.today?.submissions > 0 && (
+                                    <Badge count={analytics.today.submissions} style={{ backgroundColor: '#00d4ff' }} />
+                                )}
+                            </Space>
+                        ),
+                        children: renderAnalyticsTab(),
+                    },
+                ]}
+            />
         </div>
     );
 }
