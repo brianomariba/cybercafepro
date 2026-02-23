@@ -164,6 +164,8 @@ function BrowserHistory() {
             dataIndex: 'timestamp',
             key: 'timestamp',
             width: 100,
+            sorter: (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
+            defaultSortOrder: 'descend',
             render: (time) => (
                 <Text type="secondary" style={{ fontSize: 12, fontFamily: 'JetBrains Mono' }}>
                     {dayjs(time).format('HH:mm:ss')}
@@ -424,7 +426,7 @@ function BrowserHistory() {
                             dataSource={filteredHistory}
                             rowKey="id"
                             loading={loading}
-                            pagination={{ pageSize: 8 }}
+                            pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
                             size="middle"
                         />
                     </Card>

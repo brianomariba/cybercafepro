@@ -5,90 +5,119 @@
  * Uses sql.js for reliable history database reading without native dependencies
  */
 
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const initSqlJs = require('sql.js');
 
 /**
- * Get the actual URL from Chrome/Edge address bar using UI Automation
- * This is more reliable than extracting from window titles
+ * Run a PowerShell script reliably by writing to a temp .ps1 file.
+ * Same pattern as print-monitor.js — avoids ALL quoting/escaping issues.
  */
-function getActiveTabUrl() {
+function runPS(script, timeoutMs = 5000) {
     return new Promise((resolve) => {
-        // PowerShell script to get URL from browser address bar using UI Automation
-        const psCommand = `
+        const tmpFile = path.join(os.tmpdir(), `hawknine_browser_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.ps1`);
+        try {
+            fs.writeFileSync(tmpFile, script, 'utf8');
+        } catch (e) {
+            resolve('');
+            return;
+        }
+
+        execFile('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', tmpFile
+        ], { timeout: timeoutMs, maxBuffer: 1024 * 512 }, (error, stdout, stderr) => {
+            try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+            if (error) {
+                resolve('');
+                return;
+            }
+            resolve(stdout || '');
+        });
+    });
+}
+
+/**
+ * Get the actual URL from Chrome/Edge address bar using UI Automation
+ * Written to a temp .ps1 file for reliable execution on any Windows machine.
+ */
+async function getActiveTabUrl() {
+    const script = `
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-$classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
-$controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
-$nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
-
 try {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-} catch { return '' }
+    if (-not $focused) { return }
 
-if (-not $focused) { return '' }
+    $classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
+    $controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+    $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
 
-$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-$current = $focused
-$browserWindow = $null
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $current = $focused
+    $browserWindow = $null
 
-while ($current -ne $null) {
-    try {
-        $className = $current.GetCurrentPropertyValue($classProperty)
-        if ($className -match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|MozillaWindowClass|Brave') {
-            $browserWindow = $current
-            break
-        }
-        $current = $walker.GetParent($current)
-    } catch { break }
-}
-
-if (-not $browserWindow) { return '' }
-
-$conditionEdit = New-Object System.Windows.Automation.PropertyCondition($controlType, [System.Windows.Automation.ControlType]::Edit)
-$editElements = $browserWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $conditionEdit)
-
-foreach ($edit in $editElements) {
-    try {
-        $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-        if ($valPattern) {
-            $url = $valPattern.Current.Value
-            if ($url -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
-                return $url
+    while ($current -ne $null) {
+        try {
+            $className = $current.GetCurrentPropertyValue($classProperty)
+            if ($className -match 'Chrome_WidgetWin_1|MicrosoftEdge|ApplicationFrameWindow|MozillaWindowClass|Brave|Opera') {
+                $browserWindow = $current
+                break
             }
-        }
-    } catch { }
+            $current = $walker.GetParent($current)
+        } catch { break }
+    }
 
-    try {
-        $name = $edit.GetCurrentPropertyValue($nameProperty)
-        if ($name -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
-            return $name
-        }
-    } catch { }
-}
+    if (-not $browserWindow) { return }
 
-return ''
-        `;
+    $conditionEdit = New-Object System.Windows.Automation.PropertyCondition(
+        $controlType,
+        [System.Windows.Automation.ControlType]::Edit
+    )
+    $editElements = $browserWindow.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $conditionEdit
+    )
 
-        // Escape double quotes and remove newlines for PowerShell execution
-        const safeCommand = psCommand.replace(/\n/g, ' ').replace(/"/g, '\\"');
-        exec(`powershell -Command "${safeCommand}"`, { timeout: 3000 }, (error, stdout, stderr) => {
-            if (error || !stdout || stdout.trim() === '') {
-                resolve(null);
-                return;
+    foreach ($edit in $editElements) {
+        try {
+            $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            if ($valPattern) {
+                $url = $valPattern.Current.Value
+                if ($url -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
+                    Write-Output $url
+                    return
+                }
             }
-            let url = stdout.trim();
-            // Normalize URL
-            if (url && !url.startsWith('http')) {
-                url = 'https://' + url;
+        } catch { }
+
+        try {
+            $name = $edit.GetCurrentPropertyValue($nameProperty)
+            if ($name -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
+                Write-Output $name
+                return
             }
-            resolve(url);
-        });
-    });
+        } catch { }
+    }
+} catch { }
+`;
+
+    const stdout = await runPS(script, 4000);
+    if (!stdout || stdout.trim() === '') {
+        return null;
+    }
+
+    let url = stdout.trim();
+    if (url && !url.startsWith('http')) {
+        url = 'https://' + url;
+    }
+    return url;
 }
 
 /**
@@ -108,19 +137,15 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
         const SQL = await initSqlJs();
         db = new SQL.Database(fileBuffer);
 
-        // Chrome/Edge/Firefox uses different epochs
-        // Chrome/Edge: Microseconds since Jan 1, 1601 UTC
-        // Firefox: Microseconds since Jan 1, 1970 UTC (PRTime)
-
         let query = '';
-        const limit = 50;
+        const limit = 100;
 
         if (browserName === 'Firefox') {
             const cutoff = (Date.now() - (hoursBack * 3600000)) * 1000;
             query = `SELECT url, title, last_visit_date as time FROM moz_places WHERE last_visit_date > ${cutoff} ORDER BY last_visit_date DESC LIMIT ${limit}`;
         } else {
-            // Chrome/Edge
-            const epochDiff = 11644473600000; // ms between 1601 and 1970
+            // Chrome/Edge: Microseconds since Jan 1, 1601 UTC
+            const epochDiff = 11644473600000;
             const cutoff = ((Date.now() + epochDiff) - (hoursBack * 3600000)) * 1000;
             query = `SELECT url, title, last_visit_time as time FROM urls WHERE last_visit_time > ${cutoff} ORDER BY last_visit_time DESC LIMIT ${limit}`;
         }
@@ -135,7 +160,6 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
             if (browserName === 'Firefox') {
                 visitTime = new Date(row.time / 1000).toISOString();
             } else {
-                // Convert Chrome/Edge time (microseconds since 1601) to JS Date
                 const epochDiff = 11644473600000;
                 visitTime = new Date((row.time / 1000) - epochDiff).toISOString();
             }
@@ -148,7 +172,9 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
                     .replace(/ - Microsoft Edge$/i, '')
                     .replace(/ - Mozilla Firefox$/i, '')
                     .replace(/ - Brave$/i, '')
-                    .replace(/ - YouTube$/, ''); // YouTube specific suffix
+                    .replace(/ - Opera$/i, '')
+                    .replace(/ — Mozilla Firefox$/i, '')
+                    .replace(/ - YouTube$/, '');
             }
 
             results.push({
@@ -164,11 +190,10 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
         return results;
 
     } catch (e) {
-        console.error(`Error reading ${browserName} history:`, e.message);
+        console.error(`[BrowserHistory] Error reading ${browserName} history:`, e.message);
         return [];
     } finally {
         if (db) db.close();
-        // Clean up temp file
         try {
             if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         } catch (e) { }
@@ -176,37 +201,85 @@ async function readSqliteHistory(dbPath, browserName, hoursBack = 1) {
 }
 
 /**
- * Read browser history from SQLite databases (Chrome, Edge, Firefox)
+ * Read browser history from SQLite databases (Chrome, Edge, Firefox, Brave, Opera, Vivaldi)
+ * Scans all profiles, not just "Default"
  */
 async function getBrowserHistoryFromDB(hoursBack = 1) {
     const results = [];
     const localAppData = process.env.LOCALAPPDATA;
     const appData = process.env.APPDATA;
 
-    // Paths to history files
-    const historyPaths = [
-        {
-            name: 'Chrome',
-            path: path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default', 'History')
-        },
-        {
-            name: 'Edge',
-            path: path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default', 'History')
-        },
-        {
-            name: 'Brave',
-            path: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data', 'Default', 'History')
-        }
-        // Firefox profile path is variable, skipping for simplicity unless requested
+    // Base directories for each browser (may have multiple profiles)
+    const browserBases = [
+        { name: 'Chrome', base: path.join(localAppData, 'Google', 'Chrome', 'User Data') },
+        { name: 'Edge', base: path.join(localAppData, 'Microsoft', 'Edge', 'User Data') },
+        { name: 'Brave', base: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data') },
+        { name: 'Opera', base: path.join(appData, 'Opera Software', 'Opera Stable') },
+        { name: 'Vivaldi', base: path.join(localAppData, 'Vivaldi', 'User Data') },
     ];
 
-    for (const browser of historyPaths) {
-        const history = await readSqliteHistory(browser.path, browser.name, hoursBack);
-        results.push(...history);
+    for (const browser of browserBases) {
+        if (!fs.existsSync(browser.base)) continue;
+
+        if (browser.name === 'Opera') {
+            // Opera stores History directly in its base
+            const histPath = path.join(browser.base, 'History');
+            if (fs.existsSync(histPath)) {
+                const history = await readSqliteHistory(histPath, browser.name, hoursBack);
+                results.push(...history);
+            }
+        } else {
+            // Check Default and Profile N directories
+            const profiles = ['Default'];
+            try {
+                const entries = fs.readdirSync(browser.base);
+                for (const entry of entries) {
+                    if (/^Profile \d+$/i.test(entry)) {
+                        profiles.push(entry);
+                    }
+                }
+            } catch (e) { }
+
+            for (const profile of profiles) {
+                const histPath = path.join(browser.base, profile, 'History');
+                if (fs.existsSync(histPath)) {
+                    const history = await readSqliteHistory(histPath, browser.name, hoursBack);
+                    results.push(...history);
+                }
+            }
+        }
     }
 
-    // Sort by visit time descending
-    return results.sort((a, b) => new Date(b.visitTime) - new Date(a.visitTime));
+    // Firefox: find profiles dynamically
+    if (appData) {
+        const firefoxBase = path.join(appData, 'Mozilla', 'Firefox', 'Profiles');
+        if (fs.existsSync(firefoxBase)) {
+            try {
+                const profiles = fs.readdirSync(firefoxBase);
+                for (const profile of profiles) {
+                    const histPath = path.join(firefoxBase, profile, 'places.sqlite');
+                    if (fs.existsSync(histPath)) {
+                        const history = await readSqliteHistory(histPath, 'Firefox', hoursBack);
+                        results.push(...history);
+                    }
+                }
+            } catch (e) { }
+        }
+    }
+
+    // Sort by visit time descending and deduplicate by URL+time
+    const seen = new Set();
+    const deduplicated = [];
+    for (const item of results.sort((a, b) => new Date(b.visitTime) - new Date(a.visitTime))) {
+        // Deduplicate by URL + rounded time (to the second)
+        const key = `${item.url}|${item.visitTime.substring(0, 19)}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            deduplicated.push(item);
+        }
+    }
+
+    return deduplicated;
 }
 
 // Domain to category mapping
@@ -235,22 +308,13 @@ const CATEGORY_DOMAINS = {
 
 /**
  * Extract URL from browser window title
- * Many browsers include URL info in the title
  */
 function extractUrlFromTitle(title, browserName) {
     if (!title || typeof title !== 'string') return null;
 
-    // Common patterns in browser titles:
-    // "Page Title - Browser Name"
-    // "Page Title — Browser Name"  
-    // "Page Title | Website Name - Browser"
-    // "[URL] Page Title - Browser"
-
     // Look for URL patterns in the title
     const urlPatterns = [
-        // Direct URL in title
         /https?:\/\/[^\s<>"{}|\\^`\[\]]+/i,
-        // Domain pattern
         /(?:^|[\s\-–—|])([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?)/
     ];
 
@@ -258,16 +322,13 @@ function extractUrlFromTitle(title, browserName) {
         const match = title.match(pattern);
         if (match) {
             let url = match[0] || match[1];
-            // Clean up and validate
             if (url && !url.startsWith('http')) {
                 url = 'https://' + url;
             }
             try {
-                new URL(url); // Validate URL
+                new URL(url);
                 return url;
-            } catch (e) {
-                // Invalid URL, continue
-            }
+            } catch (e) { }
         }
     }
 
@@ -287,6 +348,10 @@ function extractUrlFromTitle(title, browserName) {
         'Spotify': 'https://spotify.com',
         'Reddit': 'https://reddit.com',
         'WhatsApp': 'https://web.whatsapp.com',
+        'ChatGPT': 'https://chatgpt.com',
+        'Gmail': 'https://mail.google.com',
+        'Outlook': 'https://outlook.live.com',
+        'eCitizen': 'https://ecitizen.go.ke',
     };
 
     for (const [name, url] of Object.entries(domainPatterns)) {
@@ -314,9 +379,7 @@ function categorizeUrl(url) {
                 }
             }
         }
-    } catch (e) {
-        // URL parsing failed
-    }
+    } catch (e) { }
 
     return 'other';
 }
@@ -335,9 +398,12 @@ function isValidBrowsableUrl(url, title) {
         'edge://',
         'moz-extension://',
         'file://',
+        'devtools://',
+        'chrome-search://',
         'New Tab',
         'Start Page',
-        'Speed Dial'
+        'Speed Dial',
+        'page-limit/'
     ];
 
     const checkString = (url || '') + (title || '');
@@ -346,20 +412,21 @@ function isValidBrowsableUrl(url, title) {
 
 /**
  * Live URL tracking from active window
- * Enhanced with intelligent URL extraction and categorization
+ * Enhanced with better deduplication that doesn't skip revisits
  */
 class LiveUrlTracker {
     constructor() {
         this.visitedUrls = [];
         this.urlVisitCounts = new Map();
-        this.lastProcessedKey = '';
+        this.lastUrl = '';       // Last URL for same-tab dedup (avoid repeated same-URL pings)
+        this.lastTitle = '';     // Last title for same-tab dedup
+        this.lastChangeTime = 0; // Timestamp of last URL change
     }
 
     /**
      * Process a browser window and extract/track URLs
      */
     addFromWindow(windowTitle, browserName, explicitUrl = null) {
-        // Use explicit URL if provided, otherwise try to extract from title
         let url = explicitUrl;
 
         // If no explicit URL, try to extract from title
@@ -369,36 +436,33 @@ class LiveUrlTracker {
 
         const title = windowTitle || 'Unknown Page';
 
-        // Check deduplication key using URL or Title
-        const key = url || title;
-        if (key === this.lastProcessedKey) {
-            return null; // Already processed this
-        }
-
-        // Check if we have a valid URL or at least a meaningful title to track
+        // Validate URL
         if (url) {
-            // Validate URL format roughly
-            if (url.startsWith('file://') || url === 'about:blank' || url === 'chrome://newtab/') {
+            if (url.startsWith('file://') || url === 'about:blank' || url === 'chrome://newtab/' || url.includes('page-limit/')) {
                 return null;
             }
         } else {
-            // If we STILL don't have a URL, checks if title is browsable and informative
             if (!isValidBrowsableUrl(null, title)) {
                 return null;
             }
             // Create synthetic URL for tracking purposes if title is good
-            url = `https://page-limit/${encodeURIComponent(title.substring(0, 50))}`;
+            url = `https://browsed/${encodeURIComponent(title.substring(0, 80))}`;
         }
 
-        this.lastProcessedKey = key;
+        // Dedup: skip if SAME url AND SAME title as last check (user hasn't navigated)
+        // But if URL changed OR title changed, it's a new navigation — allow it
+        if (url === this.lastUrl && title === this.lastTitle) {
+            return null; // Same page still open, no new navigation
+        }
 
-        // Get category
+        // Update tracking state
+        this.lastUrl = url;
+        this.lastTitle = title;
+        this.lastChangeTime = Date.now();
+
         const category = categorizeUrl(url);
-
-        // Track the visit internally
         this.addUrl(url, title, category, browserName);
 
-        // Return the data so it can be sent to server
         return {
             url,
             title,
@@ -411,26 +475,23 @@ class LiveUrlTracker {
     addUrl(url, title, category = null, browser = null) {
         if (!url || url.startsWith('file://') || url === '' || url === 'about:blank') return;
 
-        // Normalize URL (remove trailing slash, query params for grouping)
         const normalizedUrl = url.split('?')[0].replace(/\/$/, '');
         const finalCategory = category || categorizeUrl(url);
 
-        // Check if this exact URL was visited
-        const existing = this.visitedUrls.find(v => v.url === url);
-        if (existing) {
-            existing.lastVisit = new Date().toISOString();
-            existing.visits++;
-        } else {
-            this.visitedUrls.push({
-                url,
-                normalizedUrl,
-                title: title || '',
-                category: finalCategory,
-                browser: browser || 'unknown',
-                visits: 1,
-                firstVisit: new Date().toISOString(),
-                lastVisit: new Date().toISOString()
-            });
+        // Always add a new entry (we want the full history, not just unique URLs)
+        this.visitedUrls.push({
+            url,
+            normalizedUrl,
+            title: title || '',
+            category: finalCategory,
+            browser: browser || 'unknown',
+            visits: 1,
+            timestamp: new Date().toISOString()
+        });
+
+        // Keep array from growing unbounded
+        if (this.visitedUrls.length > 500) {
+            this.visitedUrls = this.visitedUrls.slice(-400);
         }
 
         // Track visit counts by domain
@@ -438,17 +499,16 @@ class LiveUrlTracker {
             const domain = new URL(url).hostname;
             this.urlVisitCounts.set(domain, (this.urlVisitCounts.get(domain) || 0) + 1);
         } catch (e) {
-            // Invalid URL - track with synthetic domain
             this.urlVisitCounts.set('unknown', (this.urlVisitCounts.get('unknown') || 0) + 1);
         }
     }
 
     getHistory() {
-        return this.visitedUrls.slice(-100); // Last 100 entries
+        return this.visitedUrls.slice(-100);
     }
 
     getRecentHistory(limit = 20) {
-        return this.visitedUrls.slice(-limit).reverse(); // Most recent first
+        return this.visitedUrls.slice(-limit).reverse();
     }
 
     getTopDomains(limit = 10) {
@@ -474,7 +534,9 @@ class LiveUrlTracker {
     reset() {
         this.visitedUrls = [];
         this.urlVisitCounts.clear();
-        this.lastProcessedKey = '';
+        this.lastUrl = '';
+        this.lastTitle = '';
+        this.lastChangeTime = 0;
     }
 
     getStats() {
@@ -495,5 +557,3 @@ module.exports = {
     getActiveTabUrl,
     getBrowserHistoryFromDB
 };
-
-

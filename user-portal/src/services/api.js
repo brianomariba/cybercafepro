@@ -31,6 +31,20 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+// Handle 403 (account disabled) responses - force logout
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 403 && error.response?.data?.error?.includes('disabled')) {
+            // Account has been disabled by admin — force logout
+            localStorage.removeItem('hawknine_user');
+            localStorage.removeItem('hawknine_user_token');
+            window.location.reload(); // Forces back to login screen
+        }
+        return Promise.reject(error);
+    }
+);
+
 export const setUserToken = (token) => {
     localStorage.setItem('hawknine_user_token', token);
 };

@@ -483,8 +483,27 @@
         .qty-value {
             font-size: 20px;
             font-weight: 700;
-            min-width: 50px;
+            min-width: 60px;
+            width: 80px;
             text-align: center;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 6px 4px;
+            -moz-appearance: textfield;
+        }
+
+        .qty-value::-webkit-outer-spin-button,
+        .qty-value::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .qty-value:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
         }
 
         /* Service/Template Cards */
@@ -887,7 +906,8 @@
                     <label class="form-label">Quantity</label>
                     <div class="quantity-selector">
                         <button class="qty-btn" onclick="adjustQuantity(-1)">−</button>
-                        <span class="qty-value" id="saleQuantity">1</span>
+                        <input type="number" class="qty-value" id="saleQuantity" value="1" min="1" max="999"
+                            oninput="onQuantityInput(this)">
                         <button class="qty-btn" onclick="adjustQuantity(1)">+</button>
                     </div>
                 </div>
@@ -1100,6 +1120,10 @@
             } else {
                 alert('❌ Sync failed: ' + result.message);
             }
+        });
+
+        ipcRenderer.on('account-disabled', (event, data) => {
+            alert('🚫 ' + (data.message || 'Your account has been disabled by the administrator. You will be logged out.'));
         });
 
         ipcRenderer.on('submission-result', (event, result) => {
@@ -1406,10 +1430,14 @@
             saleQuantity = 1;
             document.getElementById('saleItemName').textContent = name;
             document.getElementById('saleItemPrice').textContent = `KSH ${price.toLocaleString()} / unit`;
-            document.getElementById('saleQuantity').textContent = '1';
+            const qtyInput = document.getElementById('saleQuantity');
+            qtyInput.value = 1;
+            qtyInput.max = stock;
             document.getElementById('saleTotal').textContent = `KSH ${price.toLocaleString()}`;
             document.getElementById('saleNote').value = '';
             document.getElementById('saleModal').classList.add('active');
+            // Focus the quantity input so user can type immediately
+            setTimeout(() => qtyInput.select(), 100);
         }
 
         function closeSaleModal() {
@@ -1418,17 +1446,45 @@
             saleQuantity = 1;
         }
 
+        function updateSaleTotal() {
+            if (!selectedItem) return;
+            document.getElementById('saleQuantity').value = saleQuantity;
+            document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
+        }
+
         function adjustQuantity(delta) {
             if (!selectedItem) return;
             const newQty = saleQuantity + delta;
             if (newQty < 1 || newQty > selectedItem.stock) return;
             saleQuantity = newQty;
-            document.getElementById('saleQuantity').textContent = saleQuantity;
+            updateSaleTotal();
+        }
+
+        function onQuantityInput(input) {
+            if (!selectedItem) return;
+            let val = parseInt(input.value, 10);
+            if (isNaN(val) || val < 1) val = 1;
+            if (val > selectedItem.stock) val = selectedItem.stock;
+            saleQuantity = val;
+            // Don't overwrite while user is typing, just update total
             document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
         }
 
         function confirmSale() {
             if (!selectedItem) return;
+            // Read final value from input in case user typed directly
+            const qtyInput = document.getElementById('saleQuantity');
+            let qty = parseInt(qtyInput.value, 10);
+            if (isNaN(qty) || qty < 1) qty = 1;
+            if (qty > selectedItem.stock) qty = selectedItem.stock;
+            saleQuantity = qty;
+            qtyInput.value = qty;
+
+            if (saleQuantity < 1) {
+                alert('Please enter a valid quantity');
+                return;
+            }
+
             const note = document.getElementById('saleNote').value;
             ipcRenderer.send('record-sale', {
                 itemId: selectedItem.id,

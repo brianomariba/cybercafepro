@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Typography, Space, Button, Tag, Divider, Statistic, Row, Col, Tooltip, Empty, Spin } from 'antd';
+import { Card, Typography, Space, Button, Tag, Divider, Statistic, Row, Col, Tooltip, Empty, Spin, message } from 'antd';
 import {
     FilePdfOutlined, FileWordOutlined, FileExcelOutlined, FileOutlined,
-    DownloadOutlined, ClockCircleOutlined, UserOutlined, InboxOutlined
+    DownloadOutlined, ClockCircleOutlined, UserOutlined, InboxOutlined, PhoneOutlined
 } from '@ant-design/icons';
 import { getPublicDocumentRequests, connectSocket } from '../services/api';
 
@@ -11,6 +11,7 @@ const { Title, Text } = Typography;
 const ClientDocuments = ({ isDarkMode }) => {
     const [requests, setRequests] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [downloading, setDownloading] = useState({});
 
     const loadData = async () => {
         try {
@@ -72,6 +73,43 @@ const ClientDocuments = ({ isDarkMode }) => {
         }
     };
 
+    const handleDownload = async (file, reqOrderId, fileIdx) => {
+        const fileName = file.originalName || file.filename || 'download';
+        const downloadKey = `${reqOrderId}-${fileIdx}`;
+
+        if (!file.downloadUrl) {
+            message.error('Download URL not available for this file');
+            return;
+        }
+
+        setDownloading(prev => ({ ...prev, [downloadKey]: true }));
+
+        try {
+            // Fetch file as blob for reliable cross-origin download
+            const response = await fetch(file.downloadUrl);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const blob = await response.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(blobUrl);
+
+            message.success(`Downloaded: ${fileName}`);
+        } catch (err) {
+            console.error('Download failed, falling back to window.open:', err);
+            // Fallback: open in new tab (browser will handle download/display)
+            window.open(file.downloadUrl, '_blank');
+            message.info(`Opening ${fileName} in new tab...`);
+        } finally {
+            setDownloading(prev => ({ ...prev, [downloadKey]: false }));
+        }
+    };
+
     return (
         <div style={{ padding: '24px', maxWidth: 1200, margin: '0 auto' }}>
             <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -130,6 +168,15 @@ const ClientDocuments = ({ isDarkMode }) => {
                                         <Tag color="blue">{req.serviceType}</Tag>
                                     </div>
 
+                                    {req.customerPhone && (
+                                        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <PhoneOutlined style={{ color: '#00B4D8', fontSize: 13 }} />
+                                            <Text style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
+                                                {req.customerPhone}
+                                            </Text>
+                                        </div>
+                                    )}
+
                                     <div style={{ marginBottom: 16 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <Text type="secondary" style={{ fontSize: 12 }}>ID: {req.orderId}</Text>
@@ -173,19 +220,8 @@ const ClientDocuments = ({ isDarkMode }) => {
                                                             type="text"
                                                             icon={<DownloadOutlined />}
                                                             size="small"
-                                                            onClick={() => {
-                                                                if (file.downloadUrl) {
-                                                                    const link = document.createElement('a');
-                                                                    link.href = file.downloadUrl;
-                                                                    link.download = file.originalName || file.filename || 'download';
-                                                                    link.target = '_blank';
-                                                                    document.body.appendChild(link);
-                                                                    link.click();
-                                                                    document.body.removeChild(link);
-                                                                } else {
-                                                                    console.error('No download URL for file:', file);
-                                                                }
-                                                            }}
+                                                            loading={downloading[`${req.orderId}-${idx}`]}
+                                                            onClick={() => handleDownload(file, req.orderId, idx)}
                                                             style={{ color: '#00B4D8' }}
                                                         />
                                                     </Tooltip>

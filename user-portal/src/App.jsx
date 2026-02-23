@@ -256,10 +256,21 @@ function App() {
       onNewDocumentRequest: handleNewDocument,
     });
 
+    // Listen for user status changes (admin disable/enable)
+    const handleStatusChange = (data) => {
+      if (data.userType === 'portal' && data.username === user?.username && !data.active) {
+        message.error('Your account has been disabled by the administrator. You will be logged out.');
+        setTimeout(() => {
+          handleLogout();
+        }, 2000);
+      }
+    };
+    socket.on('user-status-changed', handleStatusChange);
+
     return () => {
       if (socket) {
         socket.off('new-document-for-users', handleNewDocument);
-        // We generally keep the socket connection open as it's a singleton
+        socket.off('user-status-changed', handleStatusChange);
       }
     };
   }, [isAuthenticated]);

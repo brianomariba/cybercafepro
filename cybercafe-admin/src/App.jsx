@@ -56,7 +56,7 @@ import Learning from './pages/Learning';
 import Guidance from './pages/Guidance';
 import Inventory from './pages/Inventory';
 import Submissions from './pages/Submissions';
-import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats } from './services/api';
+import { verifyAdminToken, adminLogout, isAuthenticated as checkAuth, getStoredToken, getStats, connectSocket } from './services/api';
 
 import './App.css';
 
@@ -345,7 +345,85 @@ function App() {
   };
 
   const [systemStats, setSystemStats] = useState({ online: 0, active: 0 });
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, setNotifications] = useState(() => {
+    try {
+      const saved = localStorage.getItem('hawknine_notifications');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  // Persist notifications to localStorage
+  useEffect(() => {
+    localStorage.setItem('hawknine_notifications', JSON.stringify(notifications.slice(0, 50)));
+  }, [notifications]);
+
+  // Add notification helper
+  const addNotification = (title, msg, type = 'info', page = null) => {
+    const notif = { id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, title, message: msg, type, timestamp: new Date().toISOString(), read: false, page };
+    setNotifications(prev => [notif, ...prev].slice(0, 50));
+  };
+
+  const clearNotification = (id) => setNotifications(prev => prev.filter(n => n.id !== id));
+  const clearAllNotifications = () => setNotifications([]);
+  const markAllRead = () => setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  // Socket connection for real-time admin notifications
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const socket = connectSocket({ onConnect: () => console.log('[Notifications] Socket connected') });
+
+    // Inventory sale
+    socket.on('transaction-created', (txn) => {
+      if (txn?.type === 'inventory-sale') {
+        addNotification('💰 Inventory Sale', `${txn.quantity || 1}x ${txn.itemName || 'Item'} sold by ${txn.seller || 'unknown'} — KSH ${(txn.amount || 0).toLocaleString()}`, 'sale', 'inventory');
+      }
+    });
+
+    // Low stock alert
+    socket.on('low-stock-alert', (data) => {
+      addNotification('⚠️ Low Stock Alert', `${data.itemName || 'Item'} is running low (${data.currentStock} remaining)`, 'warning', 'inventory');
+    });
+
+    // User submission (document for review)
+    socket.on('new-user-submission', (data) => {
+      addNotification('📤 New Submission', `${data.userName || 'A user'} submitted "${data.title || 'a document'}" for review`, 'submission', 'submissions');
+    });
+
+    // Document upload request from landing page
+    socket.on('new-document-request', (data) => {
+      addNotification('📄 Document Upload', `${data.customerName || 'Customer'} uploaded ${data.filesCount || 1} file(s)`, 'document', 'documents');
+    });
+
+    // Document received
+    socket.on('document-received', (data) => {
+      addNotification('📂 Document Received', `New document from ${data.customerName || 'a customer'}: ${data.fileName || 'file'}`, 'document', 'documents');
+    });
+
+    // Agent connected
+    socket.on('agent-connected', (data) => {
+      addNotification('🖥️ Computer Online', `${data.hostname || data.clientId || 'A computer'} came online`, 'info', 'computers');
+    });
+
+    // Session events
+    socket.on('session-event', (session) => {
+      if (session?.type === 'start' || session?.status === 'active') {
+        addNotification('🟢 Session Started', `New session on ${session.computerName || session.clientId || 'a computer'}`, 'info', 'sessions');
+      }
+    });
+
+    return () => {
+      socket.off('transaction-created');
+      socket.off('low-stock-alert');
+      socket.off('new-user-submission');
+      socket.off('new-document-request');
+      socket.off('document-received');
+      socket.off('agent-connected');
+      socket.off('session-event');
+      socket.disconnect();
+    };
+  }, [isAuthenticated]);
 
   // Fetch system stats for sidebar
   const updateSystemStatus = async () => {
@@ -375,23 +453,32 @@ function App() {
     message.success(`Switched to ${!isDarkMode ? 'dark' : 'light'} mode`);
   };
 
-  // Notification dropdown items
-  const notificationItems = notifications.length > 0 ? notifications.map(n => ({
-    key: n.id,
-    label: (
-      <div style={{ maxWidth: 280 }}>
-        <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b' }}>{n.title}</Text>
-        <br />
-        <Text type="secondary" style={{ fontSize: 12 }}>{n.message}</Text>
-        <br />
-        <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(n.timestamp).fromNow()}</Text>
-      </div>
-    ),
-  })).concat([
+  const typeIcon = { sale: '💰', warning: '⚠️', submission: '📤', document: '📄', info: 'ℹ️' };
+
+  const notificationItems = notifications.length > 0 ? [
+    ...notifications.slice(0, 10).map(n => ({
+      key: n.id,
+      label: (
+        <div style={{ maxWidth: 300, display: 'flex', gap: 8, alignItems: 'flex-start' }} onClick={() => {
+          if (n.page) navigate(n.page === 'dashboard' ? '/' : `/${n.page}`);
+          markAllRead();
+        }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>{typeIcon[n.type] || 'ℹ️'}</span>
+          <div style={{ flex: 1 }}>
+            <Text strong style={{ color: isDarkMode ? '#fff' : '#1e293b', fontSize: 13 }}>{n.title}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>{n.message}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(n.timestamp).fromNow()}</Text>
+          </div>
+          {!n.read && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#00B4D8', flexShrink: 0, marginTop: 6 }} />}
+        </div>
+      ),
+    })),
     { type: 'divider' },
-    { key: 'view-all', label: <Text style={{ color: '#00B4D8' }}>View all notifications</Text> }
-  ]) : [
-    { key: 'none', label: <Text type="secondary">No new notifications</Text> }
+    { key: 'clear-all', label: <Text type="danger" style={{ fontSize: 12 }} onClick={clearAllNotifications}>Clear all notifications</Text> }
+  ] : [
+    { key: 'none', label: <Text type="secondary">No notifications yet</Text> }
   ];
 
   // User dropdown items
@@ -650,7 +737,7 @@ function App() {
                 placement="bottomRight"
                 trigger={['click']}
               >
-                <Badge count={4} size="small" offset={[-3, 3]}>
+                <Badge count={unreadCount} size="small" offset={[-3, 3]}>
                   <Button
                     type="text"
                     icon={<BellOutlined />}

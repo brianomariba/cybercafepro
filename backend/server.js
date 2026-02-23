@@ -959,6 +959,14 @@ const requireUserAuth = async (req, res, next) => {
             if (session) await AuthSession.deleteOne({ token });
             return res.status(401).json({ error: 'Invalid or expired token' });
         }
+
+        // Re-check if user is still active (in case admin disabled them)
+        const user = await User.findOne({ username: session.username, type: 'portal' });
+        if (!user || !user.active) {
+            await AuthSession.deleteOne({ token });
+            return res.status(403).json({ error: 'Account has been disabled' });
+        }
+
         req.user = session;
         next();
     } catch (error) {
@@ -1137,6 +1145,22 @@ app.put('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res)
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Emit real-time event when user status changes
+        if (active !== undefined) {
+            io.emit('user-status-changed', {
+                username: user.username,
+                userType: 'agent',
+                active: user.active,
+                changedBy: 'admin'
+            });
+            console.log(`[USER STATUS] Agent user ${username} ${user.active ? 'enabled' : 'disabled'} by admin`);
+
+            // If disabled, invalidate any existing sessions
+            if (!user.active) {
+                await AuthSession.deleteMany({ username, type: 'agent' });
+            }
         }
 
         res.json({
@@ -1354,6 +1378,22 @@ app.put('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, res
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Emit real-time event when user status changes
+        if (active !== undefined) {
+            io.emit('user-status-changed', {
+                username: user.username,
+                userType: 'portal',
+                active: user.active,
+                changedBy: 'admin'
+            });
+            console.log(`[USER STATUS] Portal user ${username} ${user.active ? 'enabled' : 'disabled'} by admin`);
+
+            // If disabled, invalidate all their sessions immediately
+            if (!user.active) {
+                await AuthSession.deleteMany({ username, type: 'portal' });
+            }
         }
 
         res.json({
@@ -2204,14 +2244,14 @@ app.post('/api/v1/agent/log', async (req, res) => {
             };
         }
 
-        // Deduplicate browser logs: skip if same clientId+url was logged within the last 2 minutes
+        // Deduplicate browser logs: skip if same clientId+url was logged within the last 30 seconds
         if (type === 'browser' && enhancedData?.url) {
-            const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+            const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
             const duplicate = await Log.findOne({
                 type: 'browser',
                 clientId,
                 'data.url': enhancedData.url,
-                receivedAt: { $gte: twoMinutesAgo }
+                receivedAt: { $gte: thirtySecondsAgo }
             });
             if (duplicate) {
                 return res.json({ success: true, deduplicated: true });
@@ -5447,6 +5487,7 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
         io.emit('new-document-for-users', {
             orderId: newRequest.orderId,
             customerName: newRequest.customerName,
+            customerPhone: newRequest.customerPhone,
             serviceType: newRequest.serviceType,
             fileCount: files.length,
             typeSummary,
@@ -5526,6 +5567,7 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
             return {
                 orderId: doc.orderId,
                 customerName: doc.customerName,
+                customerPhone: doc.customerPhone,
                 serviceType: doc.serviceType || 'General',
                 fileCount: files.length,
                 typeSummary,

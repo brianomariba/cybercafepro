@@ -152,7 +152,7 @@ let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
-const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
+const BROWSER_DEDUP_WINDOW_MS = 30000; // 30 seconds: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
 let isOnline = true; // Track online status
 
@@ -1361,7 +1361,7 @@ async function startDataCollection() {
         } catch (e) {
             console.error('[HISTORY] Sync failed:', e.message);
         }
-    }, 60000);
+    }, 30000);
 
     // Periodic Print History Sync (every 60 seconds)
     // Captures completed jobs missed by real-time polling
@@ -1445,6 +1445,39 @@ function setupSocket() {
     socket.on('agent-public-document-notification', (data) => {
         console.log(`Received Public Document Upload: ${data.orderId}`);
         handlePublicDocument(data);
+    });
+
+    // Listen for user status changes (admin disable/enable)
+    socket.on('user-status-changed', async (data) => {
+        if (data.userType === 'agent' && !data.active) {
+            // Check if this disabled user is currently logged into this station
+            if (currentSession && currentSession.user === data.username) {
+                console.log(`[USER STATUS] User ${data.username} disabled by admin — forcing logout`);
+
+                // Show notification
+                const { Notification } = require('electron');
+                if (Notification.isSupported()) {
+                    const notif = new Notification({
+                        title: 'Account Disabled',
+                        body: `User "${data.username}" has been disabled by the administrator. Session ended.`,
+                        icon: path.join(__dirname, 'src', 'logo.jpg')
+                    });
+                    notif.show();
+                }
+
+                // Notify the portal window before locking
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('account-disabled', {
+                        username: data.username,
+                        message: 'Your account has been disabled by the administrator.'
+                    });
+                }
+
+                // End session and lock
+                await endSession();
+                lockSession();
+            }
+        }
     });
 }
 
@@ -1735,7 +1768,7 @@ async function handlePublicDocument(data) {
     if (Notification.isSupported()) {
         const notification = new Notification({
             title: '📄 New Document from Client',
-            body: `${data.customerName} uploaded ${data.files.length} file(s) for ${serviceLabel}.\nOrder: ${data.orderId || 'N/A'}`,
+            body: `${data.customerName} (${data.customerPhone || 'No phone'}) uploaded ${data.files.length} file(s) for ${serviceLabel}.\nOrder: ${data.orderId || 'N/A'}`,
             urgency: 'critical'
         });
 
