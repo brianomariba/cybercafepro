@@ -189,10 +189,20 @@ export const getPrinters = async (params = {}) => {
     return response.data;
 };
 
+export const deleteAllPrinterData = async () => {
+    const response = await api.delete('/admin/printer-data');
+    return response.data;
+};
+
 // ==================== BROWSER HISTORY ====================
 
 export const getBrowserHistory = async (params = {}) => {
     const response = await api.get('/admin/browser-history', { params });
+    return response.data;
+};
+
+export const deleteAllBrowserData = async () => {
+    const response = await api.delete('/admin/browser-data');
     return response.data;
 };
 
@@ -618,6 +628,9 @@ export default {
     getComputer,
     getSessions,
     getPrintJobs,
+    getPrinters,
+    deleteAllPrinterData,
+    deleteAllBrowserData,
     getBrowserHistory,
     getFileActivity,
     getUsbEvents,

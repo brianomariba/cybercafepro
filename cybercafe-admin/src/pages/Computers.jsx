@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload, Image, Spin } from 'antd';
+import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Tooltip, Badge, Progress, message, Popconfirm, Avatar, Row, Col, Collapse, List, Empty, Tabs, Drawer, Upload, Image, Spin, Segmented } from 'antd';
 import {
     DesktopOutlined,
     UserOutlined,
@@ -26,6 +26,8 @@ import {
     InboxOutlined,
     CameraOutlined,
     DisconnectOutlined,
+    SortAscendingOutlined,
+    FieldTimeOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, requestScreenshot, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
@@ -55,6 +57,7 @@ function Computers() {
     const [printJobs, setPrintJobs] = useState([]);
     const [installedPrinters, setInstalledPrinters] = useState([]);
     const [activityLoading, setActivityLoading] = useState(false);
+    const [browserHistorySort, setBrowserHistorySort] = useState('recent');
 
     // Fetch computers
     const fetchComputers = async () => {
@@ -150,6 +153,7 @@ function Computers() {
         setBrowserHistory([]);
         setFileActivity([]);
         setPrintJobs([]);
+        setBrowserHistorySort('recent');
         setInstalledPrinters([]);
 
         try {
@@ -632,10 +636,69 @@ function Computers() {
                                 }
                                 key="browser"
                             >
+                                {/* Browsing Time Summary + Sort Controls */}
+                                {(() => {
+                                    const totalTime = browserHistory.reduce((sum, item) => sum + (item.timeSpentSeconds || 0), 0);
+                                    const formatTimeSpent = (seconds) => {
+                                        if (!seconds || seconds <= 0) return null;
+                                        if (seconds < 60) return `${seconds}s`;
+                                        if (seconds < 3600) {
+                                            const mins = Math.floor(seconds / 60);
+                                            const secs = seconds % 60;
+                                            return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+                                        }
+                                        const hours = Math.floor(seconds / 3600);
+                                        const mins = Math.floor((seconds % 3600) / 60);
+                                        return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+                                    };
+
+                                    return (
+                                        <div style={{ marginBottom: 12 }}>
+                                            {totalTime > 0 && (
+                                                <div style={{
+                                                    display: 'flex', gap: 12, marginBottom: 10, padding: '8px 12px',
+                                                    background: 'rgba(123, 44, 191, 0.08)', borderRadius: 8, alignItems: 'center'
+                                                }}>
+                                                    <Text type="secondary" style={{ fontSize: 12 }}>Total Browsing:</Text>
+                                                    <Tag color="purple" style={{ fontSize: 13, fontWeight: 600 }}>
+                                                        ⏱ {formatTimeSpent(totalTime)}
+                                                    </Tag>
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>
+                                                        across {browserHistory.filter(i => i.timeSpentSeconds > 0).length} tracked pages
+                                                    </Text>
+                                                </div>
+                                            )}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <SortAscendingOutlined style={{ color: '#7b2cbf', fontSize: 13 }} />
+                                                <Text type="secondary" style={{ fontSize: 12 }}>Sort:</Text>
+                                                <Segmented
+                                                    size="small"
+                                                    value={browserHistorySort}
+                                                    onChange={setBrowserHistorySort}
+                                                    options={[
+                                                        { label: '🕐 Recent', value: 'recent' },
+                                                        { label: '⏱ Most Time', value: 'timeSpent' },
+                                                        { label: '📂 Category', value: 'category' },
+                                                    ]}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
                                 <List
                                     size="small"
                                     loading={activityLoading}
-                                    dataSource={browserHistory.slice(0, 20)}
+                                    dataSource={(() => {
+                                        const data = [...browserHistory];
+                                        if (browserHistorySort === 'timeSpent') {
+                                            data.sort((a, b) => (b.timeSpentSeconds || 0) - (a.timeSpentSeconds || 0));
+                                        } else if (browserHistorySort === 'category') {
+                                            data.sort((a, b) => (a.category || 'zzz').localeCompare(b.category || 'zzz'));
+                                        }
+                                        // 'recent' keeps original order (newest first from API)
+                                        return data.slice(0, 30);
+                                    })()}
                                     locale={{ emptyText: 'No browser history' }}
                                     renderItem={item => {
                                         const getCategoryColor = (category) => {
@@ -653,6 +716,21 @@ function Computers() {
                                             return colors[category] || 'default';
                                         };
 
+                                        const formatTimeSpent = (seconds) => {
+                                            if (!seconds || seconds <= 0) return null;
+                                            if (seconds < 60) return `${seconds}s`;
+                                            if (seconds < 3600) {
+                                                const mins = Math.floor(seconds / 60);
+                                                const secs = seconds % 60;
+                                                return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+                                            }
+                                            const hours = Math.floor(seconds / 3600);
+                                            const mins = Math.floor((seconds % 3600) / 60);
+                                            return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+                                        };
+
+                                        const timeStr = formatTimeSpent(item.timeSpentSeconds);
+
                                         return (
                                             <List.Item>
                                                 <List.Item.Meta
@@ -663,7 +741,7 @@ function Computers() {
                                                     }
                                                     title={
                                                         <Space size="small">
-                                                            <Text ellipsis style={{ maxWidth: 350 }}>
+                                                            <Text ellipsis style={{ maxWidth: 300 }}>
                                                                 {item.title || item.url || 'Unknown Page'}
                                                             </Text>
                                                         </Space>
@@ -678,12 +756,12 @@ function Computers() {
                                                                 )}
                                                                 {item.browser && (
                                                                     <Text type="secondary" style={{ fontSize: 10 }}>
-                                                                        {item.browser.split('.')[0]}
+                                                                        {(item.browser || '').split('.')[0].replace(/msedge/i, 'Edge').replace(/chrome/i, 'Chrome')}
                                                                     </Text>
                                                                 )}
-                                                                {item.timestamp && (
+                                                                {(item.timestamp || item.visitTime || item.receivedAt) && (
                                                                     <Text type="secondary" style={{ fontSize: 10 }}>
-                                                                        {dayjs(item.timestamp).format('HH:mm')}
+                                                                        {dayjs(item.visitTime || item.timestamp || item.receivedAt).format('HH:mm')}
                                                                     </Text>
                                                                 )}
                                                             </Space>
@@ -693,13 +771,33 @@ function Computers() {
                                                                 rel="noopener noreferrer"
                                                                 style={{ fontSize: 11, color: '#00b4d8' }}
                                                             >
-                                                                <Text type="secondary" ellipsis style={{ maxWidth: 400, fontSize: 11 }}>
+                                                                <Text type="secondary" ellipsis style={{ maxWidth: 350, fontSize: 11 }}>
                                                                     {item.url}
                                                                 </Text>
                                                             </a>
                                                         </div>
                                                     }
                                                 />
+                                                {/* Time Spent Badge */}
+                                                {timeStr ? (
+                                                    <Tag
+                                                        style={{
+                                                            background: item.timeSpentSeconds > 300 ? '#7b2cbf' :
+                                                                item.timeSpentSeconds > 60 ? '#00b4d8' : '#6b6b80',
+                                                            border: 'none',
+                                                            color: 'white',
+                                                            fontWeight: 600,
+                                                            fontSize: 12,
+                                                            padding: '2px 8px',
+                                                            minWidth: 50,
+                                                            textAlign: 'center'
+                                                        }}
+                                                    >
+                                                        ⏱ {timeStr}
+                                                    </Tag>
+                                                ) : (
+                                                    <Text type="secondary" style={{ fontSize: 10, minWidth: 50, textAlign: 'center' }}>—</Text>
+                                                )}
                                             </List.Item>
                                         );
                                     }}

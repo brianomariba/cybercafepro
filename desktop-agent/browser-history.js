@@ -44,6 +44,7 @@ function runPS(script, timeoutMs = 5000) {
 /**
  * Get the actual URL from Chrome/Edge address bar using UI Automation
  * Written to a temp .ps1 file for reliable execution on any Windows machine.
+ * Optimized for speed — only targets the foreground browser window.
  */
 async function getActiveTabUrl() {
     const script = `
@@ -108,7 +109,7 @@ try {
 } catch { }
 `;
 
-    const stdout = await runPS(script, 4000);
+    const stdout = await runPS(script, 3000);
     if (!stdout || stdout.trim() === '') {
         return null;
     }
@@ -118,6 +119,145 @@ try {
         url = 'https://' + url;
     }
     return url;
+}
+
+/**
+ * Get URLs from ALL open browser windows (not just the active one).
+ * This captures URLs from background browsers too — critical for accurate tracking.
+ * Returns array of { url, title, browser } objects.
+ */
+async function getAllBrowserUrls() {
+    const script = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+$results = @()
+
+try {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $classProperty = [System.Windows.Automation.AutomationElement]::ClassNameProperty
+    $controlType = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+    $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
+
+    # Find all top-level browser windows
+    $windowCondition = New-Object System.Windows.Automation.PropertyCondition(
+        $controlType,
+        [System.Windows.Automation.ControlType]::Window
+    )
+    $allWindows = $root.FindAll(
+        [System.Windows.Automation.TreeScope]::Children,
+        $windowCondition
+    )
+
+    $editCondition = New-Object System.Windows.Automation.PropertyCondition(
+        $controlType,
+        [System.Windows.Automation.ControlType]::Edit
+    )
+
+    foreach ($win in $allWindows) {
+        try {
+            $className = $win.GetCurrentPropertyValue($classProperty)
+            if ($className -notmatch 'Chrome_WidgetWin_1|MozillaWindowClass') { continue }
+
+            $winName = $win.GetCurrentPropertyValue($nameProperty)
+            if (-not $winName -or $winName -eq '') { continue }
+
+            # Determine browser from window title
+            $browser = 'Unknown'
+            if ($winName -match 'Edge$') { $browser = 'Edge' }
+            elseif ($winName -match 'Chrome$') { $browser = 'Chrome' }
+            elseif ($winName -match 'Brave$') { $browser = 'Brave' }
+            elseif ($winName -match 'Opera$') { $browser = 'Opera' }
+            elseif ($winName -match 'Firefox$') { $browser = 'Firefox' }
+            elseif ($winName -match 'Vivaldi$') { $browser = 'Vivaldi' }
+            elseif ($className -eq 'MozillaWindowClass') { $browser = 'Firefox' }
+            elseif ($className -eq 'Chrome_WidgetWin_1') {
+                # Could be Chrome, Edge, Brave, Opera, Vivaldi — check process
+                try {
+                    $nativeHandle = $win.Current.NativeWindowHandle
+                    if ($nativeHandle) {
+                        $proc = Get-Process | Where-Object { $_.MainWindowHandle -eq $nativeHandle } | Select-Object -First 1
+                        if ($proc) {
+                            $pn = $proc.ProcessName.ToLower()
+                            if ($pn -match 'msedge') { $browser = 'Edge' }
+                            elseif ($pn -match 'chrome') { $browser = 'Chrome' }
+                            elseif ($pn -match 'brave') { $browser = 'Brave' }
+                            elseif ($pn -match 'opera') { $browser = 'Opera' }
+                            elseif ($pn -match 'vivaldi') { $browser = 'Vivaldi' }
+                        }
+                    }
+                } catch {}
+            }
+
+            # Find the address bar (Edit control) in each browser window
+            $editElements = $win.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                $editCondition
+            )
+
+            foreach ($edit in $editElements) {
+                try {
+                    $valPattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                    if ($valPattern) {
+                        $url = $valPattern.Current.Value
+                        if ($url -match '^https?://|^www\\.|^[a-zA-Z0-9-]+\\.[a-zA-Z]{2,}') {
+                            $results += [PSCustomObject]@{
+                                url = $url
+                                title = $winName
+                                browser = $browser
+                            }
+                            break  # Only need the first edit (address bar) per window
+                        }
+                    }
+                } catch {}
+            }
+        } catch { continue }
+    }
+} catch {}
+
+if ($results.Count -eq 0) {
+    "[]"
+} else {
+    $results | ConvertTo-Json -Depth 2
+}
+`;
+
+    const stdout = await runPS(script, 6000);
+    if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(stdout);
+        const items = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+
+        return items.filter(item => item && item.url).map(item => {
+            let url = item.url.trim();
+            if (url && !url.startsWith('http')) {
+                url = 'https://' + url;
+            }
+
+            // Clean browser suffix from title
+            let title = (item.title || '').trim();
+            title = title
+                .replace(/ - Google Chrome$/i, '')
+                .replace(/ - Microsoft\u200B? Edge$/i, '')
+                .replace(/ - Mozilla Firefox$/i, '')
+                .replace(/ - Brave$/i, '')
+                .replace(/ - Opera$/i, '')
+                .replace(/ - Vivaldi$/i, '')
+                .replace(/ — Mozilla Firefox$/i, '');
+
+            return {
+                url,
+                title: title || 'Unknown Page',
+                browser: item.browser || 'Unknown'
+            };
+        });
+    } catch (e) {
+        console.error('[BrowserHistory] getAllBrowserUrls parse error:', e.message);
+        return [];
+    }
 }
 
 /**
@@ -291,7 +431,7 @@ const CATEGORY_DOMAINS = {
     // Video Platforms
     video: ['youtube.com', 'vimeo.com', 'netflix.com', 'twitch.tv', 'dailymotion.com', 'hulu.com', 'disneyplus.com', 'primevideo.com'],
     // Education
-    education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com'],
+    education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com', 'netacad.com', 'skillsforall.com', 'cisco.com'],
     // Development
     development: ['github.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com', 'pypi.org', 'developer.mozilla.org', 'codepen.io', 'jsfiddle.net', 'replit.com', 'vercel.com', 'netlify.com', 'heroku.com'],
     // Productivity
@@ -412,19 +552,33 @@ function isValidBrowsableUrl(url, title) {
 
 /**
  * Live URL tracking from active window
- * Enhanced with better deduplication that doesn't skip revisits
+ * Enhanced with time-spent tracking per URL
+ * Tracks when a URL becomes active and calculates duration when user navigates away
  */
 class LiveUrlTracker {
     constructor() {
         this.visitedUrls = [];
         this.urlVisitCounts = new Map();
-        this.lastUrl = '';       // Last URL for same-tab dedup (avoid repeated same-URL pings)
-        this.lastTitle = '';     // Last title for same-tab dedup
-        this.lastChangeTime = 0; // Timestamp of last URL change
+        this.urlTimeSpent = new Map();  // url -> total seconds spent (accumulated across revisits)
+
+        // Current active URL state
+        this.activeUrl = null;          // URL currently being viewed
+        this.activeTitle = '';          // Title of current page
+        this.activeBrowser = '';        // Browser viewing the page
+        this.activeCategory = '';       // Category of current URL
+        this.activeStartTime = 0;       // When user started viewing this URL (epoch ms)
+
+        // Dedup state  
+        this.lastUrl = '';              // Last URL for same-tab dedup
+        this.lastTitle = '';            // Last title for same-tab dedup
+        this.lastChangeTime = 0;        // Timestamp of last URL change
     }
 
     /**
-     * Process a browser window and extract/track URLs
+     * Process a browser window and extract/track URLs.
+     * Returns: { current, completed } where:
+     *   - current: the new URL to log (only on navigation)
+     *   - completed: the previous URL with timeSpentSeconds (only on navigation change)
      */
     addFromWindow(windowTitle, browserName, explicitUrl = null) {
         let url = explicitUrl;
@@ -450,25 +604,105 @@ class LiveUrlTracker {
         }
 
         // Dedup: skip if SAME url AND SAME title as last check (user hasn't navigated)
-        // But if URL changed OR title changed, it's a new navigation — allow it
         if (url === this.lastUrl && title === this.lastTitle) {
             return null; // Same page still open, no new navigation
         }
 
-        // Update tracking state
+        // ---- URL Changed: close previous, start new ----
+
+        // Complete the previous URL (calculate time spent)
+        let completed = null;
+        if (this.activeUrl && this.activeStartTime > 0) {
+            const timeSpentSeconds = Math.round((Date.now() - this.activeStartTime) / 1000);
+            // Only report if meaningful time was spent (> 2 seconds)
+            if (timeSpentSeconds > 2) {
+                completed = {
+                    url: this.activeUrl,
+                    title: this.activeTitle,
+                    category: this.activeCategory,
+                    browser: this.activeBrowser,
+                    timeSpentSeconds: timeSpentSeconds,
+                    startTime: new Date(this.activeStartTime).toISOString(),
+                    endTime: new Date().toISOString()
+                };
+                // Accumulate total time for this URL
+                const existing = this.urlTimeSpent.get(this.activeUrl) || 0;
+                this.urlTimeSpent.set(this.activeUrl, existing + timeSpentSeconds);
+            }
+        }
+
+        // Start tracking the new URL
+        const category = categorizeUrl(url);
+        this.activeUrl = url;
+        this.activeTitle = title;
+        this.activeBrowser = browserName;
+        this.activeCategory = category;
+        this.activeStartTime = Date.now();
+
+        // Update dedup state
         this.lastUrl = url;
         this.lastTitle = title;
         this.lastChangeTime = Date.now();
 
-        const category = categorizeUrl(url);
         this.addUrl(url, title, category, browserName);
 
-        return {
+        const current = {
             url,
             title,
             category,
             browser: browserName,
             timestamp: new Date().toISOString()
+        };
+
+        return { current, completed };
+    }
+
+    /**
+     * Called when user switches to a non-browser app.
+     * Closes the timer on the current URL and returns its data with duration.
+     */
+    notifyInactive() {
+        if (!this.activeUrl || this.activeStartTime <= 0) return null;
+
+        const timeSpentSeconds = Math.round((Date.now() - this.activeStartTime) / 1000);
+        let completed = null;
+
+        if (timeSpentSeconds > 2) {
+            completed = {
+                url: this.activeUrl,
+                title: this.activeTitle,
+                category: this.activeCategory,
+                browser: this.activeBrowser,
+                timeSpentSeconds: timeSpentSeconds,
+                startTime: new Date(this.activeStartTime).toISOString(),
+                endTime: new Date().toISOString()
+            };
+            // Accumulate total time
+            const existing = this.urlTimeSpent.get(this.activeUrl) || 0;
+            this.urlTimeSpent.set(this.activeUrl, existing + timeSpentSeconds);
+        }
+
+        // Reset active state
+        this.activeUrl = null;
+        this.activeTitle = '';
+        this.activeBrowser = '';
+        this.activeCategory = '';
+        this.activeStartTime = 0;
+
+        return completed;
+    }
+
+    /**
+     * Get the current active URL's elapsed time (for live display)
+     */
+    getActiveUrlElapsed() {
+        if (!this.activeUrl || this.activeStartTime <= 0) return null;
+        return {
+            url: this.activeUrl,
+            title: this.activeTitle,
+            browser: this.activeBrowser,
+            category: this.activeCategory,
+            elapsedSeconds: Math.round((Date.now() - this.activeStartTime) / 1000)
         };
     }
 
@@ -518,15 +752,58 @@ class LiveUrlTracker {
         return sorted.map(([domain, count]) => ({ domain, visits: count }));
     }
 
+    /**
+     * Get time spent per URL (accumulated across the session)
+     */
+    getTimeSpentSummary(limit = 20) {
+        const sorted = [...this.urlTimeSpent.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit);
+        return sorted.map(([url, seconds]) => ({
+            url,
+            timeSpentSeconds: seconds,
+            timeSpentFormatted: formatDuration(seconds)
+        }));
+    }
+
+    /**
+     * Get time spent per domain (accumulated)
+     */
+    getTimeSpentByDomain(limit = 10) {
+        const domainTime = new Map();
+        for (const [url, seconds] of this.urlTimeSpent) {
+            try {
+                const domain = new URL(url).hostname.replace('www.', '');
+                domainTime.set(domain, (domainTime.get(domain) || 0) + seconds);
+            } catch (e) { }
+        }
+        const sorted = [...domainTime.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit);
+        return sorted.map(([domain, seconds]) => ({
+            domain,
+            timeSpentSeconds: seconds,
+            timeSpentFormatted: formatDuration(seconds)
+        }));
+    }
+
     getCategorySummary() {
         const summary = {};
         for (const entry of this.visitedUrls) {
             const cat = entry.category || 'other';
             if (!summary[cat]) {
-                summary[cat] = { count: 0, totalVisits: 0 };
+                summary[cat] = { count: 0, totalVisits: 0, totalTimeSeconds: 0 };
             }
             summary[cat].count++;
             summary[cat].totalVisits += entry.visits;
+        }
+        // Add time data from urlTimeSpent
+        for (const [url, seconds] of this.urlTimeSpent) {
+            const cat = categorizeUrl(url);
+            if (!summary[cat]) {
+                summary[cat] = { count: 0, totalVisits: 0, totalTimeSeconds: 0 };
+            }
+            summary[cat].totalTimeSeconds += seconds;
         }
         return summary;
     }
@@ -534,6 +811,12 @@ class LiveUrlTracker {
     reset() {
         this.visitedUrls = [];
         this.urlVisitCounts.clear();
+        this.urlTimeSpent.clear();
+        this.activeUrl = null;
+        this.activeTitle = '';
+        this.activeBrowser = '';
+        this.activeCategory = '';
+        this.activeStartTime = 0;
         this.lastUrl = '';
         this.lastTitle = '';
         this.lastChangeTime = 0;
@@ -544,9 +827,26 @@ class LiveUrlTracker {
             totalUrls: this.visitedUrls.length,
             uniqueDomains: this.urlVisitCounts.size,
             totalPageViews: [...this.urlVisitCounts.values()].reduce((a, b) => a + b, 0),
-            categories: this.getCategorySummary()
+            totalBrowsingTime: [...this.urlTimeSpent.values()].reduce((a, b) => a + b, 0),
+            categories: this.getCategorySummary(),
+            topTimeSpent: this.getTimeSpentByDomain(5)
         };
     }
+}
+
+/**
+ * Format seconds into human-readable duration
+ */
+function formatDuration(seconds) {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+    }
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
 module.exports = {
@@ -555,5 +855,6 @@ module.exports = {
     categorizeUrl,
     isValidBrowsableUrl,
     getActiveTabUrl,
+    getAllBrowserUrls,
     getBrowserHistoryFromDB
 };

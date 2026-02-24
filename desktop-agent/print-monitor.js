@@ -65,7 +65,8 @@ try {
     $colorCapable = $false
     try {
         $config = Get-PrintConfiguration -PrinterName "${printerName}" -ErrorAction Stop
-        if ($config.Color -ne $null) {
+        # Check if Color property VALUE indicates color support (not just existence)
+        if ($config.Color -eq $true -or [string]$config.Color -eq 'True') {
             $colorCapable = $true
         }
     } catch {}
@@ -173,22 +174,54 @@ function inferPrintQuality(documentName, driverName) {
 }
 
 /**
- * Detect if the print job is color or B&W based on multiple signals
+ * Detect if the print job is color or B&W based on multiple signals.
+ * 
+ * Priority order:
+ * 1. Per-job DEVMODE color setting (JobColor) - this is what the user actually selected
+ * 2. Document name heuristics as secondary signal
+ * 3. Printer capability as final fallback
+ * 
+ * IMPORTANT: job.Color from Get-PrintConfiguration is the PRINTER DEFAULT, not per-job.
+ * job.JobColor from Win32_PrintJob DEVMODE is the ACTUAL per-job setting.
  */
 function detectPrintType(job) {
     const driverLower = (job.DriverName || job.printerDriver || '').toLowerCase();
     const printerNameLower = (job.PrinterName || job.printer || '').toLowerCase();
     const docNameLower = (job.DocumentName || job.document || '').toLowerCase();
 
-    if (job.Color === true || (typeof job.Color === 'string' && job.Color.toLowerCase() === 'true')) {
-        return 'color';
+    // 1. Per-job DEVMODE color setting (most reliable - this is what user actually chose)
+    // Values: 1 = Monochrome/B&W, 2 = Color (from DEVMODE dmColor field)
+    if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown') {
+        const jobColorVal = typeof job.JobColor === 'string' ? job.JobColor.toLowerCase().trim() : job.JobColor;
+        if (jobColorVal === 1 || jobColorVal === '1' || jobColorVal === 'monochrome' ||
+            jobColorVal === 'grayscale' || jobColorVal === 'false') {
+            return 'bw';
+        }
+        if (jobColorVal === 2 || jobColorVal === '2' || jobColorVal === 'color' || jobColorVal === 'true') {
+            return 'color';
+        }
     }
+
+    // 2. If Color field explicitly indicates monochrome/false, it's B&W
+    // NOTE: job.Color from Get-PrintConfiguration is the printer default - only trust explicit B&W indicators
     if (job.Color === false || (typeof job.Color === 'string' &&
         (job.Color.toLowerCase() === 'false' || job.Color.toLowerCase() === 'monochrome' || job.Color.toLowerCase() === 'grayscale'))) {
         return 'bw';
     }
 
+    // 3. Check if the printer even supports color
     const isColorPrinter = detectColorCapability(printerNameLower, driverLower);
+    if (!isColorPrinter) return 'bw';
+
+    // 4. Document name heuristics
+    const bwDocIndicators = ['text', 'draft', 'invoice', 'receipt', 'contract', 'form',
+        'memo', 'report', 'spreadsheet', 'b&w', 'bw', 'black', 'mono', 'grayscale',
+        'blueprint', 'schematic', 'diagram', 'outline', 'notes', 'resume', 'cv'];
+    const bwExtensions = ['.txt', '.csv', '.log'];
+
+    const isBWDocument = bwDocIndicators.some(kw => docNameLower.includes(kw)) ||
+        bwExtensions.some(ext => docNameLower.includes(ext));
+    if (isBWDocument) return 'bw';
 
     const colorDocIndicators = ['color', 'photo', 'image', 'poster', 'flyer', 'banner',
         'brochure', 'certificate', 'presentation', 'slide'];
@@ -196,18 +229,10 @@ function detectPrintType(job) {
 
     const isColorDocument = colorDocIndicators.some(kw => docNameLower.includes(kw)) ||
         colorExtensions.some(ext => docNameLower.includes(ext));
+    if (isColorDocument) return 'color';
 
-    const bwDocIndicators = ['text', 'draft', 'invoice', 'receipt', 'contract', 'form',
-        'memo', 'report', 'spreadsheet', 'b&w', 'bw', 'black', 'mono', 'grayscale'];
-    const bwExtensions = ['.txt', '.csv', '.log'];
-
-    const isBWDocument = bwDocIndicators.some(kw => docNameLower.includes(kw)) ||
-        bwExtensions.some(ext => docNameLower.includes(ext));
-
-    if (isBWDocument) return 'bw';
-    if (isColorPrinter && isColorDocument) return 'color';
-    if (!isColorPrinter) return 'bw';
-
+    // 5. If printer default is color (from Get-PrintConfiguration) AND no other signals, 
+    //    default to B&W to be safe for billing. Only tag as color when we have positive evidence.
     return 'bw';
 }
 
@@ -220,6 +245,23 @@ async function getRecentPrintJobs() {
 $results = @()
 try {
     $allPrinters = Get-Printer -ErrorAction Stop
+
+    # Get per-job color info from WMI Win32_PrintJob (DEVMODE-level, per-job accuracy)
+    $wmiJobs = @{}
+    try {
+        $wmiPrintJobs = Get-WmiObject Win32_PrintJob -ErrorAction Stop
+        foreach ($wj in $wmiPrintJobs) {
+            # Key: PrinterName + JobId
+            $jobKey = "$($wj.Name)"
+            $wmiJobs[$jobKey] = @{
+                Color = $wj.Color
+                Document = $wj.Document
+                PagesPrinted = $wj.PagesPrinted
+                TotalPages = $wj.TotalPages
+            }
+        }
+    } catch {}
+
     foreach ($printer in $allPrinters) {
         $printerConfig = $null
         try {
@@ -235,6 +277,7 @@ try {
             $paperSize = "Unknown"
             $duplexMode = "Unknown"
             $colorMode = "Unknown"
+            $jobColorMode = "Unknown"
             $collate = $false
 
             if ($printerConfig -ne $null) {
@@ -242,6 +285,17 @@ try {
                 $duplexMode = [string]$printerConfig.DuplexingMode
                 $colorMode = [string]$printerConfig.Color
                 $collate = [bool]$printerConfig.Collate
+            }
+
+            # Try to find per-job color info from WMI DEVMODE
+            # Win32_PrintJob.Name format is "PrinterName, JobId"
+            $wmiKey = "$($printer.Name), $($job.Id)"
+            if ($wmiJobs.ContainsKey($wmiKey)) {
+                $wmiColor = $wmiJobs[$wmiKey].Color
+                if ($wmiColor -ne $null) {
+                    # DEVMODE dmColor: 1 = Monochrome, 2 = Color
+                    $jobColorMode = [string]$wmiColor
+                }
             }
 
             $results += [PSCustomObject]@{
@@ -263,6 +317,7 @@ try {
                 PaperSize = $paperSize
                 DuplexingMode = $duplexMode
                 Color = $colorMode
+                JobColor = $jobColorMode
                 Collate = $collate
             }
         }
@@ -527,7 +582,8 @@ foreach ($p in $modernPrinters) {
     $colorCapable = $false
     try {
         $config = Get-PrintConfiguration -PrinterName $p.Name -ErrorAction Stop
-        if ($config.Color -ne $null) { $colorCapable = $true }
+        # Check if the Color VALUE is True, not just if the property exists
+        if ($config.Color -eq $true -or [string]$config.Color -eq 'True') { $colorCapable = $true }
     } catch {}
 
     $commentVal = ""
@@ -611,7 +667,8 @@ foreach ($p in $wmiPrinters) {
         $colorCapable = $false
         try {
             $config = Get-PrintConfiguration -PrinterName $p.Name -ErrorAction Stop
-            if ($config.Color -ne $null) { $colorCapable = $true }
+            # Check if the Color VALUE is True, not just if the property exists
+            if ($config.Color -eq $true -or [string]$config.Color -eq 'True') { $colorCapable = $true }
         } catch {}
 
         $allPrinters += [PSCustomObject]@{

@@ -2225,7 +2225,7 @@ app.post('/api/v1/agent/session', async (req, res) => {
 
 /**
  * POST /api/v1/agent/log
- * Receives specific event logs (print, browser, file, usb) in real-time
+ * Receives specific event logs (print, browser, browser_time, file, usb) in real-time
  */
 app.post('/api/v1/agent/log', async (req, res) => {
     try {
@@ -2237,21 +2237,71 @@ app.post('/api/v1/agent/log', async (req, res) => {
 
         // Enhance browser log with category if not provided
         let enhancedData = data;
-        if (type === 'browser' && data && !data.category) {
+        if ((type === 'browser' || type === 'browser_time') && data && !data.category) {
             enhancedData = {
                 ...data,
                 category: categorizeUrl(data.url)
             };
         }
 
-        // Deduplicate browser logs: skip if same clientId+url was logged within the last 30 seconds
+        // Handle browser_time: update existing browser log entry with time data
+        if (type === 'browser_time' && enhancedData?.url) {
+            const tenMinutesAgo = new Date(Date.now() - 600 * 1000);
+
+            // Find the matching browser entry and update with time spent
+            const updated = await Log.findOneAndUpdate(
+                {
+                    type: 'browser',
+                    clientId,
+                    'data.url': enhancedData.url,
+                    receivedAt: { $gte: tenMinutesAgo }
+                },
+                {
+                    $set: {
+                        'data.timeSpentSeconds': enhancedData.timeSpentSeconds,
+                        'data.startTime': enhancedData.startTime,
+                        'data.endTime': enhancedData.endTime
+                    }
+                },
+                { sort: { receivedAt: -1 }, new: true }
+            );
+
+            if (updated) {
+                // Broadcast the time update to admin dashboard
+                io.emit('browser-time-update', {
+                    logId: updated._id,
+                    clientId,
+                    url: enhancedData.url,
+                    timeSpentSeconds: enhancedData.timeSpentSeconds
+                });
+                return res.json({ success: true, updated: true, id: updated._id });
+            }
+
+            // No matching browser entry found — create a new combined entry
+            const logEntry = await Log.create({
+                type: 'browser',
+                clientId,
+                hostname,
+                sessionId,
+                sessionUser,
+                data: {
+                    ...enhancedData,
+                    source: 'time_tracking'
+                },
+                receivedAt: new Date()
+            });
+            io.emit('new-log', logEntry);
+            return res.json({ success: true, created: true, id: logEntry._id });
+        }
+
+        // Deduplicate browser logs: skip if same clientId+url was logged within the last 3 minutes
         if (type === 'browser' && enhancedData?.url) {
-            const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+            const threeMinutesAgo = new Date(Date.now() - 180 * 1000);
             const duplicate = await Log.findOne({
                 type: 'browser',
                 clientId,
                 'data.url': enhancedData.url,
-                receivedAt: { $gte: thirtySecondsAgo }
+                receivedAt: { $gte: threeMinutesAgo }
             });
             if (duplicate) {
                 return res.json({ success: true, deduplicated: true });
@@ -2288,7 +2338,7 @@ function categorizeUrl(url) {
         search: ['google.com', 'bing.com', 'duckduckgo.com', 'yahoo.com', 'baidu.com', 'yandex.com'],
         social: ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com', 'tiktok.com', 'reddit.com', 'pinterest.com', 'snapchat.com', 'whatsapp.com', 'telegram.org', 'discord.com'],
         video: ['youtube.com', 'vimeo.com', 'netflix.com', 'twitch.tv', 'dailymotion.com', 'hulu.com', 'disneyplus.com', 'primevideo.com'],
-        education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com'],
+        education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com', 'netacad.com', 'skillsforall.com', 'cisco.com'],
         development: ['github.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com', 'pypi.org', 'developer.mozilla.org', 'codepen.io', 'jsfiddle.net', 'replit.com', 'vercel.com', 'netlify.com', 'heroku.com'],
         productivity: ['docs.google.com', 'sheets.google.com', 'slides.google.com', 'drive.google.com', 'notion.so', 'trello.com', 'asana.com', 'slack.com', 'zoom.us', 'meet.google.com', 'teams.microsoft.com', 'office.com'],
         shopping: ['amazon.com', 'ebay.com', 'aliexpress.com', 'alibaba.com', 'etsy.com', 'shopify.com', 'walmart.com', 'target.com', 'jumia.co.ke'],
@@ -2576,6 +2626,54 @@ app.get('/api/v1/admin/printers', async (req, res) => {
     } catch (error) {
         console.error('Fetch Printers Error:', error);
         res.status(500).json({ error: 'Failed to fetch printers' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printer-data
+ * Deletes all printer-related data (print jobs and printer discovery logs)
+ * Used for system cleanup from admin settings
+ */
+app.delete('/api/v1/admin/printer-data', async (req, res) => {
+    try {
+        // Delete all print job logs
+        const printJobsResult = await Log.deleteMany({ type: 'print' });
+        // Delete all printer discovery/status logs
+        const printersResult = await Log.deleteMany({ type: 'printers' });
+
+        const totalDeleted = (printJobsResult.deletedCount || 0) + (printersResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin deleted printer data: ${printJobsResult.deletedCount} print jobs, ${printersResult.deletedCount} printer records`);
+
+        res.json({
+            success: true,
+            deleted: {
+                printJobs: printJobsResult.deletedCount || 0,
+                printers: printersResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Printer Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete printer data' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/browser-data
+ * Deletes all browser history data
+ */
+app.delete('/api/v1/admin/browser-data', async (req, res) => {
+    try {
+        const result = await Log.deleteMany({ type: 'browser' });
+        console.log(`[CLEANUP] Admin deleted browser data: ${result.deletedCount} records`);
+        res.json({
+            success: true,
+            deleted: { browserLogs: result.deletedCount || 0 }
+        });
+    } catch (error) {
+        console.error('Delete Browser Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete browser data' });
     }
 });
 

@@ -26,9 +26,11 @@ import {
     FolderAddOutlined,
     AppstoreOutlined,
     PictureOutlined,
+    ClearOutlined,
+    ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -286,6 +288,38 @@ function Settings() {
         } catch (error) {
             console.error('Failed to delete category', error);
             message.error('Failed to delete category');
+        }
+    };
+
+    // Delete all printer data
+    const [cleaningPrinterData, setCleaningPrinterData] = useState(false);
+    const handleDeleteAllPrinterData = async () => {
+        setCleaningPrinterData(true);
+        try {
+            const result = await deleteAllPrinterData();
+            message.success(
+                `Printer data cleared: ${result.deleted?.printJobs || 0} print jobs and ${result.deleted?.printers || 0} printer records deleted`
+            );
+        } catch (err) {
+            message.error(err.response?.data?.error || 'Failed to delete printer data');
+        } finally {
+            setCleaningPrinterData(false);
+        }
+    };
+
+    // Delete all browser data
+    const [cleaningBrowserData, setCleaningBrowserData] = useState(false);
+    const handleDeleteAllBrowserData = async () => {
+        setCleaningBrowserData(true);
+        try {
+            const result = await deleteAllBrowserData();
+            message.success(
+                `Browser data cleared: ${result.deleted?.browserLogs || 0} records deleted`
+            );
+        } catch (err) {
+            message.error(err.response?.data?.error || 'Failed to delete browser data');
+        } finally {
+            setCleaningBrowserData(false);
         }
     };
 
@@ -876,6 +910,136 @@ function Settings() {
                         </Col>
                     </Row>
                 </Card>
+            ),
+        },
+        {
+            key: 'data',
+            label: (
+                <Space>
+                    <ClearOutlined />
+                    <span>Data Management</span>
+                </Space>
+            ),
+            children: (
+                <Row gutter={24}>
+                    <Col xs={24} lg={12}>
+                        <Card
+                            title={
+                                <Space>
+                                    <PrinterOutlined style={{ color: '#ff3b5c' }} />
+                                    <span>Printer Data Cleanup</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: 24,
+                                background: 'rgba(255, 59, 92, 0.06)',
+                                border: '1px solid rgba(255, 59, 92, 0.15)',
+                                borderRadius: 12,
+                                marginBottom: 16
+                            }}>
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
+                                        <Text strong>Delete All Printer Data</Text>
+                                    </div>
+                                    <Text type="secondary" style={{ fontSize: 13 }}>
+                                        This will permanently remove all print job records and printer discovery logs
+                                        from every computer in the system. This includes:
+                                    </Text>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
+                                        <li>All print job history (B&W and color)</li>
+                                        <li>Printer discovery and status records</li>
+                                        <li>Page count statistics</li>
+                                    </ul>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        ⚠️ This action cannot be undone. New printer data will be collected
+                                        automatically when agents report activity.
+                                    </Text>
+                                    <Divider style={{ margin: '8px 0' }} />
+                                    <Popconfirm
+                                        title="Delete all printer data?"
+                                        description="This will permanently remove ALL print jobs and printer records from every computer. This cannot be undone."
+                                        onConfirm={handleDeleteAllPrinterData}
+                                        okText="Yes, Delete All"
+                                        cancelText="Cancel"
+                                        okButtonProps={{ danger: true }}
+                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
+                                    >
+                                        <Button
+                                            danger
+                                            type="primary"
+                                            icon={<DeleteOutlined />}
+                                            loading={cleaningPrinterData}
+                                            block
+                                        >
+                                            Delete All Printer Data
+                                        </Button>
+                                    </Popconfirm>
+                                </Space>
+                            </div>
+                        </Card>
+                    </Col>
+
+                    <Col xs={24} lg={12}>
+                        <Card
+                            title={
+                                <Space>
+                                    <GlobalOutlined style={{ color: '#ff3b5c' }} />
+                                    <span>Browser Data Cleanup</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: 24,
+                                background: 'rgba(255, 59, 92, 0.06)',
+                                border: '1px solid rgba(255, 59, 92, 0.15)',
+                                borderRadius: 12,
+                                marginBottom: 16
+                            }}>
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
+                                        <Text strong>Delete All Browser Data</Text>
+                                    </div>
+                                    <Text type="secondary" style={{ fontSize: 13 }}>
+                                        This will permanently remove all browser history records
+                                        from every computer in the system. This includes:
+                                    </Text>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
+                                        <li>All browsing history URLs and titles</li>
+                                        <li>Time spent tracking data per URL</li>
+                                        <li>Category and source metadata</li>
+                                    </ul>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        ⚠️ This action cannot be undone. New browser data will be collected
+                                        automatically when agents report activity.
+                                    </Text>
+                                    <Divider style={{ margin: '8px 0' }} />
+                                    <Popconfirm
+                                        title="Delete all browser data?"
+                                        description="This will permanently remove ALL browser history from every computer. This cannot be undone."
+                                        onConfirm={handleDeleteAllBrowserData}
+                                        okText="Yes, Delete All"
+                                        cancelText="Cancel"
+                                        okButtonProps={{ danger: true }}
+                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
+                                    >
+                                        <Button
+                                            danger
+                                            type="primary"
+                                            icon={<DeleteOutlined />}
+                                            loading={cleaningBrowserData}
+                                            block
+                                        >
+                                            Delete All Browser Data
+                                        </Button>
+                                    </Popconfirm>
+                                </Space>
+                            </div>
+                        </Card>
+                    </Col>
+                </Row>
             ),
         },
     ];

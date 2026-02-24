@@ -41,7 +41,7 @@ const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType } = require('./print-monitor');
-const { LiveUrlTracker, getActiveTabUrl, getBrowserHistoryFromDB } = require('./browser-history');
+const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 
 // Load Configuration
 let config;
@@ -152,7 +152,7 @@ let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
-const BROWSER_DEDUP_WINDOW_MS = 30000; // 30 seconds: same URL won't be re-sent within this window
+const BROWSER_DEDUP_WINDOW_MS = 300000; // 5 minutes: same URL won't be re-sent within this window (was 30s, too short)
 let socket = null; // Socket.io connection for real-time commands
 let isOnline = true; // Track online status
 
@@ -1117,7 +1117,6 @@ async function startDataCollection() {
                         // Track app usage
                         appUsageTracker.tick(currentApp.owner, currentApp.title);
 
-
                         // Track URLs from browsers & Real-Time Log using enhanced browser tracking
                         const isBrowser = ['chrome', 'msedge', 'firefox', 'opera', 'brave', 'edge', 'chromium', 'vivaldi', 'safari'].some(b =>
                             (currentApp.owner || '').toLowerCase().includes(b)
@@ -1133,33 +1132,80 @@ async function startDataCollection() {
                                 // UI Automation failed, will fallback to window title
                             }
 
-                            // Use the enhanced addFromWindow method that extracts URLs from titles
-                            // Pass the actual URL if we got it, otherwise let it extract from title
-                            const browserData = urlTracker.addFromWindow(currentApp.title, currentApp.owner, actualUrl || currentApp.url);
+                            // Use the enhanced addFromWindow method that returns {current, completed}
+                            const result = urlTracker.addFromWindow(currentApp.title, currentApp.owner, actualUrl || currentApp.url);
 
-                            // Send Real-Time Browser Log if we got valid data (deduplicated)
-                            const now = Date.now();
-                            const alreadySent = browserData && sentBrowserUrls.has(browserData.url) &&
-                                (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
-                            if (browserData && !alreadySent) {
-                                sentBrowserUrls.set(browserData.url, now);
-                                const browserPayload = {
-                                    type: 'browser',
+                            if (result) {
+                                const { current: browserData, completed: completedUrl } = result;
+
+                                // 1. Send time-spent update for the PREVIOUS URL (the one user just left)
+                                if (completedUrl && completedUrl.timeSpentSeconds > 0) {
+                                    const timePayload = {
+                                        type: 'browser_time',
+                                        clientId: CLIENT_ID,
+                                        hostname: os.hostname(),
+                                        sessionId: currentSession?.id || null,
+                                        sessionUser: currentSession?.user || null,
+                                        data: {
+                                            url: completedUrl.url,
+                                            title: completedUrl.title,
+                                            category: completedUrl.category,
+                                            browser: completedUrl.browser,
+                                            timeSpentSeconds: completedUrl.timeSpentSeconds,
+                                            startTime: completedUrl.startTime,
+                                            endTime: completedUrl.endTime
+                                        }
+                                    };
+                                    sendToServer(LOG_API_URL, timePayload).catch(e => console.error('Browser Time Log Failed:', e.message));
+                                }
+
+                                // 2. Send Real-Time Browser Log for the NEW URL (deduplicated)
+                                if (browserData) {
+                                    const now = Date.now();
+                                    const alreadySent = sentBrowserUrls.has(browserData.url) &&
+                                        (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
+                                    if (!alreadySent) {
+                                        sentBrowserUrls.set(browserData.url, now);
+                                        const browserPayload = {
+                                            type: 'browser',
+                                            clientId: CLIENT_ID,
+                                            hostname: os.hostname(),
+                                            sessionId: currentSession?.id || null,
+                                            sessionUser: currentSession?.user || null,
+                                            data: {
+                                                url: browserData.url,
+                                                title: browserData.title,
+                                                category: browserData.category,
+                                                browser: browserData.browser,
+                                                timestamp: browserData.timestamp,
+                                                source: actualUrl ? 'ui_automation' : 'title_extraction'
+                                            }
+                                        };
+                                        sendToServer(LOG_API_URL, browserPayload).catch(e => console.error('Browser Log Failed:', e.message));
+                                    }
+                                }
+                            }
+                        } else {
+                            // User switched to a non-browser app — close the timer on the previous URL
+                            const completedUrl = urlTracker.notifyInactive();
+                            if (completedUrl && completedUrl.timeSpentSeconds > 0) {
+                                const timePayload = {
+                                    type: 'browser_time',
                                     clientId: CLIENT_ID,
                                     hostname: os.hostname(),
                                     sessionId: currentSession?.id || null,
                                     sessionUser: currentSession?.user || null,
                                     data: {
-                                        url: browserData.url,
-                                        title: browserData.title,
-                                        category: browserData.category,
-                                        browser: browserData.browser,
-                                        timestamp: browserData.timestamp,
-                                        source: actualUrl ? 'ui_automation' : 'title_extraction'
+                                        url: completedUrl.url,
+                                        title: completedUrl.title,
+                                        category: completedUrl.category,
+                                        browser: completedUrl.browser,
+                                        timeSpentSeconds: completedUrl.timeSpentSeconds,
+                                        startTime: completedUrl.startTime,
+                                        endTime: completedUrl.endTime
                                     }
                                 };
-                                // Don't await strictly to avoid blocking heartbeat
-                                sendToServer(LOG_API_URL, browserPayload).catch(e => console.error('Browser Log Failed:', e.message));
+                                sendToServer(LOG_API_URL, timePayload).catch(e => console.error('Browser Time Log Failed:', e.message));
                             }
                         }
                     }
@@ -1301,28 +1347,90 @@ async function startDataCollection() {
         }
     }, HEARTBEAT_INTERVAL);
 
+    // ===== REAL-TIME: Scan ALL open browser windows (every 20 seconds) =====
+    // The heartbeat above only captures the active/foreground window.
+    // This scanner finds URLs from ALL open browser windows (including background ones).
+    setInterval(async () => {
+        if (isLocked || !currentSession) return;
+
+        try {
+            const allBrowsers = await getAllBrowserUrls();
+
+            for (const browserInfo of allBrowsers) {
+                if (!browserInfo.url) continue;
+
+                // Skip internal pages
+                const url = browserInfo.url;
+                if (url.startsWith('file://') || url.startsWith('chrome://') || url.startsWith('edge://') ||
+                    url.startsWith('about:') || url.includes('page-limit/')) continue;
+
+                // Dedup check
+                const now = Date.now();
+                if (sentBrowserUrls.has(url) && (now - sentBrowserUrls.get(url)) < BROWSER_DEDUP_WINDOW_MS) continue;
+
+                sentBrowserUrls.set(url, now);
+
+                const category = categorizeBrowserUrl(url);
+                const browserPayload = {
+                    type: 'browser',
+                    clientId: CLIENT_ID,
+                    hostname: os.hostname(),
+                    sessionId: currentSession?.id || null,
+                    sessionUser: currentSession?.user || null,
+                    data: {
+                        url: url,
+                        title: browserInfo.title,
+                        category: category,
+                        browser: browserInfo.browser,
+                        timestamp: new Date().toISOString(),
+                        source: 'all_windows_scan'
+                    }
+                };
+
+                sendToServer(LOG_API_URL, browserPayload).catch(e => console.error('Browser Scan Log Failed:', e.message));
+            }
+        } catch (e) {
+            // Silently fail — this is a best-effort scan
+        }
+    }, 20000); // Every 20 seconds
+
     // Periodic Browser History Sync (every 60 seconds)
     // This catches URLs that might be missed by real-time tracking
+    // IMPORTANT: Only syncs entries from AFTER the current session started to prevent data mixing
     let lastHistorySyncTime = Date.now();
     setInterval(async () => {
         if (isLocked) return; // Don't sync history if locked (privacy/noise)
+        if (!currentSession) return; // No session = no sync (prevents mixing data between sessions)
 
         try {
             // Get history from the last hour
             const history = await getBrowserHistoryFromDB(1);
 
-            // Filter only new items since last sync
+            // Session start time — only process entries from after the session began
+            const sessionStartTime = new Date(currentSession.startTime).getTime();
+
+            // Filter only new items since last sync AND only items from current session
             const newItems = history.filter(item => {
                 const visitTime = new Date(item.visitTime).getTime();
-                return visitTime > lastHistorySyncTime;
+                // Must be after session start AND after last sync
+                if (visitTime <= sessionStartTime) return false;
+                if (visitTime <= lastHistorySyncTime) return false;
+
+                // Skip internal/file URLs
+                const url = item.url || '';
+                if (url.startsWith('file://') || url.startsWith('chrome://') || url.startsWith('edge://') ||
+                    url.startsWith('about:') || url.startsWith('chrome-extension://') ||
+                    url.startsWith('moz-extension://') || url.startsWith('devtools://') ||
+                    url.includes('page-limit/')) return false;
+
+                return true;
             });
 
             if (newItems.length > 0) {
-                console.log(`[HISTORY] Found ${newItems.length} new history items from DB`);
+                console.log(`[HISTORY] Found ${newItems.length} new history items from DB (session-scoped)`);
 
                 // Update sync time to the latest item found
-                // (Sorted desc, so first item is latest)
-                const latestTime = new Date(newItems[0].visitTime).getTime();
+                const latestTime = Math.max(...newItems.map(i => new Date(i.visitTime).getTime()));
                 if (latestTime > lastHistorySyncTime) {
                     lastHistorySyncTime = latestTime;
                 }
@@ -1358,10 +1466,18 @@ async function startDataCollection() {
                     sendToServer(LOG_API_URL, historyPayload).catch(e => console.error('History Sync Log Failed:', e.message));
                 }
             }
+
+            // Periodically clean up old entries from sentBrowserUrls to prevent memory leak
+            const cleanupThreshold = Date.now() - BROWSER_DEDUP_WINDOW_MS * 2;
+            for (const [url, timestamp] of sentBrowserUrls) {
+                if (timestamp < cleanupThreshold) {
+                    sentBrowserUrls.delete(url);
+                }
+            }
         } catch (e) {
             console.error('[HISTORY] Sync failed:', e.message);
         }
-    }, 30000);
+    }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
     // Periodic Print History Sync (every 60 seconds)
     // Captures completed jobs missed by real-time polling
