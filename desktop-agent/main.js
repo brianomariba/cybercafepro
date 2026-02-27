@@ -190,7 +190,7 @@ let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
-const BROWSER_DEDUP_WINDOW_MS = 300000; // 5 minutes: same URL won't be re-sent within this window (was 30s, too short)
+const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
 let isOnline = true; // Track online status
 
@@ -1464,6 +1464,116 @@ async function startDataCollection() {
         }
     }, HEARTBEAT_INTERVAL);
 
+    // ===== FAST BROWSER URL POLLING (every 3 seconds) =====
+    // Dedicated lightweight loop that ONLY checks for browser URL changes.
+    // Much faster than the heartbeat which also collects metrics, screenshots, prints.
+    // This ensures URLs are captured almost immediately when opened.
+    let fastPollRunning = false;
+    setInterval(async () => {
+        if (isLocked || !currentSession) return;
+        if (fastPollRunning) return; // Prevent overlapping runs
+        fastPollRunning = true;
+
+        try {
+            const activeWin = require('active-win');
+            const win = activeWin.sync();
+            if (!win) { fastPollRunning = false; return; }
+
+            const appOwner = (win.owner?.name || '').toLowerCase();
+            const isBrowser = ['chrome', 'msedge', 'firefox', 'opera', 'brave', 'edge', 'chromium', 'vivaldi'].some(b => appOwner.includes(b));
+
+            if (!isBrowser) {
+                // If user switched away from browser, notify tracker to close timer
+                const completedUrl = urlTracker.notifyInactive();
+                if (completedUrl && completedUrl.timeSpentSeconds > 0) {
+                    const timePayload = {
+                        type: 'browser_time',
+                        clientId: CLIENT_ID,
+                        hostname: os.hostname(),
+                        sessionId: currentSession?.id || null,
+                        sessionUser: currentSession?.user || null,
+                        data: {
+                            url: completedUrl.url,
+                            title: completedUrl.title,
+                            category: completedUrl.category,
+                            browser: completedUrl.browser,
+                            timeSpentSeconds: completedUrl.timeSpentSeconds,
+                            startTime: completedUrl.startTime,
+                            endTime: completedUrl.endTime
+                        }
+                    };
+                    sendToServer(LOG_API_URL, timePayload).catch(() => { });
+                }
+                fastPollRunning = false;
+                return;
+            }
+
+            // Get actual URL from the browser address bar
+            let actualUrl = null;
+            try {
+                actualUrl = await getActiveTabUrl();
+            } catch (e) { /* fallback to title */ }
+
+            const windowTitle = win.title || '';
+            const browserName = win.owner?.name || '';
+
+            const result = urlTracker.addFromWindow(windowTitle, browserName, actualUrl || win.url || '');
+            if (result) {
+                const { current: browserData, completed: completedUrl } = result;
+
+                // Send time-spent for previous URL
+                if (completedUrl && completedUrl.timeSpentSeconds > 0) {
+                    const timePayload = {
+                        type: 'browser_time',
+                        clientId: CLIENT_ID,
+                        hostname: os.hostname(),
+                        sessionId: currentSession?.id || null,
+                        sessionUser: currentSession?.user || null,
+                        data: {
+                            url: completedUrl.url,
+                            title: completedUrl.title,
+                            category: completedUrl.category,
+                            browser: completedUrl.browser,
+                            timeSpentSeconds: completedUrl.timeSpentSeconds,
+                            startTime: completedUrl.startTime,
+                            endTime: completedUrl.endTime
+                        }
+                    };
+                    sendToServer(LOG_API_URL, timePayload).catch(() => { });
+                }
+
+                // Send real-time browser log for new URL
+                if (browserData) {
+                    const now = Date.now();
+                    const alreadySent = sentBrowserUrls.has(browserData.url) &&
+                        (now - sentBrowserUrls.get(browserData.url)) < BROWSER_DEDUP_WINDOW_MS;
+                    if (!alreadySent) {
+                        sentBrowserUrls.set(browserData.url, now);
+                        const browserPayload = {
+                            type: 'browser',
+                            clientId: CLIENT_ID,
+                            hostname: os.hostname(),
+                            sessionId: currentSession?.id || null,
+                            sessionUser: currentSession?.user || null,
+                            data: {
+                                url: browserData.url,
+                                title: browserData.title,
+                                category: browserData.category,
+                                browser: browserData.browser,
+                                timestamp: browserData.timestamp,
+                                source: actualUrl ? 'ui_automation_fast' : 'title_extraction_fast'
+                            }
+                        };
+                        sendToServer(LOG_API_URL, browserPayload).catch(() => { });
+                    }
+                }
+            }
+        } catch (e) {
+            // Silently fail — best effort fast polling
+        }
+        fastPollRunning = false;
+    }, 3000); // Every 3 seconds for near-instant URL capture
+
     // ===== REAL-TIME: Scan ALL open browser windows (every 20 seconds) =====
     // The heartbeat above only captures the active/foreground window.
     // This scanner finds URLs from ALL open browser windows (including background ones).
@@ -1509,7 +1619,7 @@ async function startDataCollection() {
         } catch (e) {
             // Silently fail — this is a best-effort scan
         }
-    }, 20000); // Every 20 seconds
+    }, 10000); // Every 10 seconds for background tab capture
 
     // Periodic Browser History Sync (every 60 seconds)
     // This catches URLs that might be missed by real-time tracking
