@@ -21,6 +21,7 @@ const TransactionSchema = new mongoose.Schema({
     quantity: { type: Number },
     seller: { type: String }, // e.g. 'admin' or hostname
     reason: { type: String },
+    paymentMethod: { type: String, enum: ['cash', 'mpesa', 'other'], default: 'cash' },
     createdAt: { type: Date, default: Date.now }
 });
 

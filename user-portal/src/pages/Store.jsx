@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Card, Button, Typography, Tag, Row, Col, message, Spin, Statistic, Empty, Modal, Input, InputNumber, Badge, Space, Divider, Alert } from 'antd';
-import { ShoppingCartOutlined, ShopOutlined, InfoCircleOutlined, MinusOutlined, PlusOutlined, WarningOutlined } from '@ant-design/icons';
+import { Card, Button, Typography, Tag, Row, Col, message, Spin, Statistic, Empty, Modal, Input, InputNumber, Badge, Space, Divider, Alert, Radio } from 'antd';
+import { ShoppingCartOutlined, ShopOutlined, InfoCircleOutlined, MinusOutlined, PlusOutlined, WarningOutlined, DollarOutlined, MobileOutlined } from '@ant-design/icons';
 import { getInventory, getInventorySettings, purchaseItem, connectSocket } from '../services/api';
 
 const { Title, Text } = Typography;
@@ -16,6 +16,7 @@ function Store({ isDarkMode }) {
     const [reason, setReason] = useState('');
     const [quantity, setQuantity] = useState(1);
     const [purchasing, setPurchasing] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState('cash');
 
     const fetchData = async () => {
         setLoading(true);
@@ -55,6 +56,7 @@ function Store({ isDarkMode }) {
         setActiveItem(item);
         setReason('');
         setQuantity(1);
+        setPaymentMethod('cash');
         setConfirmVisible(true);
     };
 
@@ -66,7 +68,7 @@ function Store({ isDarkMode }) {
         }
         setPurchasing(true);
         try {
-            const result = await purchaseItem(activeItem._id, quantity, reason);
+            const result = await purchaseItem(activeItem._id, quantity, reason, null, paymentMethod);
             message.success(`Successfully sold ${quantity}x ${activeItem.name}`);
             setConfirmVisible(false);
             fetchData(); // Refresh stock
@@ -320,6 +322,19 @@ function Store({ isDarkMode }) {
                             style={{ marginBottom: 16 }}
                         />
                     )}
+
+                    {/* Payment Method */}
+                    <div style={{ marginBottom: 16 }}>
+                        <Text strong style={{ display: 'block', marginBottom: 8 }}>Payment Method:</Text>
+                        <Radio.Group value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} buttonStyle="solid" style={{ width: '100%' }}>
+                            <Radio.Button value="cash" style={{ width: '50%', textAlign: 'center' }}>
+                                <DollarOutlined style={{ marginRight: 6 }} />Cash
+                            </Radio.Button>
+                            <Radio.Button value="mpesa" style={{ width: '50%', textAlign: 'center' }}>
+                                <MobileOutlined style={{ marginRight: 6 }} />M-Pesa
+                            </Radio.Button>
+                        </Radio.Group>
+                    </div>
 
                     {/* Reason/Note */}
                     <div>

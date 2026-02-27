@@ -919,6 +919,22 @@
                 </div>
 
                 <div class="form-group">
+                    <label class="form-label">Payment Method</label>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" class="btn btn-small payment-method-btn active" id="pmCash"
+                            onclick="selectPaymentMethod('cash')"
+                            style="flex:1; padding: 10px; border: 2px solid var(--success); background: rgba(0,200,83,0.15); color: var(--success); font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            💵 Cash
+                        </button>
+                        <button type="button" class="btn btn-small payment-method-btn" id="pmMpesa"
+                            onclick="selectPaymentMethod('mpesa')"
+                            style="flex:1; padding: 10px; border: 2px solid rgba(255,255,255,0.15); background: transparent; color: var(--text-secondary); font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            📱 M-Pesa
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label">Note (optional)</label>
                     <input type="text" class="form-input" id="saleNote" placeholder="e.g. Client name, PC number...">
                 </div>
@@ -1435,9 +1451,35 @@
             qtyInput.max = stock;
             document.getElementById('saleTotal').textContent = `KSH ${price.toLocaleString()}`;
             document.getElementById('saleNote').value = '';
+            // Reset payment method to Cash
+            selectPaymentMethod('cash');
             document.getElementById('saleModal').classList.add('active');
             // Focus the quantity input so user can type immediately
             setTimeout(() => qtyInput.select(), 100);
+        }
+
+        function selectPaymentMethod(method) {
+            const cashBtn = document.getElementById('pmCash');
+            const mpesaBtn = document.getElementById('pmMpesa');
+            if (method === 'mpesa') {
+                mpesaBtn.classList.add('active');
+                mpesaBtn.style.border = '2px solid #108ee9';
+                mpesaBtn.style.background = 'rgba(16,142,233,0.15)';
+                mpesaBtn.style.color = '#108ee9';
+                cashBtn.classList.remove('active');
+                cashBtn.style.border = '2px solid rgba(255,255,255,0.15)';
+                cashBtn.style.background = 'transparent';
+                cashBtn.style.color = 'var(--text-secondary)';
+            } else {
+                cashBtn.classList.add('active');
+                cashBtn.style.border = '2px solid var(--success)';
+                cashBtn.style.background = 'rgba(0,200,83,0.15)';
+                cashBtn.style.color = 'var(--success)';
+                mpesaBtn.classList.remove('active');
+                mpesaBtn.style.border = '2px solid rgba(255,255,255,0.15)';
+                mpesaBtn.style.background = 'transparent';
+                mpesaBtn.style.color = 'var(--text-secondary)';
+            }
         }
 
         function closeSaleModal() {
@@ -1486,13 +1528,15 @@
             }
 
             const note = document.getElementById('saleNote').value;
+            const paymentMethod = document.querySelector('.payment-method-btn.active')?.id === 'pmMpesa' ? 'mpesa' : 'cash';
             ipcRenderer.send('record-sale', {
                 itemId: selectedItem.id,
                 itemName: selectedItem.name,
                 quantity: saleQuantity,
                 unitPrice: selectedItem.price,
                 total: selectedItem.price * saleQuantity,
-                note
+                note,
+                paymentMethod
             });
         }
 

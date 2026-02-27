@@ -28,6 +28,7 @@ import {
     DisconnectOutlined,
     SortAscendingOutlined,
     FieldTimeOutlined,
+    DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, requestScreenshot, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
@@ -1192,13 +1193,30 @@ function Computers() {
                 title={`Screenshot: ${selectedComputer?.hostname}`}
                 open={screenshotVisible}
                 onCancel={() => setScreenshotVisible(false)}
-                footer={null}
-                width={800}
+                footer={screenshotData ? [
+                    <Button key="refresh" icon={<ReloadOutlined />} onClick={handleScreenshotRequest} loading={screenshotLoading}>
+                        Capture Again
+                    </Button>,
+                    <Button key="save" type="primary" icon={<DownloadOutlined />} onClick={() => {
+                        const link = document.createElement('a');
+                        link.href = `data:image/jpeg;base64,${screenshotData}`;
+                        link.download = `screenshot_${selectedComputer?.hostname}_${dayjs().format('YYYY-MM-DD_HH-mm-ss')}.jpg`;
+                        link.click();
+                        message.success('Screenshot saved');
+                    }}>
+                        Save Image
+                    </Button>,
+                    <Button key="close" onClick={() => setScreenshotVisible(false)}>Close</Button>
+                ] : null}
+                width={900}
                 bodyStyle={{ textAlign: 'center', padding: 20 }}
             >
                 {screenshotLoading ? (
                     <div style={{ padding: 50 }}>
                         <Spin size="large" tip="Capturing screen..." />
+                        <div style={{ marginTop: 16 }}>
+                            <Text type="secondary">Waiting for agent response...</Text>
+                        </div>
                     </div>
                 ) : (
                     screenshotData ? (
@@ -1206,11 +1224,12 @@ function Computers() {
                             <Image
                                 src={`data:image/jpeg;base64,${screenshotData}`}
                                 alt="Screen Capture"
-                                style={{ maxWidth: '100%', maxHeight: '600px', objectFit: 'contain' }}
+                                style={{ maxWidth: '100%', maxHeight: '600px', objectFit: 'contain', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)' }}
                             />
                             <div style={{ marginTop: 10 }}>
-                                <Text type="secondary">Captured at {new Date(screenshotTimestamp).toLocaleTimeString()}</Text>
-                                <Button type="link" icon={<ReloadOutlined />} onClick={handleScreenshotRequest}>Capture Again</Button>
+                                <Text type="secondary">
+                                    Captured at {screenshotTimestamp ? dayjs(screenshotTimestamp).format('MMM D, YYYY hh:mm:ss A') : 'Unknown'}
+                                </Text>
                             </div>
                         </>
                     ) : (

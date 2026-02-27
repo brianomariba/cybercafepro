@@ -358,14 +358,29 @@
         }
 
         @keyframes slideDown {
-            from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
-            to   { transform: translateX(-50%) translateY(0); opacity: 1; }
+            from {
+                transform: translateX(-50%) translateY(-100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(-50%) translateY(0);
+                opacity: 1;
+            }
         }
 
         @keyframes pulse-ring {
-            0%   { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
-            70%  { box-shadow: 0 0 0 12px rgba(255, 255, 255, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+            0% {
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 12px rgba(255, 255, 255, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+            }
         }
     </style>
 </head>
@@ -462,6 +477,29 @@
     <script>
         const { ipcRenderer } = require('electron');
 
+        // Ensure input focus works on initial load (after restart/auto-launch)
+        document.addEventListener('DOMContentLoaded', () => {
+            const tryFocus = () => {
+                const inp = document.getElementById('username');
+                if (inp) { inp.focus(); inp.click(); }
+            };
+            setTimeout(tryFocus, 300);
+            setTimeout(tryFocus, 1000);
+            setTimeout(tryFocus, 3000);
+        });
+
+        // Click anywhere on lock screen to focus the username input
+        document.addEventListener('click', (e) => {
+            const lockScreen = document.getElementById('lock-screen');
+            if (lockScreen && lockScreen.classList.contains('active')) {
+                const inp = document.getElementById('username');
+                // Only auto-focus if click wasn't on another input or button
+                if (inp && e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                    inp.focus();
+                }
+            }
+        });
+
 
         // --- LOGIN FLOW ---
         const loginForm = document.getElementById('loginForm');
@@ -543,7 +581,20 @@
             document.getElementById('widget-screen').classList.remove('active');
             document.getElementById('lock-screen').classList.add('active');
             document.getElementById('password').value = '';
-            document.getElementById('username').focus();
+            document.getElementById('username').value = '';
+
+            // Aggressively focus the username input - retry to handle OS focus delays
+            const focusUsername = () => {
+                const inp = document.getElementById('username');
+                if (inp) {
+                    inp.focus();
+                    inp.click();
+                }
+            };
+            focusUsername();
+            setTimeout(focusUsername, 200);
+            setTimeout(focusUsername, 500);
+            setTimeout(focusUsername, 1500);
         });
 
         // Public document upload notification (green banner)

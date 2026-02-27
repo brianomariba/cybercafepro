@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty, Statistic, Progress } from 'antd';
+import { useState, useEffect, useMemo } from 'react';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty, Statistic, Progress, DatePicker } from 'antd';
 import {
     PrinterOutlined,
     FileTextOutlined,
@@ -30,6 +30,7 @@ dayjs.extend(relativeTime);
 
 const { Text, Title } = Typography;
 const { Search } = Input;
+const { RangePicker } = DatePicker;
 
 // Format KSH
 const formatKSH = (amount) => `KSH ${Number(amount || 0).toLocaleString()}`;
@@ -45,6 +46,9 @@ function PrintManager() {
     const [filterStatus, setFilterStatus] = useState('all');
     const [filterColorType, setFilterColorType] = useState('all');
     const [searchText, setSearchText] = useState('');
+    const [dateRange, setDateRange] = useState(null);
+    const [filterPrinter, setFilterPrinter] = useState('all');
+    const [filterComputer, setFilterComputer] = useState('all');
     const [loading, setLoading] = useState(false);
     const [lastUpdated, setLastUpdated] = useState(new Date());
     const [totals, setTotals] = useState({
@@ -147,14 +151,23 @@ function PrintManager() {
         return '#b0b0c0';
     };
 
-    const filteredJobs = printJobs.filter(job => {
+    const uniquePrinters = useMemo(() => [...new Set(printJobs.map(j => j.printerName).filter(Boolean))], [printJobs]);
+    const uniqueComputers = useMemo(() => [...new Set(printJobs.map(j => j.computer).filter(Boolean))], [printJobs]);
+
+    const filteredJobs = useMemo(() => printJobs.filter(job => {
         const matchesStatus = filterStatus === 'all' || job.status === filterStatus;
         const matchesColor = filterColorType === 'all' || job.colorType === filterColorType;
-        const matchesSearch = job.documentName.toLowerCase().includes(searchText.toLowerCase()) ||
+        const matchesSearch = !searchText || job.documentName.toLowerCase().includes(searchText.toLowerCase()) ||
             job.user.toLowerCase().includes(searchText.toLowerCase()) ||
             job.computer.toLowerCase().includes(searchText.toLowerCase());
-        return matchesStatus && matchesColor && matchesSearch;
-    });
+        const matchesPrinter = filterPrinter === 'all' || job.printerName === filterPrinter;
+        const matchesComputer = filterComputer === 'all' || job.computer === filterComputer;
+        const matchesDate = !dateRange || (
+            dayjs(job.timestamp).isAfter(dateRange[0].startOf('day')) &&
+            dayjs(job.timestamp).isBefore(dateRange[1].endOf('day'))
+        );
+        return matchesStatus && matchesColor && matchesSearch && matchesPrinter && matchesComputer && matchesDate;
+    }), [printJobs, filterStatus, filterColorType, searchText, filterPrinter, filterComputer, dateRange]);
 
     const stats = {
         totalJobs: totals.totalJobs || printJobs.length,
@@ -176,6 +189,7 @@ function PrintManager() {
             title: 'Document',
             dataIndex: 'documentName',
             key: 'documentName',
+            sorter: (a, b) => a.documentName.localeCompare(b.documentName),
             render: (name, record) => (
                 <Space>
                     <div style={{
@@ -198,6 +212,9 @@ function PrintManager() {
             title: 'Computer',
             dataIndex: 'computer',
             key: 'computer',
+            sorter: (a, b) => a.computer.localeCompare(b.computer),
+            filters: uniqueComputers.map(c => ({ text: c, value: c })),
+            onFilter: (v, r) => r.computer === v,
             render: (computer, record) => (
                 <Space>
                     <DesktopOutlined style={{ color: '#00d4ff' }} />
@@ -213,6 +230,9 @@ function PrintManager() {
             title: 'Printer',
             dataIndex: 'printerName',
             key: 'printerName',
+            sorter: (a, b) => a.printerName.localeCompare(b.printerName),
+            filters: uniquePrinters.map(p => ({ text: p, value: p })),
+            onFilter: (v, r) => r.printerName === v,
             render: (printerName) => (
                 <Space>
                     <PrinterOutlined style={{ color: '#b0b0c0' }} />
@@ -224,6 +244,8 @@ function PrintManager() {
             title: 'Type',
             dataIndex: 'colorType',
             key: 'colorType',
+            filters: [{ text: '⬛ B&W', value: 'bw' }, { text: '🎨 Color', value: 'color' }],
+            onFilter: (v, r) => r.colorType === v,
             render: (type) => (
                 <Tag color={type === 'color' ? 'magenta' : 'default'}>
                     {type === 'color' ? '🎨 Color' : '⬛ B&W'}
@@ -231,9 +253,17 @@ function PrintManager() {
             ),
         },
         {
+            title: 'Pages',
+            key: 'totalPages',
+            sorter: (a, b) => (a.pages * a.copies) - (b.pages * b.copies),
+            width: 80,
+            render: (_, r) => <Text>{r.pages * r.copies}</Text>,
+        },
+        {
             title: 'Price',
             dataIndex: 'totalPrice',
             key: 'totalPrice',
+            sorter: (a, b) => a.totalPrice - b.totalPrice,
             render: (price) => (
                 <Text style={{ fontFamily: 'JetBrains Mono', color: '#00ff88', fontWeight: 600 }}>
                     {formatKSH(price)}
@@ -244,21 +274,36 @@ function PrintManager() {
             title: 'Status',
             dataIndex: 'status',
             key: 'status',
+            filters: [
+                { text: '✅ Completed', value: 'completed' },
+                { text: '⏳ Pending', value: 'pending' },
+                { text: '🖨️ Printing', value: 'printing' },
+                { text: '❌ Failed', value: 'failed' },
+            ],
+            onFilter: (v, r) => r.status === v,
             render: (status) => getStatusTag(status),
         },
         {
-            title: 'Time',
+            title: 'Date & Time',
             dataIndex: 'timestamp',
             key: 'timestamp',
+            sorter: (a, b) => new Date(a.timestamp) - new Date(b.timestamp),
+            defaultSortOrder: 'descend',
+            width: 160,
             render: (time) => (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(time).format('HH:mm:ss')}
-                </Text>
+                <>
+                    <Text style={{ fontSize: 13 }}>{dayjs(time).format('MMM D, YYYY')}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                        {dayjs(time).format('hh:mm:ss A')} • {dayjs(time).fromNow()}
+                    </Text>
+                </>
             ),
         },
         {
             title: 'Actions',
             key: 'actions',
+            width: 70,
             render: (_, record) => (
                 <Tooltip title="View Details">
                     <Button type="text" icon={<EyeOutlined />} onClick={() => {
@@ -373,14 +418,15 @@ function PrintManager() {
                                     </Space>
                                 }
                                 extra={
-                                    <Space>
+                                    <Space wrap>
                                         <Search
                                             placeholder="Search docs, users..."
-                                            style={{ width: 250 }}
+                                            style={{ width: 200 }}
                                             value={searchText}
                                             onChange={(e) => setSearchText(e.target.value)}
                                             allowClear
                                         />
+                                        <RangePicker size="small" onChange={setDateRange} style={{ width: 220 }} />
                                         <Select
                                             value={filterStatus}
                                             onChange={setFilterStatus}
@@ -403,6 +449,25 @@ function PrintManager() {
                                                 { value: 'color', label: 'Color' },
                                             ]}
                                         />
+                                        <Select
+                                            value={filterPrinter}
+                                            onChange={setFilterPrinter}
+                                            style={{ width: 150 }}
+                                            options={[
+                                                { value: 'all', label: '🖨️ All Printers' },
+                                                ...uniquePrinters.map(p => ({ value: p, label: p }))
+                                            ]}
+                                        />
+                                        <Select
+                                            value={filterComputer}
+                                            onChange={setFilterComputer}
+                                            style={{ width: 150 }}
+                                            options={[
+                                                { value: 'all', label: '🖥️ All Computers' },
+                                                ...uniqueComputers.map(c => ({ value: c, label: c }))
+                                            ]}
+                                        />
+                                        <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Refresh</Button>
                                     </Space>
                                 }
                             >
@@ -411,8 +476,10 @@ function PrintManager() {
                                     dataSource={filteredJobs}
                                     rowKey="id"
                                     loading={loading}
-                                    pagination={{ pageSize: 8 }}
+                                    pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
                                     size="middle"
+                                    scroll={{ x: 1100 }}
+                                    showSorterTooltip
                                 />
                             </Card>
                         )

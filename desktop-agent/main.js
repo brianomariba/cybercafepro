@@ -238,12 +238,29 @@ async function createWindows() {
     enablePrintLogging(); // Ensure event logging is active for history tracking
 
     // --- SECURITY: PERSISTENT FOCUS ---
+    // Delay startup focus enforcement to allow page to fully render and inputs to initialize
+    setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed() && isLocked) {
+            mainWindow.focus();
+            mainWindow.focusOnWebView();
+            mainWindow.webContents.executeJavaScript(`
+                const inp = document.getElementById('username');
+                if (inp) { inp.focus(); inp.click(); }
+            `).catch(() => { });
+        }
+    }, 2000);
+
     setInterval(() => {
         if (!isLocked) return;
 
         windows.forEach(win => {
             if (win && !win.isDestroyed()) {
-                if (!win.isFocused()) win.focus();
+                // Only refocus window if it's not already focused — avoid stealing input focus
+                if (!win.isFocused()) {
+                    win.focus();
+                    // focusOnWebView ensures keyboard events reach the web content (input fields)
+                    win.focusOnWebView();
+                }
                 win.setAlwaysOnTop(true, 'screen-saver', 1);
                 if (win.isMinimized()) win.restore();
             }
@@ -252,7 +269,19 @@ async function createWindows() {
 
     mainWindow.webContents.on('did-finish-load', async () => {
         sendUpdateInfo();
-        if (isLocked) mainWindow.webContents.send('lock-session');
+        if (isLocked) {
+            mainWindow.webContents.send('lock-session');
+            // After a brief delay, ensure the username input is focused for keyboard input
+            setTimeout(() => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.focusOnWebView();
+                    mainWindow.webContents.executeJavaScript(`
+                        const inp = document.getElementById('username');
+                        if (inp) { inp.focus(); inp.click(); }
+                    `).catch(() => { });
+                }
+            }, 500);
+        }
     });
 }
 
@@ -513,7 +542,7 @@ ipcMain.on('refresh-portal-data', async (event, { type }) => {
 
 // Record a sale (works offline too)
 ipcMain.on('record-sale', async (event, saleData) => {
-    const { itemId, itemName, quantity, unitPrice, total, note } = saleData;
+    const { itemId, itemName, quantity, unitPrice, total, note, paymentMethod } = saleData;
 
     if (isOnline) {
         // Try to sync immediately
@@ -521,6 +550,7 @@ ipcMain.on('record-sale', async (event, saleData) => {
             const response = await axios.post(`${config.server.baseUrl}/api/v1/inventory/${itemId}/sell`, {
                 quantity,
                 reason: note,
+                paymentMethod: paymentMethod || 'cash',
                 clientId: CLIENT_ID,
                 sessionId: currentSession?.id
             }, { timeout: 10000 });
@@ -539,7 +569,7 @@ ipcMain.on('record-sale', async (event, saleData) => {
         } catch (error) {
             // If network fails, queue for later
             console.log('[Portal] Network error, queuing sale for later sync');
-            offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note });
+            offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash' });
             offlineStore.decrementLocalStock(itemId, quantity);
             event.reply('sale-result', {
                 success: true,
@@ -548,7 +578,7 @@ ipcMain.on('record-sale', async (event, saleData) => {
         }
     } else {
         // Offline mode - queue the action
-        offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note });
+        offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash' });
         offlineStore.decrementLocalStock(itemId, quantity);
         event.reply('sale-result', {
             success: true,
@@ -603,6 +633,7 @@ ipcMain.on('sync-pending-actions', async (event) => {
                     {
                         quantity: action.payload.quantity,
                         reason: `Offline sale: ${action.payload.note || ''} (synced at ${new Date().toISOString()})`,
+                        paymentMethod: action.payload.paymentMethod || 'cash',
                         clientId: CLIENT_ID
                     },
                     { timeout: 10000 }
@@ -817,6 +848,7 @@ async function autoSyncPending() {
                     {
                         quantity: action.payload.quantity,
                         reason: `Offline sale: ${action.payload.note || ''} (auto-synced)`,
+                        paymentMethod: action.payload.paymentMethod || 'cash',
                         clientId: CLIENT_ID
                     },
                     { timeout: 10000 }
@@ -1075,6 +1107,23 @@ function lockSession() {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('lock-session');
         sendUpdateInfo();
+
+        // Ensure keyboard input works by focusing the webview and input field
+        const focusInput = () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.focusOnWebView();
+                mainWindow.webContents.executeJavaScript(`
+                    const inp = document.getElementById('username');
+                    if (inp) { inp.value = ''; inp.focus(); inp.click(); }
+                    const passInp = document.getElementById('password');
+                    if (passInp) passInp.value = '';
+                `).catch(() => { });
+            }
+        };
+        // Try multiple times to ensure focus sticks after OS focus changes
+        setTimeout(focusInput, 300);
+        setTimeout(focusInput, 1000);
+        setTimeout(focusInput, 2500);
     }
 
     // Update Tray
@@ -1536,11 +1585,30 @@ async function startDataCollection() {
 function setupSocket() {
     if (!config || !config.server || !config.server.baseUrl) return;
 
-    // Connect to server
-    socket = io(config.server.baseUrl);
+    // Connect to server with increased buffer for screenshots
+    socket = io(config.server.baseUrl, {
+        reconnection: true,
+        reconnectionDelay: 2000,
+        reconnectionAttempts: Infinity,
+        timeout: 20000,
+        maxHttpBufferSize: 10e6 // 10MB for screenshots
+    });
 
     socket.on('connect', () => {
         console.log('Connected to HawkNine Socket Server');
+        socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+    });
+
+    socket.on('connect_error', (err) => {
+        console.warn('[SOCKET] Connection error:', err.message);
+    });
+
+    socket.on('disconnect', (reason) => {
+        console.log('[SOCKET] Disconnected:', reason);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+        console.log(`[SOCKET] Reconnected after ${attemptNumber} attempts`);
         socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
     });
 
@@ -1664,38 +1732,96 @@ async function handleSocketCommand(data) {
 
         case 'screenshot':
             try {
-                const screenshot = require('screenshot-desktop');
+                console.log('[SCREENSHOT] Capture requested by admin...');
+                let base64 = null;
 
-                // Add checks for screenshot module
-                if (!screenshot) throw new Error('Screenshot module not loaded');
+                // Method 1: Electron desktopCapturer (most reliable in Electron)
+                try {
+                    const { desktopCapturer } = require('electron');
+                    const sources = await desktopCapturer.getSources({
+                        types: ['screen'],
+                        thumbnailSize: { width: 1920, height: 1080 }
+                    });
 
-                console.log('[COMMAND] Capturing screenshot...');
+                    if (sources && sources.length > 0) {
+                        const primaryScreen = sources[0];
+                        const thumbnail = primaryScreen.thumbnail;
+                        if (thumbnail && !thumbnail.isEmpty()) {
+                            const jpegBuffer = thumbnail.toJPEG(80);
+                            base64 = jpegBuffer.toString('base64');
+                            console.log(`[SCREENSHOT] Captured via desktopCapturer (${base64.length} chars)`);
+                        }
+                    }
+                } catch (electronErr) {
+                    console.warn('[SCREENSHOT] desktopCapturer failed:', electronErr.message);
+                }
 
-                // Race a timeout against the screenshot promise
-                const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Screenshot capture timed out')), 5000)
-                );
+                // Method 2: screenshot-desktop fallback
+                if (!base64) {
+                    try {
+                        const screenshotDesktop = require('screenshot-desktop');
+                        const timeoutPromise = new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error('Screenshot capture timed out')), 8000)
+                        );
+                        const imgBuffer = await Promise.race([
+                            screenshotDesktop({ format: 'jpg' }),
+                            timeoutPromise
+                        ]);
+                        base64 = imgBuffer.toString('base64');
+                        console.log(`[SCREENSHOT] Captured via screenshot-desktop (${base64.length} chars)`);
+                    } catch (sdErr) {
+                        console.warn('[SCREENSHOT] screenshot-desktop failed:', sdErr.message);
+                    }
+                }
 
-                const imgBuffer = await Promise.race([
-                    screenshot({ format: 'jpg' }),
-                    timeoutPromise
-                ]);
+                if (!base64) {
+                    throw new Error('All screenshot methods failed');
+                }
 
-                const base64 = imgBuffer.toString('base64');
+                const screenshotPayload = {
+                    type: 'screenshot',
+                    clientId: CLIENT_ID,
+                    hostname: os.hostname(),
+                    screenshot: base64,
+                    timestamp: new Date().toISOString()
+                };
+
+                // Send via socket
+                let socketSent = false;
                 if (socket && socket.connected) {
-                    socket.emit('agent-response', {
-                        type: 'screenshot',
+                    try {
+                        socket.emit('agent-response', screenshotPayload);
+                        socketSent = true;
+                        console.log(`[SCREENSHOT] Sent via socket (${base64.length} chars)`);
+                    } catch (socketErr) {
+                        console.warn('[SCREENSHOT] Socket emit failed:', socketErr.message);
+                    }
+                }
+
+                // Also send via HTTP POST as reliable fallback
+                try {
+                    await axios.post(`${config.server.baseUrl}/api/v1/agent/screenshot`, {
                         clientId: CLIENT_ID,
                         hostname: os.hostname(),
                         screenshot: base64,
                         timestamp: new Date().toISOString()
+                    }, {
+                        timeout: 15000,
+                        maxContentLength: 20 * 1024 * 1024,
+                        maxBodyLength: 20 * 1024 * 1024
                     });
-                    console.log(`[COMMAND] Screenshot sent (${base64.length} bytes)`);
-                } else {
-                    console.error('[COMMAND] Screenshot taken but socket not connected');
+                    console.log('[SCREENSHOT] Sent via HTTP POST');
+                } catch (httpErr) {
+                    // HTTP fallback failed, but socket might have worked
+                    if (!socketSent) {
+                        console.error('[SCREENSHOT] Both socket and HTTP delivery failed');
+                    } else {
+                        console.log('[SCREENSHOT] HTTP fallback unavailable, but socket worked');
+                    }
                 }
+
             } catch (error) {
-                console.error('Screenshot failed:', error.message);
+                console.error('[SCREENSHOT] Failed:', error.message);
                 if (socket && socket.connected) {
                     socket.emit('agent-response', {
                         type: 'error',

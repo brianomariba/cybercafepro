@@ -2942,6 +2942,35 @@ app.post('/api/v1/admin/computers/:clientId/screenshot', requireAdminAuth, (req,
 });
 
 /**
+ * POST /api/v1/agent/screenshot
+ * Receive a screenshot from an agent (HTTP fallback for socket delivery)
+ */
+app.post('/api/v1/agent/screenshot', express.json({ limit: '20mb' }), (req, res) => {
+    try {
+        const { clientId, hostname, screenshot, timestamp } = req.body;
+
+        if (!clientId || !screenshot) {
+            return res.status(400).json({ error: 'Missing clientId or screenshot data' });
+        }
+
+        console.log(`[SCREENSHOT] Received via HTTP from ${clientId} (${hostname}), size: ${screenshot.length} chars`);
+
+        // Broadcast to admin dashboards
+        io.emit('agent-screenshot', {
+            clientId,
+            hostname,
+            screenshot,
+            timestamp: timestamp || new Date().toISOString()
+        });
+
+        res.json({ success: true, message: 'Screenshot received and broadcast' });
+    } catch (error) {
+        console.error('[SCREENSHOT] HTTP receive failed:', error);
+        res.status(500).json({ error: 'Failed to process screenshot' });
+    }
+});
+
+/**
  * GET /api/v1/admin/usb-events
  * Returns USB device connection events
  */
@@ -5126,12 +5155,79 @@ app.get('/api/v1/guides/:id/download', async (req, res) => {
 
 /**
  * GET /api/v1/inventory
- * Get all inventory items (public/user accessible)
+ * Get all inventory items - filtered by user access control
+ * If a portal/agent user is authenticated, items are filtered based on:
+ *   - hiddenFromUsers: items hidden from specific users
+ *   - visibilityMode: 'all' (default) or 'whitelist' (only allowedUsers can see)
+ *   - stockLimitForUsers: per-user stock cap (they see min(actual stock, maxVisible))
+ * Admin users see everything unfiltered.
  */
 app.get('/api/v1/inventory', async (req, res) => {
     try {
         const items = await InventoryItem.find({ isActive: true }).sort({ name: 1 });
-        res.json(items);
+
+        // Try to identify the requesting user from their auth token
+        let requestingUser = null;
+        let isAdminRequest = false;
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                // Check admin session
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    isAdminRequest = true;
+                    requestingUser = session.username;
+                } else {
+                    // Check portal user session
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        requestingUser = session.username;
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical: proceed without user context
+        }
+
+        // Admin requests get unfiltered results
+        if (isAdminRequest) {
+            return res.json(items);
+        }
+
+        // Filter items for non-admin users
+        const filteredItems = items
+            .filter(item => {
+                // Check if hidden from this user
+                if (requestingUser && item.hiddenFromUsers && item.hiddenFromUsers.includes(requestingUser)) {
+                    return false;
+                }
+                // Check whitelist mode
+                if (item.visibilityMode === 'whitelist') {
+                    if (!requestingUser || !item.allowedUsers || !item.allowedUsers.includes(requestingUser)) {
+                        return false;
+                    }
+                }
+                return true;
+            })
+            .map(item => {
+                const itemObj = item.toObject();
+                // Apply per-user stock limit
+                if (requestingUser && item.stockLimitForUsers && item.stockLimitForUsers.length > 0) {
+                    const userLimit = item.stockLimitForUsers.find(sl => sl.username === requestingUser);
+                    if (userLimit) {
+                        itemObj.stock = Math.min(item.stock, userLimit.maxVisible);
+                    }
+                }
+                // Remove access control fields from response to non-admin users
+                delete itemObj.hiddenFromUsers;
+                delete itemObj.stockLimitForUsers;
+                delete itemObj.allowedUsers;
+                delete itemObj.visibilityMode;
+                return itemObj;
+            });
+
+        res.json(filteredItems);
     } catch (error) {
         console.error('[INVENTORY] Fetch failed:', error);
         res.status(500).json({ error: 'Failed to fetch inventory' });
@@ -5261,13 +5357,46 @@ app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => 
 });
 
 /**
+ * PUT /api/v1/admin/inventory/:id/access-control
+ * Update access control settings for an inventory item
+ */
+app.put('/api/v1/admin/inventory/:id/access-control', requireAdminAuth, async (req, res) => {
+    try {
+        const { hiddenFromUsers, stockLimitForUsers, visibilityMode, allowedUsers } = req.body;
+
+        const updateData = { updatedAt: new Date() };
+        if (hiddenFromUsers !== undefined) updateData.hiddenFromUsers = hiddenFromUsers;
+        if (stockLimitForUsers !== undefined) updateData.stockLimitForUsers = stockLimitForUsers;
+        if (visibilityMode !== undefined) updateData.visibilityMode = visibilityMode;
+        if (allowedUsers !== undefined) updateData.allowedUsers = allowedUsers;
+
+        const item = await InventoryItem.findByIdAndUpdate(
+            req.params.id,
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        console.log(`[INVENTORY] Access control updated for: ${item.name}`);
+        io.emit('inventory-update', { itemId: item._id, stock: item.stock, name: item.name });
+        res.json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Access control update failed:', error);
+        res.status(500).json({ error: 'Failed to update access control' });
+    }
+});
+
+/**
  * POST /api/v1/inventory/:id/sell
  * Record a sale - decrements stock and creates a transaction record
  * Tries to identify the seller from auth token (admin or portal user)
  */
 app.post('/api/v1/inventory/:id/sell', async (req, res) => {
     try {
-        const { quantity = 1, reason, clientId } = req.body;
+        const { quantity = 1, reason, clientId, paymentMethod } = req.body;
         const item = await InventoryItem.findById(req.params.id);
 
         if (!item) {
@@ -5321,6 +5450,7 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
             quantity: quantity,
             seller: sellerName,
             reason: reason || 'Direct Sale',
+            paymentMethod: paymentMethod || 'cash',
             clientId: clientId || null,
             userId: sellerName,
             createdAt: new Date(),
