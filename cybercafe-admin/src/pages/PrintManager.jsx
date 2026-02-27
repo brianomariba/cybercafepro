@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -99,6 +99,24 @@ function PrintManager() {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleRemovePrinters = () => {
+        Modal.confirm({
+            title: 'Are you sure?',
+            icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+            content: 'This will remove all connected printer records from the system. Agents will re-report their printers automatically on the next cycle, but old disconnected printers will be cleaned up.',
+            okText: 'Yes, Clean Up',
+            okType: 'danger',
+            cancelText: 'Cancel',
+            onOk: async () => {
+                try {
+                    await removeConnectedPrinters();
+                    message.success('Printer records cleared');
+                    fetchData();
+                } catch { message.error('Failed to clear printer records'); }
+            }
+        });
     };
 
     useEffect(() => {
@@ -486,103 +504,110 @@ function PrintManager() {
                     },
                     {
                         key: 'printers',
-                        label: <span><PrinterOutlined /> Connected Printers ({totalPrintersCount})</span>,
+                        label: <span><PrinterOutlined style={{ marginRight: 6 }} /> Connected Printers ({totalPrintersCount})</span>,
                         children: (
-                            <Row gutter={[24, 24]}>
-                                {printers.length === 0 && (
-                                    <Col span={24}>
-                                        <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: 16 }}>
-                                            <PrinterOutlined style={{ fontSize: 48, color: 'rgba(255,255,255,0.2)', marginBottom: 24 }} />
-                                            <Title level={4} style={{ color: 'rgba(255,255,255,0.6)' }}>No Printers Detected</Title>
-                                            <Text type="secondary">Waiting for agents to report printer status...</Text>
-                                        </div>
-                                    </Col>
-                                )}
-                                {printers.map((client) => (
-                                    <Col xs={24} md={12} key={client.clientId}>
-                                        <Card
-                                            title={
-                                                <Space>
-                                                    <DesktopOutlined style={{ color: '#00d4ff' }} />
-                                                    <span>{client.hostname}</span>
-                                                    <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>
-                                                        {client.printers?.length || 0} printers
-                                                    </Tag>
-                                                </Space>
-                                            }
-                                            extra={<Text type="secondary" style={{ fontSize: 12 }}>Last seen: {dayjs(client.lastUpdated).fromNow()}</Text>}
-                                        >
-                                            <List
-                                                itemLayout="horizontal"
-                                                dataSource={client.printers}
-                                                renderItem={(printer) => (
-                                                    <List.Item
-                                                        actions={[
-                                                            <Button type="link" onClick={() => {
-                                                                setSelectedPrinter({ ...printer, hostname: client.hostname });
-                                                                setPrinterDetailsVisible(true);
-                                                            }}>Details</Button>
-                                                        ]}
-                                                    >
-                                                        <List.Item.Meta
-                                                            avatar={
-                                                                <div style={{
-                                                                    width: 40, height: 40, borderRadius: 8,
-                                                                    background: 'rgba(255,255,255,0.05)', display: 'flex',
-                                                                    alignItems: 'center', justifyContent: 'center',
-                                                                    fontSize: 20, color: getPrinterStatusColor(printer.status, printer.isOnline)
-                                                                }}>
-                                                                    <PrinterOutlined />
-                                                                </div>
-                                                            }
-                                                            title={
-                                                                <Space>
-                                                                    <Text strong>{printer.name}</Text>
-                                                                    {printer.isColor && <Tag color="magenta" style={{ margin: 0, fontSize: 10 }}>Color</Tag>}
-                                                                    {printer.isDefault && <Tag color="gold" style={{ margin: 0, fontSize: 10 }}>Default</Tag>}
-                                                                    {printer.isNetwork && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>Network</Tag>}
-                                                                </Space>
-                                                            }
-                                                            description={
-                                                                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                                    <Space size="small">
-                                                                        <Badge
-                                                                            status={printer.isOnline ? "success" : "error"}
-                                                                            text={<Text type="secondary" style={{ fontSize: 12 }}>{printer.status || 'Unknown'}</Text>}
-                                                                        />
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', paddingBottom: 16 }}>
+                                    <Button icon={<DeleteOutlined />} onClick={handleRemovePrinters} danger size="small">
+                                        Clear History / Remove Old Printers
+                                    </Button>
+                                </div>
+                                <Row gutter={[24, 24]}>
+                                    {printers.length === 0 && (
+                                        <Col span={24}>
+                                            <div style={{ textAlign: 'center', padding: '60px', background: 'rgba(255,255,255,0.02)', borderRadius: 16 }}>
+                                                <PrinterOutlined style={{ fontSize: 48, color: 'rgba(255,255,255,0.2)', marginBottom: 24 }} />
+                                                <Title level={4} style={{ color: 'rgba(255,255,255,0.6)' }}>No Printers Detected</Title>
+                                                <Text type="secondary">Waiting for agents to report printer status...</Text>
+                                            </div>
+                                        </Col>
+                                    )}
+                                    {printers.map((client) => (
+                                        <Col xs={24} md={12} key={client.clientId}>
+                                            <Card
+                                                title={
+                                                    <Space>
+                                                        <DesktopOutlined style={{ color: '#00d4ff' }} />
+                                                        <span>{client.hostname}</span>
+                                                        <Tag color="blue" style={{ margin: 0, fontSize: 10 }}>
+                                                            {client.printers?.length || 0} printers
+                                                        </Tag>
+                                                    </Space>
+                                                }
+                                                extra={<Text type="secondary" style={{ fontSize: 12 }}>Last seen: {dayjs(client.lastUpdated).fromNow()}</Text>}
+                                            >
+                                                <List
+                                                    itemLayout="horizontal"
+                                                    dataSource={client.printers}
+                                                    renderItem={(printer) => (
+                                                        <List.Item
+                                                            actions={[
+                                                                <Button type="link" onClick={() => {
+                                                                    setSelectedPrinter({ ...printer, hostname: client.hostname });
+                                                                    setPrinterDetailsVisible(true);
+                                                                }}>Details</Button>
+                                                            ]}
+                                                        >
+                                                            <List.Item.Meta
+                                                                avatar={
+                                                                    <div style={{
+                                                                        width: 40, height: 40, borderRadius: 8,
+                                                                        background: 'rgba(255,255,255,0.05)', display: 'flex',
+                                                                        alignItems: 'center', justifyContent: 'center',
+                                                                        fontSize: 20, color: getPrinterStatusColor(printer.status, printer.isOnline)
+                                                                    }}>
+                                                                        <PrinterOutlined />
+                                                                    </div>
+                                                                }
+                                                                title={
+                                                                    <Space>
+                                                                        <Text strong>{printer.name}</Text>
+                                                                        {printer.isColor && <Tag color="magenta" style={{ margin: 0, fontSize: 10 }}>Color</Tag>}
+                                                                        {printer.isDefault && <Tag color="gold" style={{ margin: 0, fontSize: 10 }}>Default</Tag>}
+                                                                        {printer.isNetwork && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>Network</Tag>}
                                                                     </Space>
-                                                                    <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
-                                                                    {/* Show page counters */}
-                                                                    {(printer.totalPagesPrinted > 0 || printer.totalJobsPrinted > 0) && (
-                                                                        <div style={{ display: 'flex', gap: 12, marginTop: 2 }}>
-                                                                            <Tooltip title="Lifetime pages printed (from system counters)">
-                                                                                <Text style={{ fontSize: 11, color: '#00d4ff' }}>
-                                                                                    📄 {printer.totalPagesPrinted?.toLocaleString()} pages
-                                                                                </Text>
-                                                                            </Tooltip>
-                                                                            <Tooltip title="Lifetime jobs printed (from system counters)">
-                                                                                <Text style={{ fontSize: 11, color: '#b0b0c0' }}>
-                                                                                    🖨️ {printer.totalJobsPrinted?.toLocaleString()} jobs
-                                                                                </Text>
-                                                                            </Tooltip>
-                                                                        </div>
-                                                                    )}
-                                                                    {/* Show today's B&W vs Color breakdown */}
-                                                                    {printer.todayStats && (printer.todayStats.totalPages > 0) && (
-                                                                        <div style={{ marginTop: 4 }}>
-                                                                            {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
-                                                                        </div>
-                                                                    )}
-                                                                </Space>
-                                                            }
-                                                        />
-                                                    </List.Item>
-                                                )}
-                                            />
-                                        </Card>
-                                    </Col>
-                                ))}
-                            </Row>
+                                                                }
+                                                                description={
+                                                                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                                        <Space size="small">
+                                                                            <Badge
+                                                                                status={printer.isOnline ? "success" : "error"}
+                                                                                text={<Text type="secondary" style={{ fontSize: 12 }}>{printer.status || 'Unknown'}</Text>}
+                                                                            />
+                                                                        </Space>
+                                                                        <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
+                                                                        {/* Show page counters */}
+                                                                        {(printer.totalPagesPrinted > 0 || printer.totalJobsPrinted > 0) && (
+                                                                            <div style={{ display: 'flex', gap: 12, marginTop: 2 }}>
+                                                                                <Tooltip title="Lifetime pages printed (from system counters)">
+                                                                                    <Text style={{ fontSize: 11, color: '#00d4ff' }}>
+                                                                                        📄 {printer.totalPagesPrinted?.toLocaleString()} pages
+                                                                                    </Text>
+                                                                                </Tooltip>
+                                                                                <Tooltip title="Lifetime jobs printed (from system counters)">
+                                                                                    <Text style={{ fontSize: 11, color: '#b0b0c0' }}>
+                                                                                        🖨️ {printer.totalJobsPrinted?.toLocaleString()} jobs
+                                                                                    </Text>
+                                                                                </Tooltip>
+                                                                            </div>
+                                                                        )}
+                                                                        {/* Show today's B&W vs Color breakdown */}
+                                                                        {printer.todayStats && (printer.todayStats.totalPages > 0) && (
+                                                                            <div style={{ marginTop: 4 }}>
+                                                                                {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
+                                                                            </div>
+                                                                        )}
+                                                                    </Space>
+                                                                }
+                                                            />
+                                                        </List.Item>
+                                                    )}
+                                                />
+                                            </Card>
+                                        </Col>
+                                    ))}
+                                </Row>
+                            </div>
                         )
                     }
                 ]}

@@ -8,7 +8,7 @@ import {
     FallOutlined, LineChartOutlined, FilterOutlined, DownloadOutlined, LockOutlined,
     TeamOutlined, EyeInvisibleOutlined, StopOutlined, MobileOutlined
 } from '@ant-design/icons';
-import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem, getInventorySettings, updateInventorySettings, sellInventoryItem, connectSocket, getTransactions, updateInventoryAccessControl, getPortalUsers, getAgentUsers } from '../services/api';
+import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem, getInventorySettings, updateInventorySettings, sellInventoryItem, connectSocket, getTransactions, updateInventoryAccessControl, getPortalUsers, getAgentUsers, clearAllInventory, clearSalesHistory } from '../services/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import jsPDF from 'jspdf';
@@ -135,6 +135,42 @@ function Inventory() {
             setLastSaleResult({ itemName: sellingItem.name, quantity: values.quantity, unitPrice: sellingItem.price, totalAmount: sellingItem.price * values.quantity, previousStock: result.item?.previousStock, currentStock: result.item?.currentStock, seller: result.transaction?.seller || 'admin', reason: values.reason, paymentMethod: values.paymentMethod || 'cash' });
             message.success(`Sold ${values.quantity}x ${sellingItem.name}`); fetchInventory(); fetchSalesHistory();
         } catch (error) { message.error(error.response?.data?.error || 'Sale failed'); }
+    };
+
+    const handleClearInventory = () => {
+        Modal.confirm({
+            title: 'Are you absolutely sure?',
+            icon: <WarningOutlined style={{ color: '#ff4d4f' }} />,
+            content: 'This will permanently delete ALL inventory items. This action CANNOT be undone.',
+            okText: 'Yes, Delete All',
+            okType: 'danger',
+            cancelText: 'Cancel',
+            onOk: async () => {
+                try {
+                    await clearAllInventory();
+                    message.success('All inventory items cleared');
+                    fetchInventory();
+                } catch { message.error('Failed to clear inventory'); }
+            }
+        });
+    };
+
+    const handleClearSalesHistory = () => {
+        Modal.confirm({
+            title: 'Are you absolutely sure?',
+            icon: <WarningOutlined style={{ color: '#ff4d4f' }} />,
+            content: 'This will permanently delete ALL sales history from the inventory. This action CANNOT be undone.',
+            okText: 'Yes, Clear Sales History',
+            okType: 'danger',
+            cancelText: 'Cancel',
+            onOk: async () => {
+                try {
+                    await clearSalesHistory();
+                    message.success('Sales history cleared');
+                    fetchSalesHistory();
+                } catch { message.error('Failed to clear sales history'); }
+            }
+        });
     };
 
     // Show item detail with its sales history
@@ -626,6 +662,7 @@ function Inventory() {
                                         { value: 'low', label: '⚠️ Low Stock' },
                                         { value: 'out', label: '🚫 Out of Stock' }
                                     ]} />
+                                    <Button icon={<DeleteOutlined />} onClick={handleClearInventory} size="small" danger>Clear Inventory</Button>
                                 </Space>
                             }
                         >
@@ -650,6 +687,7 @@ function Inventory() {
                                     <Button icon={<DownloadOutlined />} onClick={exportCSV} size="small">Export CSV</Button>
                                     <Button icon={<ExportOutlined />} onClick={generatePDFReport} size="small" type="primary" style={{ background: '#7B2CBF', borderColor: '#7B2CBF' }}>PDF Report</Button>
                                     <Button icon={<ReloadOutlined />} onClick={fetchSalesHistory} loading={salesLoading} size="small">Refresh</Button>
+                                    <Button icon={<DeleteOutlined />} onClick={handleClearSalesHistory} size="small" danger>Clear Sales</Button>
                                 </Space>}>
                                 <Table columns={salesColumns} dataSource={filteredSales} rowKey={r => r._id || r.id} loading={salesLoading} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 900 }} locale={{ emptyText: 'No sales found' }} />
                             </Card>

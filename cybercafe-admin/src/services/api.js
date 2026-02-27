@@ -578,6 +578,9 @@ export const getLowStockItems = async () => (await api.get('/admin/inventory/low
 export const getInventoryStats = async () => (await api.get('/admin/inventory/stats')).data;
 export const sellInventoryItem = async (id, data) => (await api.post(`/inventory/${id}/sell`, data)).data;
 export const updateInventoryAccessControl = async (id, data) => (await api.put(`/admin/inventory/${id}/access-control`, data)).data;
+export const clearAllInventory = async () => (await api.delete('/admin/inventory/all')).data;
+export const clearSalesHistory = async () => (await api.delete('/admin/inventory/sales-history')).data;
+export const removeConnectedPrinters = async () => (await api.delete('/admin/printers/connected')).data;
 
 // ==================== USER SUBMISSIONS ====================
 export const getSubmissions = async (status, targetType) => {
@@ -677,6 +680,9 @@ export default {
     updateInventoryAccessControl,
     getInventorySettings,
     updateInventorySettings,
+    clearAllInventory,
+    clearSalesHistory,
+    removeConnectedPrinters,
 
     // Settings & Security
     getSettings,

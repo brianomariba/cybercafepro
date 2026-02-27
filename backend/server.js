@@ -5357,6 +5357,63 @@ app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => 
 });
 
 /**
+ * DELETE /api/v1/admin/inventory/all
+ * Clear all inventory items
+ */
+app.delete('/api/v1/admin/inventory/all', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await InventoryItem.deleteMany({});
+        console.log(`[INVENTORY] Admin cleared all inventory: ${result.deletedCount} items deleted`);
+        res.json({
+            success: true,
+            message: `All inventory cleared`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Clear all failed:', error);
+        res.status(500).json({ error: 'Failed to clear inventory' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/sales-history
+ * Clear all inventory sale transaction records
+ */
+app.delete('/api/v1/admin/inventory/sales-history', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await Transaction.deleteMany({ type: 'inventory-sale' });
+        console.log(`[INVENTORY] Admin cleared sales history: ${result.deletedCount} records deleted`);
+        res.json({
+            success: true,
+            message: `Sales history cleared`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Clear sales history failed:', error);
+        res.status(500).json({ error: 'Failed to clear sales history' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printers/connected
+ * Remove all connected printer records (logs of type 'printers')
+ */
+app.delete('/api/v1/admin/printers/connected', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await Log.deleteMany({ type: 'printers' });
+        console.log(`[PRINTERS] Admin removed connected printers: ${result.deletedCount} records deleted`);
+        res.json({
+            success: true,
+            message: `Connected printer records removed`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[PRINTERS] Remove connected failed:', error);
+        res.status(500).json({ error: 'Failed to remove connected printers' });
+    }
+});
+
+/**
  * PUT /api/v1/admin/inventory/:id/access-control
  * Update access control settings for an inventory item
  */
