@@ -209,34 +209,35 @@ function inferPrintQuality(documentName, driverName) {
 /**
  * Detect if the print job is color or B&W based on multiple signals.
  * 
- * Priority order:
- * 1. Per-job DEVMODE color setting (JobColor) - this is what the user actually selected
- * 2. Document name heuristics as secondary signal
- * 3. Printer capability as final fallback
+ * KEY INSIGHT: The DEVMODE dmColor field (JobColor) reflects the PRINTER DRIVER SETTING,
+ * not the actual document content. On color printers like Epson L3250, dmColor is 
+ * almost always 2 (Color) because that's the default driver setting. This does NOT mean
+ * the document actually contains color content.
  * 
- * IMPORTANT: job.Color from Get-PrintConfiguration is the PRINTER DEFAULT, not per-job.
- * job.JobColor from Win32_PrintJob DEVMODE is the ACTUAL per-job setting.
+ * Strategy:
+ * 1. If user explicitly chose Monochrome (dmColor=1) → B&W (trust user choice)
+ * 2. If printer is NOT color-capable → B&W (hardware limitation)
+ * 3. Use document type/extension/name analysis to determine actual content type
+ * 4. Default to B&W for billing safety (only tag color with positive evidence)
  */
 function detectPrintType(job) {
     const driverLower = (job.DriverName || job.printerDriver || '').toLowerCase();
     const printerNameLower = (job.PrinterName || job.printer || '').toLowerCase();
     const docNameLower = (job.DocumentName || job.document || '').toLowerCase();
 
-    // 1. Per-job DEVMODE color setting (most reliable - this is what user actually chose)
-    // Values: 1 = Monochrome/B&W, 2 = Color (from DEVMODE dmColor field)
+    // 1. If user explicitly selected Monochrome/Grayscale in print dialog → definitely B&W
+    // DEVMODE dmColor: 1 = Monochrome (user chose B&W), 2 = Color (default on color printers)
     if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown') {
         const jobColorVal = typeof job.JobColor === 'string' ? job.JobColor.toLowerCase().trim() : job.JobColor;
         if (jobColorVal === 1 || jobColorVal === '1' || jobColorVal === 'monochrome' ||
             jobColorVal === 'grayscale' || jobColorVal === 'false') {
-            return 'bw';
+            return 'bw'; // User explicitly chose B&W - trust this
         }
-        if (jobColorVal === 2 || jobColorVal === '2' || jobColorVal === 'color' || jobColorVal === 'true') {
-            return 'color';
-        }
+        // NOTE: JobColor=2 means driver is in color mode (default for color printers).
+        // This does NOT mean content is color. Fall through to content analysis.
     }
 
-    // 2. If Color field explicitly indicates monochrome/false, it's B&W
-    // NOTE: job.Color from Get-PrintConfiguration is the printer default - only trust explicit B&W indicators
+    // 2. If printer Color config is explicitly false/monochrome → B&W
     if (job.Color === false || (typeof job.Color === 'string' &&
         (job.Color.toLowerCase() === 'false' || job.Color.toLowerCase() === 'monochrome' || job.Color.toLowerCase() === 'grayscale'))) {
         return 'bw';
@@ -246,26 +247,64 @@ function detectPrintType(job) {
     const isColorPrinter = detectColorCapability(printerNameLower, driverLower);
     if (!isColorPrinter) return 'bw';
 
-    // 4. Document name heuristics
-    const bwDocIndicators = ['text', 'draft', 'invoice', 'receipt', 'contract', 'form',
-        'memo', 'report', 'spreadsheet', 'b&w', 'bw', 'black', 'mono', 'grayscale',
-        'blueprint', 'schematic', 'diagram', 'outline', 'notes', 'resume', 'cv'];
-    const bwExtensions = ['.txt', '.csv', '.log'];
+    // 4. Content-based analysis: determine if the DOCUMENT is likely color or B&W
+    // This is the primary discriminator since printer DEVMODE typically just reflects defaults
 
-    const isBWDocument = bwDocIndicators.some(kw => docNameLower.includes(kw)) ||
-        bwExtensions.some(ext => docNameLower.includes(ext));
-    if (isBWDocument) return 'bw';
+    // --- Definite B&W: document types that are almost never color ---
+    const bwDocIndicators = [
+        'text', 'draft', 'invoice', 'receipt', 'contract', 'form',
+        'memo', 'spreadsheet', 'b&w', 'bw', 'black', 'mono', 'grayscale',
+        'blueprint', 'schematic', 'outline', 'notes', 'resume', 'cv',
+        'letter', 'fax', 'statement', 'agreement', 'affidavit', 'deed',
+        'transcript', 'manuscript', 'thesis', 'essay', 'assignment', 'exam',
+        'test print', 'notepad'
+    ];
+    const bwExtensions = ['.txt', '.csv', '.log', '.rtf', '.xml', '.json', '.html', '.htm'];
 
-    const colorDocIndicators = ['color', 'photo', 'image', 'poster', 'flyer', 'banner',
-        'brochure', 'certificate', 'presentation', 'slide'];
-    const colorExtensions = ['.jpg', '.png', '.jpeg', '.bmp', '.tiff', '.gif', '.pptx', '.ppt'];
+    if (bwDocIndicators.some(kw => docNameLower.includes(kw)) ||
+        bwExtensions.some(ext => docNameLower.endsWith(ext))) {
+        return 'bw';
+    }
 
-    const isColorDocument = colorDocIndicators.some(kw => docNameLower.includes(kw)) ||
-        colorExtensions.some(ext => docNameLower.includes(ext));
-    if (isColorDocument) return 'color';
+    // --- B&W by application: standard document apps produce mostly B&W ---
+    // "Microsoft Word - document.docx" or "Print document - Word"
+    const bwAppPatterns = [
+        'microsoft word', 'word -', '- word',
+        'microsoft excel', 'excel -', '- excel',
+        'notepad', 'wordpad',
+        'adobe reader', 'adobe acrobat',  // PDFs are usually B&W text docs
+        'chrome', 'firefox', 'edge', 'brave', 'opera', // Web pages printed from browsers
+        'mozilla', 'internet explorer',
+        'libreoffice writer', 'libreoffice calc',
+        'openoffice', 'wps office',
+        '.doc', '.docx', '.xls', '.xlsx', '.pdf', '.odt', '.ods'
+    ];
 
-    // 5. If printer default is color (from Get-PrintConfiguration) AND no other signals, 
-    //    default to B&W to be safe for billing. Only tag as color when we have positive evidence.
+    if (bwAppPatterns.some(kw => docNameLower.includes(kw))) {
+        // Even from these apps, check if document name has explicit color hints
+        const hasColorHint = ['photo', 'image', 'color', 'poster', 'flyer', 'banner',
+            'brochure', 'certificate', 'glossy', 'picture', 'artwork']
+            .some(kw => docNameLower.includes(kw));
+        if (!hasColorHint) return 'bw';
+    }
+
+    // --- Definite Color: file types that are almost always color ---
+    const colorExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif',
+        '.gif', '.psd', '.ai', '.svg', '.webp', '.heic', '.raw',
+        '.pptx', '.ppt', '.key'];
+    const colorDocIndicators = ['photo', 'image', 'picture', 'poster', 'flyer', 'banner',
+        'brochure', 'certificate', 'presentation', 'slide', 'artwork',
+        'design', 'illustration', 'graphic', 'chart', 'infographic',
+        'color', 'colour', 'cover', 'catalog', 'magazine', 'comic',
+        'calendar', 'postcard', 'greeting card', 'invitation', 'label design'];
+
+    if (colorExtensions.some(ext => docNameLower.endsWith(ext)) ||
+        colorDocIndicators.some(kw => docNameLower.includes(kw))) {
+        return 'color';
+    }
+
+    // 5. Default: B&W for billing safety
+    // Most cybercafe prints are documents/assignments/forms — overwhelmingly B&W content
     return 'bw';
 }
 
