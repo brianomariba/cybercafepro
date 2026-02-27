@@ -162,6 +162,39 @@ function inferPaperSize(documentName, sizeBytes) {
 }
 
 /**
+ * Infer media/paper type from driver media type string and document name
+ */
+function inferMediaType(mediaTypeStr, documentName) {
+    const media = (mediaTypeStr || '').toLowerCase();
+    const doc = (documentName || '').toLowerCase();
+
+    // Driver-reported media types
+    if (media.includes('glossy')) return 'Glossy';
+    if (media.includes('matte')) return 'Matte';
+    if (media.includes('photo')) return 'Photo Paper';
+    if (media.includes('cardstock') || media.includes('card stock')) return 'Cardstock';
+    if (media.includes('envelope')) return 'Envelope';
+    if (media.includes('transparency') || media.includes('ohp')) return 'Transparency';
+    if (media.includes('label')) return 'Labels';
+    if (media.includes('recycled')) return 'Recycled';
+    if (media.includes('bond')) return 'Bond';
+    if (media.includes('vellum')) return 'Vellum';
+    if (media.includes('heavy') || media.includes('thick')) return 'Heavyweight';
+    if (media.includes('thin') || media.includes('light')) return 'Lightweight';
+    if (media.includes('plain')) return 'Plain Paper';
+
+    // Document name heuristics as fallback
+    if (doc.includes('glossy')) return 'Glossy';
+    if (doc.includes('matte')) return 'Matte';
+    if (doc.includes('photo')) return 'Photo Paper';
+    if (doc.includes('label')) return 'Labels';
+    if (doc.includes('envelope')) return 'Envelope';
+    if (doc.includes('card')) return 'Cardstock';
+
+    return 'Plain Paper';
+}
+
+/**
  * Get print quality from document name hints
  */
 function inferPrintQuality(documentName, driverName) {
@@ -246,26 +279,56 @@ $results = @()
 try {
     $allPrinters = Get-Printer -ErrorAction Stop
 
-    # Get per-job color info from WMI Win32_PrintJob (DEVMODE-level, per-job accuracy)
+    # Get per-job details from WMI Win32_PrintJob (DEVMODE-level, accurate pages)
     $wmiJobs = @{}
     try {
-        $wmiPrintJobs = Get-WmiObject Win32_PrintJob -ErrorAction Stop
+        $wmiPrintJobs = Get-CimInstance Win32_PrintJob -ErrorAction Stop
         foreach ($wj in $wmiPrintJobs) {
-            # Key: PrinterName + JobId
             $jobKey = "$($wj.Name)"
             $wmiJobs[$jobKey] = @{
                 Color = $wj.Color
                 Document = $wj.Document
-                PagesPrinted = $wj.PagesPrinted
-                TotalPages = $wj.TotalPages
+                PagesPrinted = [int]$wj.PagesPrinted
+                TotalPages = [int]$wj.TotalPages
+                Size = [long]$wj.Size
+                Copies = 1
             }
+            # Extract copies from NumberUp or StatusMask if possible
+            try {
+                if ($wj.Parameters -match 'Copies=(\d+)') {
+                    $wmiJobs[$jobKey].Copies = [int]$Matches[1]
+                }
+            } catch {}
         }
-    } catch {}
+    } catch {
+        # Fallback to older WMI
+        try {
+            $wmiPrintJobs = Get-WmiObject Win32_PrintJob -ErrorAction Stop
+            foreach ($wj in $wmiPrintJobs) {
+                $jobKey = "$($wj.Name)"
+                $wmiJobs[$jobKey] = @{
+                    Color = $wj.Color
+                    Document = $wj.Document
+                    PagesPrinted = [int]$wj.PagesPrinted
+                    TotalPages = [int]$wj.TotalPages
+                    Size = [long]$wj.Size
+                    Copies = 1
+                }
+            }
+        } catch {}
+    }
 
     foreach ($printer in $allPrinters) {
         $printerConfig = $null
+        $mediaType = "Plain Paper"
         try {
             $printerConfig = Get-PrintConfiguration -PrinterName $printer.Name -ErrorAction Stop
+            # Try to get media type from print configuration
+            try {
+                if ($printerConfig.MediaType) {
+                    $mediaType = [string]$printerConfig.MediaType
+                }
+            } catch {}
         } catch {}
 
         $jobs = @()
@@ -279,6 +342,9 @@ try {
             $colorMode = "Unknown"
             $jobColorMode = "Unknown"
             $collate = $false
+            $copies = 1
+            $wmiTotalPages = 0
+            $wmiPagesPrinted = 0
 
             if ($printerConfig -ne $null) {
                 $paperSize = [string]$printerConfig.PaperSize
@@ -287,15 +353,36 @@ try {
                 $collate = [bool]$printerConfig.Collate
             }
 
-            # Try to find per-job color info from WMI DEVMODE
-            # Win32_PrintJob.Name format is "PrinterName, JobId"
+            # Get accurate page count and color from WMI
             $wmiKey = "$($printer.Name), $($job.Id)"
             if ($wmiJobs.ContainsKey($wmiKey)) {
-                $wmiColor = $wmiJobs[$wmiKey].Color
+                $wmiData = $wmiJobs[$wmiKey]
+                $wmiColor = $wmiData.Color
                 if ($wmiColor -ne $null) {
-                    # DEVMODE dmColor: 1 = Monochrome, 2 = Color
                     $jobColorMode = [string]$wmiColor
                 }
+                # WMI often has more accurate page count
+                $wmiTotalPages = [int]$wmiData.TotalPages
+                $wmiPagesPrinted = [int]$wmiData.PagesPrinted
+                if ($wmiData.Copies -gt 1) { $copies = [int]$wmiData.Copies }
+            }
+
+            # Use the best available page count:
+            # Priority: WMI TotalPages > Get-PrintJob TotalPages > 1
+            $bestTotalPages = 0
+            if ($wmiTotalPages -gt 0) {
+                $bestTotalPages = $wmiTotalPages
+            } elseif ($job.TotalPages -gt 0) {
+                $bestTotalPages = [int]$job.TotalPages
+            } else {
+                $bestTotalPages = 1
+            }
+
+            $bestPagesPrinted = 0
+            if ($wmiPagesPrinted -gt 0) {
+                $bestPagesPrinted = $wmiPagesPrinted
+            } elseif ($job.PagesPrinted -gt 0) {
+                $bestPagesPrinted = [int]$job.PagesPrinted
             }
 
             $results += [PSCustomObject]@{
@@ -308,8 +395,9 @@ try {
                 PrinterLocation = $printer.Location
                 DocumentName = $job.DocumentName
                 JobStatus = [string]$job.JobStatus
-                TotalPages = $job.TotalPages
-                PagesPrinted = $job.PagesPrinted
+                TotalPages = $bestTotalPages
+                PagesPrinted = $bestPagesPrinted
+                Copies = $copies
                 Size = $job.Size
                 SubmittedTime = [string]$job.SubmittedTime
                 UserName = $job.UserName
@@ -319,6 +407,7 @@ try {
                 Color = $colorMode
                 JobColor = $jobColorMode
                 Collate = $collate
+                MediaType = $mediaType
             }
         }
     }
@@ -368,6 +457,8 @@ if ($results.Count -eq 0) {
             }
 
             const printQuality = inferPrintQuality(job.DocumentName, job.DriverName);
+            const mediaType = inferMediaType(job.MediaType, job.DocumentName);
+            const copies = job.Copies || 1;
 
             return {
                 id: job.Id,
@@ -383,10 +474,12 @@ if ($results.Count -eq 0) {
                 status: job.JobStatus || 'Spooling',
                 totalPages: job.TotalPages || 1,
                 pagesPrinted: job.PagesPrinted || 0,
+                copies: copies,
                 printType: printType,
                 isColorPrinter: isColorPrinter,
                 isColorPrint: printType === 'color',
                 paperSize: paperSize,
+                mediaType: mediaType,
                 duplexMode: duplexMode,
                 printQuality: printQuality,
                 collate: job.Collate || false,
@@ -432,7 +525,7 @@ try {
         StartTime = (Get-Date).AddHours(-${hoursBack})
     } -ErrorAction Stop
 
-    foreach ($evt in ($events | Select-Object -First 50)) {
+    foreach ($evt in ($events | Select-Object -First 100)) {
         $id = 0
         $doc = "Unknown"
         $user = "Unknown"
@@ -447,29 +540,48 @@ try {
                 $id = $userData.Param1
                 $doc = $userData.Param2
                 $user = $userData.Param3
-                $printer = $userData.Param4
-                $sizeBytes = $userData.Param6
-                $pages = $userData.Param7
+                $printer = $userData.Param5
+                $sizeBytes = $userData.Param7
+                $pages = $userData.Param8
             }
         } catch {
-            $msg = $evt.Message
-            if ($msg -match 'Document (\\d+), (.+?) owned') {
-                $id = [int]$Matches[1]
-                $doc = $Matches[2]
-            }
-            if ($msg -match 'owned by (.+?) on') { $user = $Matches[1] }
-            if ($msg -match 'printed on (.+?) through') { $printer = $Matches[1] }
-            if ($msg -match 'pages printed: (\\d+)') { $pages = [int]$Matches[1] }
+            # Fallback: try Properties array (some Windows versions use this)
+            try {
+                if ($evt.Properties -and $evt.Properties.Count -ge 8) {
+                    $id = $evt.Properties[0].Value
+                    $doc = [string]$evt.Properties[1].Value
+                    $user = [string]$evt.Properties[2].Value
+                    $printer = [string]$evt.Properties[4].Value
+                    $sizeBytes = $evt.Properties[6].Value
+                    $pages = $evt.Properties[7].Value
+                }
+            } catch {}
         }
+
+        # Fallback: parse from message text
+        if ($pages -eq 0 -or $pages -eq $null) {
+            $msg = $evt.Message
+            if ($msg) {
+                if ($msg -match '(\d+)\s+page') { $pages = [int]$Matches[1] }
+                if ($msg -match 'Size in bytes:\s*(\d+)') { $sizeBytes = [long]$Matches[1] }
+                if ($id -eq 0 -and $msg -match 'Document\s+(\d+)') { $id = [int]$Matches[1] }
+                if ($doc -eq 'Unknown' -and $msg -match 'Document\s+\d+,\s+(.+?)\s+owned') { $doc = $Matches[1] }
+                if ($user -eq 'Unknown' -and $msg -match 'owned by\s+(.+?)\s+on') { $user = $Matches[1] }
+                if ($printer -eq 'Unknown' -and $msg -match 'printed on\s+(.+?)\s+through') { $printer = $Matches[1] }
+            }
+        }
+
+        # Ensure pages is at least 1 for any completed print
+        if ([int]$pages -le 0) { $pages = 1 }
 
         $results += [PSCustomObject]@{
             TimeCreated = [string]$evt.TimeCreated
-            Id = $id
-            Document = $doc
-            User = $user
-            Printer = $printer
-            Pages = $pages
-            SizeBytes = $sizeBytes
+            Id = [int]$id
+            Document = [string]$doc
+            User = [string]$user
+            Printer = [string]$printer
+            Pages = [int]$pages
+            SizeBytes = [long]$sizeBytes
         }
     }
 } catch {
@@ -507,6 +619,9 @@ if ($results.Count -eq 0) {
                 }
             }
 
+            const pageCount = parseInt(h.Pages) || 1;
+            const mediaType = inferMediaType('', h.Document);
+
             return {
                 id: h.Id || 0,
                 jobId: h.Id ? `${h.Printer}-${h.Id}` : null,
@@ -514,11 +629,12 @@ if ($results.Count -eq 0) {
                 document: h.Document,
                 user: h.User,
                 printer: h.Printer,
-                pages: parseInt(h.Pages || 1),
-                totalPages: parseInt(h.Pages || 1),
+                pages: pageCount,
+                totalPages: pageCount,
                 sizeBytes: parseInt(h.SizeBytes || 0),
                 printType: enhancedPrintType,
                 isColorPrint: enhancedPrintType === 'color',
+                mediaType: mediaType,
                 status: 'completed'
             };
         });

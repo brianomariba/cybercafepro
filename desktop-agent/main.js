@@ -1353,10 +1353,13 @@ async function startDataCollection() {
                                     document: job.document,
                                     totalPages: job.totalPages,
                                     pagesPrinted: job.pagesPrinted,
+                                    copies: job.copies || 1,
                                     printType: job.printType, // 'bw' or 'color'
                                     paperSize: job.paperSize, // A4, Letter, etc.
+                                    mediaType: job.mediaType || 'Plain Paper', // Glossy, Matte, etc.
                                     isColorPrint: job.isColorPrint,
                                     duplexMode: job.duplexMode,
+                                    printQuality: job.printQuality || 'Normal',
                                     sizeKB: job.sizeKB,
                                     status: job.status,
                                     timestamp: job.timestamp

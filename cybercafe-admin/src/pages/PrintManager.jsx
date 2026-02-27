@@ -83,7 +83,11 @@ function PrintManager() {
                 totalPrice: job.totalPrice || job.amount || 0,
                 status: job.status || 'completed',
                 timestamp: job.timestamp || job.receivedAt || new Date().toISOString(),
-                printerName: job.printer || 'Unknown'
+                printerName: job.printer || 'Unknown',
+                mediaType: job.mediaType || job.paperType || 'Plain Paper',
+                paperSize: job.paperSize || 'A4',
+                duplexMode: job.duplexMode || 'Single-sided',
+                printQuality: job.printQuality || 'Normal',
             })));
 
             if (jobsData.totals) {
@@ -274,8 +278,36 @@ function PrintManager() {
             title: 'Pages',
             key: 'totalPages',
             sorter: (a, b) => (a.pages * a.copies) - (b.pages * b.copies),
-            width: 80,
-            render: (_, r) => <Text>{r.pages * r.copies}</Text>,
+            width: 90,
+            render: (_, r) => {
+                const total = r.pages * r.copies;
+                return (
+                    <Tooltip title={`${r.pages} page${r.pages > 1 ? 's' : ''} × ${r.copies} cop${r.copies > 1 ? 'ies' : 'y'}`}>
+                        <Text strong style={{ fontSize: 14 }}>{total}</Text>
+                        {r.copies > 1 && <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>{r.pages}p × {r.copies}c</Text>}
+                    </Tooltip>
+                );
+            },
+        },
+        {
+            title: 'Paper',
+            key: 'mediaType',
+            width: 100,
+            filters: [
+                { text: 'Plain Paper', value: 'Plain Paper' },
+                { text: 'Glossy', value: 'Glossy' },
+                { text: 'Matte', value: 'Matte' },
+                { text: 'Photo Paper', value: 'Photo Paper' },
+                { text: 'Cardstock', value: 'Cardstock' },
+                { text: 'Envelope', value: 'Envelope' },
+                { text: 'Labels', value: 'Labels' },
+            ],
+            onFilter: (v, r) => (r.mediaType || 'Plain Paper') === v,
+            render: (_, r) => {
+                const mt = r.mediaType || 'Plain Paper';
+                const colorMap = { 'Glossy': 'gold', 'Matte': 'purple', 'Photo Paper': 'magenta', 'Cardstock': 'orange', 'Envelope': 'cyan', 'Labels': 'green', 'Heavyweight': 'volcano', 'Recycled': 'lime' };
+                return <Tag color={colorMap[mt] || 'default'} style={{ fontSize: 10, margin: 0 }}>{mt}</Tag>;
+            },
         },
         {
             title: 'Price',
@@ -496,7 +528,7 @@ function PrintManager() {
                                     loading={loading}
                                     pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
                                     size="middle"
-                                    scroll={{ x: 1100 }}
+                                    scroll={{ x: 1300 }}
                                     showSorterTooltip
                                 />
                             </Card>
@@ -658,6 +690,18 @@ function PrintManager() {
                                             {selectedJob.colorType === 'color' ? '🎨 Color' : '⬛ B&W'}
                                         </Tag>
                                     </div>
+                                </div>
+                            </Col>
+                            <Col span={12}>
+                                <div style={{ padding: 16, background: 'rgba(255,159,67,0.1)', borderRadius: 12 }}>
+                                    <Text type="secondary">Paper Type</Text>
+                                    <div>{selectedJob.mediaType || 'Plain Paper'}</div>
+                                </div>
+                            </Col>
+                            <Col span={12}>
+                                <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
+                                    <Text type="secondary">Paper Size</Text>
+                                    <div>{selectedJob.paperSize || 'A4'}</div>
                                 </div>
                             </Col>
                             <Col span={24}>
