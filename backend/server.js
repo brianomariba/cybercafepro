@@ -5345,26 +5345,9 @@ app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
 });
 
 /**
- * DELETE /api/v1/admin/inventory/:id
- * Delete an inventory item
- */
-app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
-    try {
-        const item = await InventoryItem.findByIdAndDelete(req.params.id);
-        if (!item) {
-            return res.status(404).json({ error: 'Item not found' });
-        }
-        console.log(`[INVENTORY] Deleted: ${item.name}`);
-        res.json({ success: true, message: 'Item deleted' });
-    } catch (error) {
-        console.error('[INVENTORY] Delete failed:', error);
-        res.status(500).json({ error: 'Failed to delete item' });
-    }
-});
-
-/**
  * DELETE /api/v1/admin/inventory/all
  * Clear all inventory items
+ * IMPORTANT: This route MUST be before /:id to avoid Express matching "all" as an id
  */
 app.delete('/api/v1/admin/inventory/all', requireAdminAuth, async (req, res) => {
     try {
@@ -5384,6 +5367,7 @@ app.delete('/api/v1/admin/inventory/all', requireAdminAuth, async (req, res) => 
 /**
  * DELETE /api/v1/admin/inventory/sales-history
  * Clear all inventory sale transaction records
+ * IMPORTANT: This route MUST be before /:id to avoid Express matching "sales-history" as an id
  */
 app.delete('/api/v1/admin/inventory/sales-history', requireAdminAuth, async (req, res) => {
     try {
@@ -5416,6 +5400,25 @@ app.delete('/api/v1/admin/printers/connected', requireAdminAuth, async (req, res
     } catch (error) {
         console.error('[PRINTERS] Remove connected failed:', error);
         res.status(500).json({ error: 'Failed to remove connected printers' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/:id
+ * Delete a single inventory item
+ * IMPORTANT: This parameterized route MUST come AFTER all specific inventory DELETE routes
+ */
+app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const item = await InventoryItem.findByIdAndDelete(req.params.id);
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+        console.log(`[INVENTORY] Deleted: ${item.name}`);
+        res.json({ success: true, message: 'Item deleted' });
+    } catch (error) {
+        console.error('[INVENTORY] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete item' });
     }
 });
 
