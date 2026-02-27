@@ -1121,25 +1121,25 @@
 
         ipcRenderer.on('sale-result', (event, result) => {
             if (result.success) {
-                alert('✅ ' + result.message);
+                showToast(result.message, 'success');
                 closeSaleModal();
                 loadAllData();
             } else {
-                alert('❌ ' + result.message);
+                showToast(result.message, 'error');
             }
         });
 
         ipcRenderer.on('sync-result', (event, result) => {
             if (result.success) {
-                alert(`✅ Synced ${result.synced} action(s)`);
+                showToast(`Synced ${result.synced} action(s)`, 'success');
                 loadAllData();
             } else {
-                alert('❌ Sync failed: ' + result.message);
+                showToast('Sync failed: ' + result.message, 'error');
             }
         });
 
         ipcRenderer.on('account-disabled', (event, data) => {
-            alert('🚫 ' + (data.message || 'Your account has been disabled by the administrator. You will be logged out.'));
+            showToast(data.message || 'Your account has been disabled by the administrator.', 'error');
         });
 
         ipcRenderer.on('submission-result', (event, result) => {
@@ -1154,7 +1154,7 @@
                 closeSubmissionModal();
                 refreshData('submissions');
             } else {
-                alert('❌ Submission failed: ' + result.message);
+                showToast('Submission failed: ' + result.message, 'error');
             }
         });
 
@@ -1163,7 +1163,7 @@
                 showToast('Submission deleted', 'success');
                 refreshData('submissions');
             } else {
-                alert('❌ Failed to delete: ' + result.message);
+                showToast('Failed to delete: ' + result.message, 'error');
             }
         });
 
@@ -1407,7 +1407,7 @@
             const fileInput = document.getElementById('subFile');
 
             if (!title || !fileInput.files[0]) {
-                alert('Please provide a title and select a file.');
+                showToast('Please provide a title and select a file.', 'error');
                 return;
             }
 
@@ -1523,7 +1523,7 @@
             qtyInput.value = qty;
 
             if (saleQuantity < 1) {
-                alert('Please enter a valid quantity');
+                showToast('Please enter a valid quantity', 'error');
                 return;
             }
 

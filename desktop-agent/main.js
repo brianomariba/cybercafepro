@@ -288,22 +288,26 @@ async function createWindows() {
         }
     }, 2000);
 
+    // Lock screen enforcement - keep windows on top and visible
+    // IMPORTANT: Use a longer interval (2s) and avoid calling focusOnWebView() 
+    // unless the window truly lost focus to another app. focusOnWebView() resets 
+    // web content focus which interrupts typing in input fields.
     setInterval(() => {
         if (!isLocked) return;
 
         windows.forEach(win => {
             if (win && !win.isDestroyed()) {
-                // Only refocus window if it's not already focused — avoid stealing input focus
-                if (!win.isFocused()) {
-                    win.focus();
-                    // focusOnWebView ensures keyboard events reach the web content (input fields)
-                    win.focusOnWebView();
-                }
                 win.setAlwaysOnTop(true, 'screen-saver', 1);
                 if (win.isMinimized()) win.restore();
+                // Only bring window back if it's not visible/focused at all
+                // Do NOT call focusOnWebView() here — it breaks keyboard input
+                if (!win.isVisible()) {
+                    win.show();
+                    win.focus();
+                }
             }
         });
-    }, 500);
+    }, 2000);
 
     mainWindow.webContents.on('did-finish-load', async () => {
         sendUpdateInfo();
