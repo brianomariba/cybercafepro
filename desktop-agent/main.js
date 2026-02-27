@@ -136,6 +136,44 @@ try {
     CLIENT_ID = os.hostname();
 }
 
+// Session Persistence — remember active sessions across restarts
+const SESSION_FILE = path.join(USER_DATA_PATH, '.active-session');
+
+function saveSessionState(username) {
+    try {
+        fs.writeFileSync(SESSION_FILE, JSON.stringify({ user: username, timestamp: new Date().toISOString() }));
+        console.log(`[SESSION] Saved active session for: ${username}`);
+    } catch (e) {
+        console.error('[SESSION] Failed to save session state:', e.message);
+    }
+}
+
+function clearSessionState() {
+    try {
+        if (fs.existsSync(SESSION_FILE)) {
+            fs.unlinkSync(SESSION_FILE);
+            console.log('[SESSION] Cleared saved session state');
+        }
+    } catch (e) {
+        console.error('[SESSION] Failed to clear session state:', e.message);
+    }
+}
+
+function getSavedSession() {
+    try {
+        if (fs.existsSync(SESSION_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+            if (data && data.user) {
+                console.log(`[SESSION] Found saved session for: ${data.user}`);
+                return data;
+            }
+        }
+    } catch (e) {
+        console.error('[SESSION] Failed to read saved session:', e.message);
+    }
+    return null;
+}
+
 // State
 let windows = []; // Support multiple monitors
 let tray = null;
@@ -269,6 +307,20 @@ async function createWindows() {
 
     mainWindow.webContents.on('did-finish-load', async () => {
         sendUpdateInfo();
+
+        // Check for a saved session — if found, restore it silently
+        const savedSession = getSavedSession();
+        if (savedSession && savedSession.user) {
+            console.log(`[SESSION] Restoring session for: ${savedSession.user}`);
+            await startSession(savedSession.user);
+            mainWindow.webContents.send('login-response', {
+                success: true,
+                user: savedSession.user,
+                name: savedSession.user
+            });
+            return; // Skip lock screen
+        }
+
         if (isLocked) {
             mainWindow.webContents.send('lock-session');
             // After a brief delay, ensure the username input is focused for keyboard input
@@ -449,6 +501,7 @@ ipcMain.on('login-attempt', async (event, credentials) => {
 
         if (response.data.success) {
             await startSession(credentials.username);
+            saveSessionState(credentials.username); // Persist session across restarts
             event.reply('login-response', {
                 success: true,
                 user: credentials.username,
@@ -499,6 +552,7 @@ ipcMain.on('buy-item', async (event, { itemId, quantity = 1 }) => {
 });
 
 ipcMain.on('logout-request', async () => {
+    clearSessionState(); // Clear persisted session so lock screen shows on next launch
     await endSession();
     lockSession();
 });
@@ -1083,6 +1137,7 @@ async function endSession() {
 
 function lockSession() {
     isLocked = true;
+    clearSessionState(); // Clear persisted session so lock screen shows on next launch
 
     // Close Portal Window if open
     if (portalWindow && !portalWindow.isDestroyed()) {
