@@ -5190,6 +5190,12 @@ app.get('/api/v1/inventory', async (req, res) => {
             // Non-critical: proceed without user context
         }
 
+        // Fallback: desktop agent passes username via query param or header
+        // (agent doesn't have a Bearer token, it passes the logged-in user's name)
+        if (!requestingUser && !isAdminRequest) {
+            requestingUser = req.query.username || req.headers['x-agent-user'] || null;
+        }
+
         // Admin requests get unfiltered results
         if (isAdminRequest) {
             return res.json(items);

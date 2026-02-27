@@ -842,7 +842,13 @@ async function fetchAndCacheData(type = 'all') {
 
     try {
         if (type === 'all' || type === 'inventory') {
-            const res = await axios.get(`${baseUrl}/api/v1/inventory`, { timeout: 10000 });
+            // Pass the current user's username so the backend can apply
+            // access control (hidden items, whitelist, stock limits)
+            const params = {};
+            if (currentSession && currentSession.user) {
+                params.username = currentSession.user;
+            }
+            const res = await axios.get(`${baseUrl}/api/v1/inventory`, { params, timeout: 10000 });
             offlineStore.setInventory(res.data || []);
         }
 
