@@ -313,15 +313,14 @@ async function createWindows() {
         sendUpdateInfo();
 
         // Check for a saved session — if found, restore it silently
+        // IMPORTANT: Do NOT send login-response to the lock screen — that shows the
+        // full-screen "SESSION SECURED" widget. Instead, startSession() will hide
+        // the main window and open the portal window directly.
         const savedSession = getSavedSession();
         if (savedSession && savedSession.user) {
             console.log(`[SESSION] Restoring session for: ${savedSession.user}`);
             await startSession(savedSession.user);
-            mainWindow.webContents.send('login-response', {
-                success: true,
-                user: savedSession.user,
-                name: savedSession.user
-            });
+            // Don't send login-response — portal is already open
             return; // Skip lock screen
         }
 
