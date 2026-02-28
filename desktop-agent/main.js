@@ -189,6 +189,12 @@ let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
+
+// Cache spooler page counts for merging with Event Log 307
+// Some drivers (e.g. EPSON) report Pages=1 in Event Log 307 regardless of actual pages.
+// The spooler queue gets page counts from the APPLICATION layer (Word, PDF reader, etc.),
+// which is always accurate. We cache these and merge when Event Log 307 confirms completion.
+let spoolerPageCache = new Map(); // jobKey -> { totalPages, copies, document, printer, ... }
 let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
 const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
@@ -1336,12 +1342,41 @@ async function startDataCollection() {
                 } catch (e) { }
             }
 
-            // Print Jobs - just count active jobs in spooler for heartbeat display
-            // (NO logging from spooler — Event Log 307 is the ONLY source for print data)
+            // Print Jobs - cache spooler data for accurate page counts
+            // The spooler gets pages from the APPLICATION (Word, PDF, etc.) — always accurate.
+            // We don't LOG from here — Event Log 307 is the single trigger for logging.
+            // But we CACHE the data so Event Log 307 can use the correct page count.
             let activeJobCount = 0;
             try {
                 const spoolerJobs = await getRecentPrintJobs();
                 activeJobCount = spoolerJobs.length;
+
+                // Cache each job's page data for later merge with Event Log 307
+                for (const job of spoolerJobs) {
+                    if (job.jobId && job.totalPages > 0) {
+                        spoolerPageCache.set(job.jobId, {
+                            totalPages: job.totalPages,
+                            copies: job.copies || 1,
+                            totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
+                            document: job.document,
+                            printer: job.printer,
+                            paperSize: job.paperSize,
+                            mediaType: job.mediaType,
+                            duplexMode: job.duplexMode,
+                            printType: job.printType,
+                            sizeKB: job.sizeKB,
+                            cachedAt: Date.now()
+                        });
+                    }
+                }
+
+                // Clean old cache entries (older than 10 minutes)
+                const cacheExpiry = Date.now() - 600000;
+                for (const [key, value] of spoolerPageCache) {
+                    if (value.cachedAt < cacheExpiry) {
+                        spoolerPageCache.delete(key);
+                    }
+                }
             } catch (e) { }
 
             // USB Devices
@@ -1663,11 +1698,11 @@ async function startDataCollection() {
         }
     }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
-    // ===== FAST PRINT JOB CAPTURE via Event Log 307 (every 15 seconds) =====
-    // This is the PRIMARY source for accurate real-time print data.
-    // Event 307 records the ACTUAL page count after the job completes.
-    // The spooler queue (getRecentPrintJobs in the heartbeat) often misses jobs
-    // or shows wrong page counts because jobs complete too fast.
+    // ===== PRINT JOB CAPTURE via Event Log 307 (every 15 seconds) =====
+    // Event Log 307 is the SINGLE trigger for logging print jobs.
+    // It confirms a job actually completed (not just spooled).
+    // Page counts are MERGED with spooler cache because some drivers
+    // (e.g. EPSON inkjet) report Pages=1 in Event Log regardless of actual pages.
     setInterval(async () => {
         if (isLocked || !currentSession) return;
 
@@ -1680,7 +1715,38 @@ async function startDataCollection() {
                 if (sentPrintJobIds.has(job.jobId)) continue;
 
                 sentPrintJobIds.add(job.jobId);
-                console.log(`[PRINT] Event Log captured: "${job.document}" - ${job.totalPages} pages x ${job.copies} copies on ${job.printer} (${job.printType}, ${job.mediaType})`);
+
+                // Merge with spooler cache for accurate page counts
+                // The spooler gets pages from the application (Word, PDF reader)
+                // which is always correct, even when Event Log 307 reports 1.
+                let bestTotalPages = job.totalPages || 1;
+                let bestCopies = job.copies || 1;
+                let bestPaperSize = job.paperSize;
+                let bestMediaType = job.mediaType || 'Plain Paper';
+                let bestDuplexMode = job.duplexMode;
+                let bestPrintType = job.printType;
+                let bestSizeKB = job.sizeKB;
+
+                const cached = spoolerPageCache.get(job.jobId);
+                if (cached) {
+                    // Use the HIGHER page count (spooler is usually more accurate)
+                    if (cached.totalPages > bestTotalPages) {
+                        bestTotalPages = cached.totalPages;
+                        console.log(`[PRINT] Corrected pages from spooler cache: ${job.totalPages} -> ${bestTotalPages}`);
+                    }
+                    if (cached.copies > bestCopies) bestCopies = cached.copies;
+                    if (cached.paperSize && cached.paperSize !== 'Unknown') bestPaperSize = cached.paperSize;
+                    if (cached.mediaType && cached.mediaType !== 'Plain Paper') bestMediaType = cached.mediaType;
+                    if (cached.duplexMode) bestDuplexMode = cached.duplexMode;
+                    if (cached.printType) bestPrintType = cached.printType;
+                    if (cached.sizeKB > bestSizeKB) bestSizeKB = cached.sizeKB;
+                    // Remove from cache after use
+                    spoolerPageCache.delete(job.jobId);
+                }
+
+                const totalSheets = computeTotalSheets(bestTotalPages, bestCopies, bestDuplexMode);
+
+                console.log(`[PRINT] Captured: "${job.document}" - ${bestTotalPages} pages x ${bestCopies} copies = ${totalSheets} sheets on ${job.printer} (${bestPrintType}, ${bestMediaType})`);
 
                 const printPayload = {
                     type: 'print',
@@ -1694,17 +1760,17 @@ async function startDataCollection() {
                         printer: job.printer,
                         printerDriver: job.printerDriver,
                         document: job.document,
-                        totalPages: job.totalPages,
-                        pagesPrinted: job.totalPages,
-                        copies: job.copies || 1,
-                        totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
-                        printType: job.printType,
-                        paperSize: job.paperSize,
-                        mediaType: job.mediaType || 'Plain Paper',
-                        isColorPrint: job.isColorPrint,
-                        duplexMode: job.duplexMode,
+                        totalPages: bestTotalPages,
+                        pagesPrinted: bestTotalPages,
+                        copies: bestCopies,
+                        totalSheets: totalSheets,
+                        printType: bestPrintType,
+                        paperSize: bestPaperSize,
+                        mediaType: bestMediaType,
+                        isColorPrint: bestPrintType === 'color',
+                        duplexMode: bestDuplexMode,
                         printQuality: job.printQuality || 'Normal',
-                        sizeKB: job.sizeKB,
+                        sizeKB: bestSizeKB,
                         status: 'Printed',
                         timestamp: job.timestamp,
                         source: 'event_log_307'
@@ -1712,9 +1778,11 @@ async function startDataCollection() {
                 };
                 sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Event Log Failed:', e.message));
 
+                // Add to session for billing
+                const mergedJob = { ...job, totalPages: bestTotalPages, copies: bestCopies, totalSheets, printType: bestPrintType };
                 if (currentSession) {
                     const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
-                    if (!exists) currentSession.printJobs.push(job);
+                    if (!exists) currentSession.printJobs.push(mergedJob);
                 }
             }
         } catch (e) {
