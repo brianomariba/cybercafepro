@@ -1336,55 +1336,12 @@ async function startDataCollection() {
                 } catch (e) { }
             }
 
-            // Print Jobs - Real-Time Logging
-            let printJobs = [];
+            // Print Jobs - just count active jobs in spooler for heartbeat display
+            // (NO logging from spooler — Event Log 307 is the ONLY source for print data)
+            let activeJobCount = 0;
             try {
-                printJobs = await getRecentPrintJobs();
-                if (printJobs.length > 0) {
-                    for (const job of printJobs) {
-                        // Check if already sent
-                        if (!sentPrintJobIds.has(job.jobId)) {
-                            sentPrintJobIds.add(job.jobId);
-
-                            // Send Real-Time Print Log with extensive details
-                            const printPayload = {
-                                type: 'print',
-                                clientId: CLIENT_ID,
-                                hostname: os.hostname(),
-                                sessionId: currentSession?.id || null,
-                                sessionUser: currentSession?.user || null,
-                                data: {
-                                    id: job.id,
-                                    jobId: job.jobId,
-                                    printer: job.printer,
-                                    printerType: job.printerType,
-                                    document: job.document,
-                                    totalPages: job.totalPages,
-                                    pagesPrinted: job.pagesPrinted,
-                                    copies: job.copies || 1,
-                                    totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
-                                    printType: job.printType, // 'bw' or 'color'
-                                    paperSize: job.paperSize, // A4, Letter, etc.
-                                    mediaType: job.mediaType || 'Plain Paper', // Glossy, Matte, etc.
-                                    isColorPrint: job.isColorPrint,
-                                    duplexMode: job.duplexMode,
-                                    printQuality: job.printQuality || 'Normal',
-                                    sizeKB: job.sizeKB,
-                                    status: job.status,
-                                    timestamp: job.timestamp,
-                                    source: job.source || 'spooler_queue'
-                                }
-                            };
-                            sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
-
-                            // Also add to session summary for billing consistency
-                            if (currentSession) {
-                                const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
-                                if (!exists) currentSession.printJobs.push(job);
-                            }
-                        }
-                    }
-                }
+                const spoolerJobs = await getRecentPrintJobs();
+                activeJobCount = spoolerJobs.length;
             } catch (e) { }
 
             // USB Devices
@@ -1451,7 +1408,7 @@ async function startDataCollection() {
                 activity: {
                     window: currentApp,
                     screenshot: screenshotBase64,
-                    printJobsActive: printJobs.length
+                    printJobsActive: activeJobCount
                 }
             };
 
@@ -1765,56 +1722,9 @@ async function startDataCollection() {
         }
     }, 15000); // Every 15 seconds
 
-    // Periodic Print History Sync (every 60 seconds)
-    // Safety net: catches any jobs missed by the fast Event Log poller
-    setInterval(async () => {
-        try {
-            // Fetch print history from the last hour
-            const history = await getPrintHistory(1);
-
-            // Filter new jobs based on ID or composite key
-            const newJobs = history.filter(job => {
-                // If we have a valid Job ID, check against sent set
-                if (job.jobId && sentPrintJobIds.has(job.jobId)) return false;
-
-                // If not in set, it's new
-                return true;
-            });
-
-            if (newJobs.length > 0) {
-                console.log(`[PRINT] Found ${newJobs.length} new/missed print jobs from History`);
-
-                for (const job of newJobs) {
-                    // Mark as sent
-                    if (job.jobId) sentPrintJobIds.add(job.jobId);
-
-                    const printPayload = {
-                        type: 'print',
-                        clientId: CLIENT_ID,
-                        hostname: os.hostname(),
-                        sessionId: currentSession?.id || null,
-                        sessionUser: currentSession?.user || null,
-                        data: {
-                            ...job,
-                            status: 'Completed (History)'
-                        }
-                    };
-
-                    // Send to server
-                    sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print History Log Failed:', e.message));
-
-                    // Also update current session if applicable
-                    if (currentSession) {
-                        // Check if job already exists in session via ID
-                        const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
-                        if (!exists) currentSession.printJobs.push(job);
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('[PRINT] History Sync failed:', e.message);
-        }
-    }, 60000);
+    // Print History Sync REMOVED — Event Log 307 is the ONLY source for print data.
+    // This eliminates duplicate entries that were caused by the same job being
+    // captured by both Event Log 307 poller AND the history sync.
 }
 
 // ==================== SERVER COMMUNICATION & SOCKETS ====================
