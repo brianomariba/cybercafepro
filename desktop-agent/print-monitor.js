@@ -1363,6 +1363,106 @@ function clearPrinterCache() {
     printerPageCounterCache = { data: null, timestamp: 0 };
 }
 
+/**
+ * LIGHTWEIGHT: Get just page counts from Win32_PrintJob.
+ * Single WMI query, very fast (<1 second). Safe to poll every 3 seconds.
+ * Returns: [{ jobKey, printer, jobId, document, totalPages, copies }]
+ */
+async function getSpoolerJobsFast() {
+    const script = `
+$results = @()
+try {
+    $jobs = Get-CimInstance Win32_PrintJob -ErrorAction Stop
+    foreach ($j in $jobs) {
+        $nameParts = $j.Name -split ', '
+        $printerName = $nameParts[0]
+        $jobId = if ($nameParts.Length -gt 1) { $nameParts[1] } else { '0' }
+        
+        $totalPages = [int]$j.TotalPages
+        $pagesPrinted = [int]$j.PagesPrinted
+        $copies = 1
+        
+        # Try to extract copies
+        try {
+            if ($j.Parameters -match 'Copies=(\\d+)') {
+                $copies = [int]$Matches[1]
+            }
+        } catch {}
+
+        $results += [PSCustomObject]@{
+            Printer = [string]$printerName
+            JobId = [string]$jobId
+            Document = [string]$j.Document
+            TotalPages = $totalPages
+            PagesPrinted = $pagesPrinted
+            Copies = $copies
+            Size = [long]$j.Size
+        }
+    }
+} catch {}
+
+if ($results.Count -eq 0) { "[]" }
+else { $results | ConvertTo-Json -Depth 2 }
+`;
+
+    try {
+        const stdout = await runPS(script, 5000);
+        if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') return [];
+
+        const parsed = JSON.parse(stdout);
+        const jobs = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+
+        return jobs.filter(j => j && j.Printer).map(j => {
+            const jobKey = generatePrintJobKey(j.Printer, j.JobId, j.Document, null);
+            return {
+                jobKey: jobKey,
+                printer: j.Printer,
+                jobId: j.JobId,
+                document: j.Document,
+                totalPages: parseInt(j.TotalPages) || 0,
+                pagesPrinted: parseInt(j.PagesPrinted) || 0,
+                copies: parseInt(j.Copies) || 1,
+                sizeBytes: parseInt(j.Size) || 0
+            };
+        });
+    } catch (e) {
+        return [];
+    }
+}
+
+/**
+ * FALLBACK: Query WMI for a specific print job's page count.
+ * Used when Event Log 307 fires but the spooler cache missed the job.
+ * The job might still be briefly registered in WMI after completion.
+ */
+async function getJobPageCount(printerName, jobId) {
+    const wmiName = `${printerName}, ${jobId}`;
+    const script = `
+try {
+    $j = Get-CimInstance Win32_PrintJob -Filter "Name='${wmiName}'" -ErrorAction Stop
+    if ($j) {
+        [PSCustomObject]@{
+            TotalPages = [int]$j.TotalPages
+            PagesPrinted = [int]$j.PagesPrinted
+            Copies = 1
+        } | ConvertTo-Json
+    } else { "{}" }
+} catch { "{}" }
+`;
+
+    try {
+        const stdout = await runPS(script, 3000);
+        if (!stdout || stdout.trim() === '' || stdout.trim() === '{}') return null;
+        const data = JSON.parse(stdout);
+        return {
+            totalPages: parseInt(data.TotalPages) || 0,
+            copies: parseInt(data.Copies) || 1
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
 module.exports = {
     getRecentPrintJobs,
     getRecentCompletedJobs,
@@ -1375,5 +1475,7 @@ module.exports = {
     detectPrintType,
     detectColorCapability,
     generatePrintJobKey,
-    computeTotalSheets
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount
 };

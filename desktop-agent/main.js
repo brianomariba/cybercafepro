@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 
 // Load Configuration
@@ -1342,41 +1342,11 @@ async function startDataCollection() {
                 } catch (e) { }
             }
 
-            // Print Jobs - cache spooler data for accurate page counts
-            // The spooler gets pages from the APPLICATION (Word, PDF, etc.) — always accurate.
-            // We don't LOG from here — Event Log 307 is the single trigger for logging.
-            // But we CACHE the data so Event Log 307 can use the correct page count.
+            // Print Jobs - count active jobs for heartbeat display only
+            // Page caching is handled by the dedicated fast spooler watcher (every 3s)
             let activeJobCount = 0;
             try {
-                const spoolerJobs = await getRecentPrintJobs();
-                activeJobCount = spoolerJobs.length;
-
-                // Cache each job's page data for later merge with Event Log 307
-                for (const job of spoolerJobs) {
-                    if (job.jobId && job.totalPages > 0) {
-                        spoolerPageCache.set(job.jobId, {
-                            totalPages: job.totalPages,
-                            copies: job.copies || 1,
-                            totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
-                            document: job.document,
-                            printer: job.printer,
-                            paperSize: job.paperSize,
-                            mediaType: job.mediaType,
-                            duplexMode: job.duplexMode,
-                            printType: job.printType,
-                            sizeKB: job.sizeKB,
-                            cachedAt: Date.now()
-                        });
-                    }
-                }
-
-                // Clean old cache entries (older than 10 minutes)
-                const cacheExpiry = Date.now() - 600000;
-                for (const [key, value] of spoolerPageCache) {
-                    if (value.cachedAt < cacheExpiry) {
-                        spoolerPageCache.delete(key);
-                    }
-                }
+                activeJobCount = spoolerPageCache.size;
             } catch (e) { }
 
             // USB Devices
@@ -1698,17 +1668,56 @@ async function startDataCollection() {
         }
     }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
-    // ===== PRINT JOB CAPTURE via Event Log 307 (every 15 seconds) =====
+    // ===== FAST SPOOLER CACHE (every 3 seconds) =====
+    // Dedicated lightweight loop that ONLY caches page counts from Win32_PrintJob.
+    // This runs much faster than the heartbeat and catches jobs that complete quickly.
+    // Uses getSpoolerJobsFast() which is a single WMI query (<1 second).
+    // Does NOT log anything — Event Log 307 is the only trigger for server logging.
+    setInterval(async () => {
+        try {
+            const jobs = await getSpoolerJobsFast();
+
+            for (const job of jobs) {
+                if (job.jobKey && job.totalPages > 0) {
+                    // Only update cache if we have better data
+                    const existing = spoolerPageCache.get(job.jobKey);
+                    if (!existing || job.totalPages >= existing.totalPages) {
+                        spoolerPageCache.set(job.jobKey, {
+                            totalPages: job.totalPages,
+                            copies: job.copies || 1,
+                            document: job.document,
+                            printer: job.printer,
+                            sizeBytes: job.sizeBytes,
+                            cachedAt: Date.now()
+                        });
+                    }
+                }
+            }
+
+            // Clean old cache entries (older than 5 minutes)
+            const cacheExpiry = Date.now() - 300000;
+            for (const [key, value] of spoolerPageCache) {
+                if (value.cachedAt < cacheExpiry) {
+                    spoolerPageCache.delete(key);
+                }
+            }
+        } catch (e) {
+            // Silently fail
+        }
+    }, 3000); // Every 3 seconds — fast enough to catch any job
+
+    // ===== PRINT JOB CAPTURE via Event Log 307 (every 10 seconds) =====
     // Event Log 307 is the SINGLE trigger for logging print jobs.
     // It confirms a job actually completed (not just spooled).
     // Page counts are MERGED with spooler cache because some drivers
     // (e.g. EPSON inkjet) report Pages=1 in Event Log regardless of actual pages.
+    // FALLBACK: if cache miss and pages<=1, does one last WMI query for the job.
     setInterval(async () => {
         if (isLocked || !currentSession) return;
 
         try {
-            // Get jobs completed in the last 20 seconds (overlap for safety)
-            const completedJobs = await getRecentCompletedJobs(20);
+            // Get jobs completed in the last 30 seconds (wide overlap for safety)
+            const completedJobs = await getRecentCompletedJobs(30);
 
             for (const job of completedJobs) {
                 if (!job.jobId) continue;
@@ -1716,9 +1725,7 @@ async function startDataCollection() {
 
                 sentPrintJobIds.add(job.jobId);
 
-                // Merge with spooler cache for accurate page counts
-                // The spooler gets pages from the application (Word, PDF reader)
-                // which is always correct, even when Event Log 307 reports 1.
+                // === MERGE: Get best page count from all available sources ===
                 let bestTotalPages = job.totalPages || 1;
                 let bestCopies = job.copies || 1;
                 let bestPaperSize = job.paperSize;
@@ -1727,21 +1734,27 @@ async function startDataCollection() {
                 let bestPrintType = job.printType;
                 let bestSizeKB = job.sizeKB;
 
+                // Source 1: Spooler cache (most reliable for page count)
                 const cached = spoolerPageCache.get(job.jobId);
                 if (cached) {
-                    // Use the HIGHER page count (spooler is usually more accurate)
                     if (cached.totalPages > bestTotalPages) {
                         bestTotalPages = cached.totalPages;
-                        console.log(`[PRINT] Corrected pages from spooler cache: ${job.totalPages} -> ${bestTotalPages}`);
+                        console.log(`[PRINT] Pages corrected from spooler cache: ${job.totalPages} -> ${bestTotalPages}`);
                     }
                     if (cached.copies > bestCopies) bestCopies = cached.copies;
-                    if (cached.paperSize && cached.paperSize !== 'Unknown') bestPaperSize = cached.paperSize;
-                    if (cached.mediaType && cached.mediaType !== 'Plain Paper') bestMediaType = cached.mediaType;
-                    if (cached.duplexMode) bestDuplexMode = cached.duplexMode;
-                    if (cached.printType) bestPrintType = cached.printType;
-                    if (cached.sizeKB > bestSizeKB) bestSizeKB = cached.sizeKB;
-                    // Remove from cache after use
                     spoolerPageCache.delete(job.jobId);
+                }
+
+                // Source 2: FALLBACK — if pages still looks wrong, try direct WMI one last time
+                if (bestTotalPages <= 1) {
+                    try {
+                        const wmiData = await getJobPageCount(job.printer, job.id);
+                        if (wmiData && wmiData.totalPages > bestTotalPages) {
+                            bestTotalPages = wmiData.totalPages;
+                            console.log(`[PRINT] Pages corrected from WMI fallback: 1 -> ${bestTotalPages}`);
+                        }
+                        if (wmiData && wmiData.copies > bestCopies) bestCopies = wmiData.copies;
+                    } catch (e) { /* Job already removed from WMI */ }
                 }
 
                 const totalSheets = computeTotalSheets(bestTotalPages, bestCopies, bestDuplexMode);
@@ -1776,7 +1789,7 @@ async function startDataCollection() {
                         source: 'event_log_307'
                     }
                 };
-                sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Event Log Failed:', e.message));
+                sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
 
                 // Add to session for billing
                 const mergedJob = { ...job, totalPages: bestTotalPages, copies: bestCopies, totalSheets, printType: bestPrintType };
@@ -1788,7 +1801,7 @@ async function startDataCollection() {
         } catch (e) {
             // Silently fail — event log might not be enabled yet
         }
-    }, 15000); // Every 15 seconds
+    }, 10000); // Every 10 seconds
 
     // Print History Sync REMOVED — Event Log 307 is the ONLY source for print data.
     // This eliminates duplicate entries that were caused by the same job being
