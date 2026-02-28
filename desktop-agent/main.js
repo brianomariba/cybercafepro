@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 
 // Load Configuration
@@ -1706,8 +1706,66 @@ async function startDataCollection() {
         }
     }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
+    // ===== FAST PRINT JOB CAPTURE via Event Log 307 (every 15 seconds) =====
+    // This is the PRIMARY source for accurate real-time print data.
+    // Event 307 records the ACTUAL page count after the job completes.
+    // The spooler queue (getRecentPrintJobs in the heartbeat) often misses jobs
+    // or shows wrong page counts because jobs complete too fast.
+    setInterval(async () => {
+        if (isLocked || !currentSession) return;
+
+        try {
+            // Get jobs completed in the last 20 seconds (overlap for safety)
+            const completedJobs = await getRecentCompletedJobs(20);
+
+            for (const job of completedJobs) {
+                if (!job.jobId) continue;
+                if (sentPrintJobIds.has(job.jobId)) continue;
+
+                sentPrintJobIds.add(job.jobId);
+                console.log(`[PRINT] Event Log captured: "${job.document}" - ${job.totalPages} pages on ${job.printer} (${job.printType}, ${job.mediaType})`);
+
+                const printPayload = {
+                    type: 'print',
+                    clientId: CLIENT_ID,
+                    hostname: os.hostname(),
+                    sessionId: currentSession?.id || null,
+                    sessionUser: currentSession?.user || null,
+                    data: {
+                        id: job.id,
+                        jobId: job.jobId,
+                        printer: job.printer,
+                        printerDriver: job.printerDriver,
+                        document: job.document,
+                        totalPages: job.totalPages,
+                        pagesPrinted: job.totalPages,
+                        copies: job.copies || 1,
+                        printType: job.printType,
+                        paperSize: job.paperSize,
+                        mediaType: job.mediaType || 'Plain Paper',
+                        isColorPrint: job.isColorPrint,
+                        duplexMode: job.duplexMode,
+                        printQuality: job.printQuality || 'Normal',
+                        sizeKB: job.sizeKB,
+                        status: 'Printed',
+                        timestamp: job.timestamp,
+                        source: 'event_log_307'
+                    }
+                };
+                sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Event Log Failed:', e.message));
+
+                if (currentSession) {
+                    const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
+                    if (!exists) currentSession.printJobs.push(job);
+                }
+            }
+        } catch (e) {
+            // Silently fail — event log might not be enabled yet
+        }
+    }, 15000); // Every 15 seconds
+
     // Periodic Print History Sync (every 60 seconds)
-    // Captures completed jobs missed by real-time polling
+    // Safety net: catches any jobs missed by the fast Event Log poller
     setInterval(async () => {
         try {
             // Fetch print history from the last hour

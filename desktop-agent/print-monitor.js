@@ -538,12 +538,27 @@ if ($results.Count -eq 0) {
 
 /**
  * Enable Windows Print Service Operational Logging
- * Required for history tracking of completed jobs
+ * Required for history tracking of completed jobs.
+ * IMPORTANT: This requires admin privileges. We use PowerShell Start-Process -Verb RunAs
+ * to elevate. If the user is already an admin, this runs silently.
  */
 function enablePrintLogging() {
+    // First try without elevation (works if already running as admin)
     execFile('wevtutil', ['sl', 'Microsoft-Windows-PrintService/Operational', '/e:true'], (err) => {
         if (err) {
-            console.error('[PrintMonitor] Failed to enable print logging (may need admin):', err.message);
+            console.log('[PrintMonitor] Direct enable failed, trying with elevation...');
+            // Try with PowerShell elevation — this shows a UAC prompt if needed
+            const { exec } = require('child_process');
+            exec('powershell -NoProfile -Command "Start-Process wevtutil -ArgumentList \'sl\',\'Microsoft-Windows-PrintService/Operational\',\'/e:true\' -Verb RunAs -Wait -WindowStyle Hidden"',
+                { timeout: 15000 },
+                (err2) => {
+                    if (err2) {
+                        console.error('[PrintMonitor] Failed to enable print logging even with elevation:', err2.message);
+                    } else {
+                        console.log('[PrintMonitor] Print Service Operational logging enabled (elevated)');
+                    }
+                }
+            );
         } else {
             console.log('[PrintMonitor] Print Service Operational logging enabled');
         }
@@ -679,6 +694,189 @@ if ($results.Count -eq 0) {
         });
     } catch (e) {
         console.error('[PrintMonitor] Print History Parse Error:', e.message);
+        return [];
+    }
+}
+
+/**
+ * Get recently completed print jobs from Event Log 307 (last N seconds).
+ * This is the PRIMARY source for accurate real-time print job data.
+ * Unlike the spooler queue (Get-PrintJob), Event 307 records the ACTUAL
+ * page count after the job finishes, which is always correct.
+ *
+ * Also queries the printer's current DEVMODE for media type and paper size.
+ */
+async function getRecentCompletedJobs(secondsBack = 30) {
+    const script = `
+$results = @()
+try {
+    $events = Get-WinEvent -FilterHashtable @{
+        LogName = 'Microsoft-Windows-PrintService/Operational'
+        ID = 307
+        StartTime = (Get-Date).AddSeconds(-${secondsBack})
+    } -ErrorAction Stop
+
+    foreach ($evt in $events) {
+        $id = 0
+        $doc = "Unknown"
+        $user = "Unknown"
+        $printer = "Unknown"
+        $port = "Unknown"
+        $pages = 0
+        $sizeBytes = 0
+
+        try {
+            $xml = [xml]$evt.ToXml()
+            $ud = $xml.Event.UserData.DocumentPrinted
+            if ($ud) {
+                $id = $ud.Param1
+                $doc = $ud.Param2
+                $user = $ud.Param3
+                $printer = $ud.Param5
+                $port = $ud.Param6
+                $sizeBytes = $ud.Param7
+                $pages = $ud.Param8
+            }
+        } catch {
+            try {
+                if ($evt.Properties -and $evt.Properties.Count -ge 8) {
+                    $id = $evt.Properties[0].Value
+                    $doc = [string]$evt.Properties[1].Value
+                    $user = [string]$evt.Properties[2].Value
+                    $printer = [string]$evt.Properties[4].Value
+                    $port = [string]$evt.Properties[5].Value
+                    $sizeBytes = $evt.Properties[6].Value
+                    $pages = $evt.Properties[7].Value
+                }
+            } catch {}
+        }
+
+        # Fallback: parse from message text
+        if ($pages -eq 0 -or $pages -eq $null) {
+            $msg = $evt.Message
+            if ($msg) {
+                if ($msg -match '(\\d+)\\s+page') { $pages = [int]$Matches[1] }
+                if ($msg -match 'Size in bytes:\\s*(\\d+)') { $sizeBytes = [long]$Matches[1] }
+                if ($id -eq 0 -and $msg -match 'Document\\s+(\\d+)') { $id = [int]$Matches[1] }
+                if ($doc -eq 'Unknown' -and $msg -match 'Document\\s+\\d+,\\s+(.+?)\\s+owned') { $doc = $Matches[1] }
+                if ($user -eq 'Unknown' -and $msg -match 'owned by\\s+(.+?)\\s+on') { $user = $Matches[1] }
+                if ($printer -eq 'Unknown' -and $msg -match 'printed on\\s+(.+?)\\s+through') { $printer = $Matches[1] }
+            }
+        }
+
+        if ([int]$pages -le 0) { $pages = 1 }
+
+        # Get media type and paper size from printer configuration
+        $mediaType = "Plain Paper"
+        $paperSize = "A4"
+        $duplexMode = "OneSided"
+        $driverName = ""
+        try {
+            $pConfig = Get-PrintConfiguration -PrinterName $printer -ErrorAction Stop
+            if ($pConfig.MediaType) { $mediaType = [string]$pConfig.MediaType }
+            if ($pConfig.PaperSize) { $paperSize = [string]$pConfig.PaperSize }
+            if ($pConfig.DuplexingMode) { $duplexMode = [string]$pConfig.DuplexingMode }
+        } catch {}
+        try {
+            $pInfo = Get-Printer -Name $printer -ErrorAction Stop
+            $driverName = $pInfo.DriverName
+        } catch {}
+
+        $results += [PSCustomObject]@{
+            TimeCreated = [string]$evt.TimeCreated
+            Id = [int]$id
+            Document = [string]$doc
+            User = [string]$user
+            Printer = [string]$printer
+            Port = [string]$port
+            Pages = [int]$pages
+            SizeBytes = [long]$sizeBytes
+            MediaType = [string]$mediaType
+            PaperSize = [string]$paperSize
+            DuplexMode = [string]$duplexMode
+            DriverName = [string]$driverName
+        }
+    }
+} catch {
+    # No events or log not enabled
+}
+
+if ($results.Count -eq 0) {
+    "[]"
+} else {
+    $results | ConvertTo-Json -Depth 2
+}
+`;
+
+    const stdout = await runPS(script, 10000);
+    if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
+        return [];
+    }
+
+    try {
+        const parsed = JSON.parse(stdout);
+        const jobs = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+
+        return jobs.filter(j => j).map(j => {
+            const pageCount = parseInt(j.Pages) || 1;
+            const printType = detectPrintType({
+                PrinterName: j.Printer,
+                DocumentName: j.Document,
+                DriverName: j.DriverName || '',
+                JobColor: null,
+                Color: null
+            });
+
+            let enhancedPrintType = printType;
+            if (printerCache.has(j.Printer)) {
+                const cached = printerCache.get(j.Printer);
+                if (!cached.isColor) enhancedPrintType = 'bw';
+            }
+
+            const mediaType = inferMediaType(j.MediaType, j.Document);
+            let paperSize = j.PaperSize || 'A4';
+            if (paperSize === 'Unknown' || !paperSize) {
+                paperSize = inferPaperSize(j.Document, j.SizeBytes);
+            }
+
+            let duplexMode = 'Single-sided';
+            if (j.DuplexMode) {
+                const d = j.DuplexMode.toString().toLowerCase();
+                if (d.includes('twosided') || d.includes('duplex') || d.includes('both')) {
+                    duplexMode = 'Double-sided';
+                } else if (d.includes('longedge')) {
+                    duplexMode = 'Double-sided (Long Edge)';
+                } else if (d.includes('shortedge')) {
+                    duplexMode = 'Double-sided (Short Edge)';
+                }
+            }
+
+            return {
+                id: j.Id || 0,
+                jobId: j.Id ? `${j.Printer}-${j.Id}` : null,
+                timestamp: j.TimeCreated ? new Date(j.TimeCreated).toISOString() : new Date().toISOString(),
+                document: j.Document,
+                documentName: j.Document,
+                user: j.User,
+                printer: j.Printer,
+                printerDriver: j.DriverName || '',
+                pages: pageCount,
+                totalPages: pageCount,
+                copies: 1,
+                sizeBytes: parseInt(j.SizeBytes || 0),
+                sizeKB: Math.round((parseInt(j.SizeBytes || 0)) / 1024),
+                printType: enhancedPrintType,
+                isColorPrint: enhancedPrintType === 'color',
+                mediaType: mediaType,
+                paperSize: paperSize,
+                duplexMode: duplexMode,
+                printQuality: inferPrintQuality(j.Document, j.DriverName),
+                status: 'Printed',
+                source: 'event_log_307'
+            };
+        });
+    } catch (e) {
+        console.error('[PrintMonitor] Recent completed jobs parse error:', e.message);
         return [];
     }
 }
@@ -1043,6 +1241,7 @@ function clearPrinterCache() {
 
 module.exports = {
     getRecentPrintJobs,
+    getRecentCompletedJobs,
     getPrintHistory,
     getInstalledPrinters,
     getPrinterCapabilities,
