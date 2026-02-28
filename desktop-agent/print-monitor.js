@@ -12,6 +12,46 @@ let printerPageCounterCache = { data: null, timestamp: 0 };
 const PAGE_COUNTER_CACHE_TTL = 30000; // 30 seconds
 
 /**
+ * Generate a consistent composite key for a print job.
+ * This ensures the SAME physical print job produces the SAME key
+ * regardless of whether it's captured from spooler, event log, or history.
+ * Format: "PrinterName-JobId" (same across all sources)
+ */
+function generatePrintJobKey(printerName, jobId, documentName, timestamp) {
+    // Primary key: printer + job ID (always unique per printer per job)
+    if (printerName && jobId && jobId !== 0 && jobId !== '0') {
+        return `${printerName}-${jobId}`;
+    }
+    // Fallback: printer + document name + rough timestamp (within 60s window)
+    if (printerName && documentName) {
+        const ts = timestamp ? new Date(timestamp).getTime() : Date.now();
+        const timeBucket = Math.floor(ts / 60000); // 1-minute buckets
+        return `${printerName}-${documentName}-${timeBucket}`;
+    }
+    return null;
+}
+
+/**
+ * Compute the total number of paper sheets actually consumed.
+ * Accounts for copies and duplex (double-sided) mode.
+ */
+function computeTotalSheets(totalPages, copies, duplexMode) {
+    const pages = totalPages || 1;
+    const numCopies = copies || 1;
+    const totalPrintedPages = pages * numCopies;
+
+    // If duplex (double-sided), each sheet holds 2 pages
+    if (duplexMode && typeof duplexMode === 'string') {
+        const d = duplexMode.toLowerCase();
+        if (d.includes('double') || d.includes('twosided') || d.includes('duplex') || d.includes('both') ||
+            d.includes('longedge') || d.includes('shortedge')) {
+            return Math.ceil(totalPrintedPages / 2);
+        }
+    }
+    return totalPrintedPages;
+}
+
+/**
  * Run a PowerShell script reliably by writing to a temp .ps1 file.
  * This avoids ALL quoting/escaping issues with exec().
  */
@@ -406,15 +446,47 @@ try {
                 if ($wmiData.Copies -gt 1) { $copies = [int]$wmiData.Copies }
             }
 
-            # Use the best available page count:
-            # Priority: WMI TotalPages > Get-PrintJob TotalPages > 1
+            # CRITICAL FIX: If TotalPages is still 0, wait up to 2s for spooler to update.
+            # Multi-page docs often report 0 during initial spooling.
             $bestTotalPages = 0
             if ($wmiTotalPages -gt 0) {
                 $bestTotalPages = $wmiTotalPages
             } elseif ($job.TotalPages -gt 0) {
                 $bestTotalPages = [int]$job.TotalPages
-            } else {
-                $bestTotalPages = 1
+            }
+            
+            if ($bestTotalPages -le 0) {
+                # Wait and re-query for this specific job
+                for ($retry = 0; $retry -lt 4; $retry++) {
+                    Start-Sleep -Milliseconds 500
+                    try {
+                        $retryJob = Get-PrintJob -PrinterName $printer.Name -ID $job.Id -ErrorAction Stop
+                        if ($retryJob.TotalPages -gt 0) {
+                            $bestTotalPages = [int]$retryJob.TotalPages
+                            break
+                        }
+                    } catch { break } # Job completed already, will be captured by Event Log 307
+                    # Also re-check WMI
+                    try {
+                        $retryWmi = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiKey'" -ErrorAction Stop
+                        if ($retryWmi -and $retryWmi.TotalPages -gt 0) {
+                            $bestTotalPages = [int]$retryWmi.TotalPages
+                            if ($retryWmi.PagesPrinted -gt 0) { $wmiPagesPrinted = [int]$retryWmi.PagesPrinted }
+                            break
+                        }
+                    } catch {}
+                }
+                if ($bestTotalPages -le 0) { $bestTotalPages = 1 }
+            }
+
+            # Also try to get copies from Get-PrintJob if WMI didn't have it
+            if ($copies -le 1) {
+                try {
+                    # Some Get-PrintJob implementations expose Copies
+                    if ($job.PSObject.Properties['NumberOfCopies'] -and $job.NumberOfCopies -gt 1) {
+                        $copies = [int]$job.NumberOfCopies
+                    }
+                } catch {}
             }
 
             $bestPagesPrinted = 0
@@ -498,10 +570,15 @@ if ($results.Count -eq 0) {
             const printQuality = inferPrintQuality(job.DocumentName, job.DriverName);
             const mediaType = inferMediaType(job.MediaType, job.DocumentName);
             const copies = job.Copies || 1;
+            const totalPages = job.TotalPages || 1;
+            const totalSheets = computeTotalSheets(totalPages, copies, duplexMode);
+
+            // Use consistent job key for deduplication across all sources
+            const jobKey = generatePrintJobKey(job.PrinterName, job.Id, job.DocumentName, job.SubmittedTime);
 
             return {
                 id: job.Id,
-                jobId: `${job.PrinterName}-${job.Id}`,
+                jobId: jobKey || `${job.PrinterName}-${job.Id}`,
                 printer: job.PrinterName || 'Unknown',
                 printerType: job.PrinterType || 'Local',
                 printerDriver: job.DriverName || 'Unknown',
@@ -511,9 +588,10 @@ if ($results.Count -eq 0) {
                 document: job.DocumentName || 'Untitled',
                 documentName: job.DocumentName || 'Untitled',
                 status: job.JobStatus || 'Spooling',
-                totalPages: job.TotalPages || 1,
+                totalPages: totalPages,
                 pagesPrinted: job.PagesPrinted || 0,
                 copies: copies,
+                totalSheets: totalSheets,
                 printType: printType,
                 isColorPrinter: isColorPrinter,
                 isColorPrint: printType === 'color',
@@ -527,7 +605,8 @@ if ($results.Count -eq 0) {
                 submitted: job.SubmittedTime,
                 user: job.UserName || 'Unknown',
                 priority: job.Priority || 'Normal',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                source: 'spooler_queue'
             };
         });
     } catch (e) {
@@ -674,17 +753,24 @@ if ($results.Count -eq 0) {
             }
 
             const pageCount = parseInt(h.Pages) || 1;
+            const copies = parseInt(h.Copies) || 1;
             const mediaType = inferMediaType('', h.Document);
+            const totalSheets = computeTotalSheets(pageCount, copies, null);
+
+            // Use consistent dedup key
+            const jobKey = generatePrintJobKey(h.Printer, h.Id, h.Document, h.TimeCreated);
 
             return {
                 id: h.Id || 0,
-                jobId: h.Id ? `${h.Printer}-${h.Id}` : null,
+                jobId: jobKey || (h.Id ? `${h.Printer}-${h.Id}` : null),
                 timestamp: h.TimeCreated ? new Date(h.TimeCreated).toISOString() : new Date().toISOString(),
                 document: h.Document,
                 user: h.User,
                 printer: h.Printer,
                 pages: pageCount,
                 totalPages: pageCount,
+                copies: copies,
+                totalSheets: totalSheets,
                 sizeBytes: parseInt(h.SizeBytes || 0),
                 printType: enhancedPrintType,
                 isColorPrint: enhancedPrintType === 'color',
@@ -766,6 +852,35 @@ try {
 
         if ([int]$pages -le 0) { $pages = 1 }
 
+        # Extract copies count
+        # Event Log 307 does not directly have a copies field, so we try multiple sources:
+        $copies = 1
+        # 1. Try to parse from event message (some Windows versions include "X copy/copies")
+        try {
+            $msg2 = $evt.Message
+            if ($msg2) {
+                if ($msg2 -match '(\d+)\s+cop(?:y|ies)') {
+                    $parsedCopies = [int]$Matches[1]
+                    if ($parsedCopies -gt 0) { $copies = $parsedCopies }
+                }
+            }
+        } catch {}
+        # 2. Try WMI (job might still be registered briefly after printing)
+        if ($copies -le 1) {
+            try {
+                $wmiJobName = "$printer, $id"
+                $wmiJob = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName'" -ErrorAction Stop
+                if ($wmiJob) {
+                    try {
+                        if ($wmiJob.Parameters -match 'Copies=(\d+)') {
+                            $parsedCopies = [int]$Matches[1]
+                            if ($parsedCopies -gt 1) { $copies = $parsedCopies }
+                        }
+                    } catch {}
+                }
+            } catch {}
+        }
+
         # Get media type and paper size from printer configuration
         $mediaType = "Plain Paper"
         $paperSize = "A4"
@@ -790,6 +905,7 @@ try {
             Printer = [string]$printer
             Port = [string]$port
             Pages = [int]$pages
+            Copies = [int]$copies
             SizeBytes = [long]$sizeBytes
             MediaType = [string]$mediaType
             PaperSize = [string]$paperSize
@@ -851,9 +967,16 @@ if ($results.Count -eq 0) {
                 }
             }
 
+            // Event Log 307 stores the copies info in the Copies field we extract from PS
+            const copies = parseInt(j.Copies) || 1;
+            const totalSheets = computeTotalSheets(pageCount, copies, duplexMode);
+
+            // Use consistent dedup key
+            const jobKey = generatePrintJobKey(j.Printer, j.Id, j.Document, j.TimeCreated);
+
             return {
                 id: j.Id || 0,
-                jobId: j.Id ? `${j.Printer}-${j.Id}` : null,
+                jobId: jobKey || (j.Id ? `${j.Printer}-${j.Id}` : null),
                 timestamp: j.TimeCreated ? new Date(j.TimeCreated).toISOString() : new Date().toISOString(),
                 document: j.Document,
                 documentName: j.Document,
@@ -862,7 +985,8 @@ if ($results.Count -eq 0) {
                 printerDriver: j.DriverName || '',
                 pages: pageCount,
                 totalPages: pageCount,
-                copies: 1,
+                copies: copies,
+                totalSheets: totalSheets,
                 sizeBytes: parseInt(j.SizeBytes || 0),
                 sizeKB: Math.round((parseInt(j.SizeBytes || 0)) / 1024),
                 printType: enhancedPrintType,
@@ -1249,5 +1373,7 @@ module.exports = {
     clearPrinterCache,
     enablePrintLogging,
     detectPrintType,
-    detectColorCapability
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets
 };

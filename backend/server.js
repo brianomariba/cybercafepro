@@ -2151,10 +2151,13 @@ app.post('/api/v1/agent/session', async (req, res) => {
             let printColorPages = 0;
             if (data.printJobs && data.printJobs.length > 0) {
                 for (const job of data.printJobs) {
+                    // Use totalSheets if available (accounts for copies + duplex)
+                    // Otherwise compute: totalPages * copies
+                    const pages = job.totalSheets || ((job.totalPages || job.pages || 1) * (job.copies || 1));
                     if (job.printType === 'color') {
-                        printColorPages += job.totalPages || job.pages || 1;
+                        printColorPages += pages;
                     } else {
-                        printBWPages += job.totalPages || job.pages || 1;
+                        printBWPages += pages;
                     }
                 }
             }
@@ -2304,6 +2307,54 @@ app.post('/api/v1/agent/log', async (req, res) => {
                 receivedAt: { $gte: threeMinutesAgo }
             });
             if (duplicate) {
+                return res.json({ success: true, deduplicated: true });
+            }
+        }
+
+        // Deduplicate print jobs: skip if same jobId from same client was logged recently
+        // If the new data has better page info, update the existing record instead
+        if (type === 'print' && enhancedData?.jobId) {
+            const fiveMinutesAgo = new Date(Date.now() - 300 * 1000);
+            const existingPrintJob = await Log.findOne({
+                type: 'print',
+                clientId,
+                'data.jobId': enhancedData.jobId,
+                receivedAt: { $gte: fiveMinutesAgo }
+            });
+            if (existingPrintJob) {
+                // Check if new data has better (higher) page count — update if so
+                const existingPages = existingPrintJob.data?.totalPages || 0;
+                const existingSheets = existingPrintJob.data?.totalSheets || 0;
+                const newPages = enhancedData.totalPages || 0;
+                const newSheets = enhancedData.totalSheets || 0;
+                const newCopies = enhancedData.copies || 1;
+                const existingCopies = existingPrintJob.data?.copies || 1;
+
+                if (newPages > existingPages || newSheets > existingSheets || newCopies > existingCopies) {
+                    // Update existing record with better data
+                    const updateFields = {};
+                    if (newPages > existingPages) {
+                        updateFields['data.totalPages'] = newPages;
+                        updateFields['data.pagesPrinted'] = enhancedData.pagesPrinted || newPages;
+                    }
+                    if (newCopies > existingCopies) {
+                        updateFields['data.copies'] = newCopies;
+                    }
+                    if (newSheets > existingSheets) {
+                        updateFields['data.totalSheets'] = newSheets;
+                    }
+                    // Also update source if the new source is more reliable
+                    if (enhancedData.source === 'event_log_307') {
+                        updateFields['data.source'] = 'event_log_307';
+                        updateFields['data.status'] = 'Printed';
+                    }
+
+                    await Log.findByIdAndUpdate(existingPrintJob._id, { $set: updateFields });
+                    console.log(`[PRINT DEDUP] Updated job ${enhancedData.jobId}: pages ${existingPages}->${newPages}, sheets ${existingSheets}->${newSheets}, copies ${existingCopies}->${newCopies}`);
+                    return res.json({ success: true, updated: true, id: existingPrintJob._id });
+                }
+
+                // Exact duplicate — skip
                 return res.json({ success: true, deduplicated: true });
             }
         }
@@ -2495,15 +2546,20 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
         // Filter by printType if requested (since it's inside data field)
         const finalJobs = printType ? jobs.filter(j => j.printType === printType) : jobs;
 
-        // Calculate totals (for the set being returned or the whole query?)
-        // Usually totals should be for the filtered set
+        // Calculate totals — use totalSheets (accounts for copies + duplex) when available
+        // Fall back to totalPages * copies, then totalPages alone
         const totals = {
             totalJobs: finalJobs.length,
-            bwPages: finalJobs.filter(j => j.printType === 'bw').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
-            colorPages: finalJobs.filter(j => j.printType === 'color').reduce((sum, j) => sum + (j.totalPages || j.pages || 1), 0),
+            bwPages: finalJobs.filter(j => j.printType === 'bw').reduce((sum, j) => {
+                return sum + (j.totalSheets || ((j.totalPages || j.pages || 1) * (j.copies || 1)));
+            }, 0),
+            colorPages: finalJobs.filter(j => j.printType === 'color').reduce((sum, j) => {
+                return sum + (j.totalSheets || ((j.totalPages || j.pages || 1) * (j.copies || 1)));
+            }, 0),
             bwRevenue: 0,
             colorRevenue: 0
         };
+        totals.totalPages = totals.bwPages + totals.colorPages;
         totals.bwRevenue = totals.bwPages * pricing.printBW;
         totals.colorRevenue = totals.colorPages * pricing.printColor;
         totals.totalRevenue = totals.bwRevenue + totals.colorRevenue;
@@ -2591,7 +2647,7 @@ app.get('/api/v1/admin/printers', async (req, res) => {
                 };
             }
 
-            const pages = log.data?.totalPages || log.data?.pages || 1;
+            const pages = log.data?.totalSheets || ((log.data?.totalPages || log.data?.pages || 1) * (log.data?.copies || 1));
             clientPrinterStats[key].totalPages += pages;
             clientPrinterStats[key].totalJobs += 1;
 
@@ -3057,12 +3113,12 @@ app.get('/api/v1/admin/stats', async (req, res) => {
             .filter(s => s.type === 'LOGOUT' && s.charges)
             .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
 
-        // Calculate printing revenues
+        // Calculate printing revenues (using totalSheets which accounts for copies)
         const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
             const data = j.data || {};
-            const pages = data.totalPages || data.pages || 1;
+            const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
             const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
-            return sum + (pages * rate);
+            return sum + (sheets * rate);
         }, 0);
 
         res.json({

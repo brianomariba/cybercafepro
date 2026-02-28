@@ -13,6 +13,8 @@ const LogSchema = new mongoose.Schema({
 // Compound index for common queries
 LogSchema.index({ type: 1, clientId: 1, receivedAt: -1 });
 LogSchema.index({ type: 1, sessionUser: 1, receivedAt: -1 });
+// Index for print job deduplication (fast lookup by jobId)
+LogSchema.index({ type: 1, clientId: 1, 'data.jobId': 1, receivedAt: -1 });
 
 module.exports = mongoose.model('Log', LogSchema);
 

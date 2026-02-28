@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 
 // Load Configuration
@@ -1346,7 +1346,6 @@ async function startDataCollection() {
                         if (!sentPrintJobIds.has(job.jobId)) {
                             sentPrintJobIds.add(job.jobId);
 
-                            // Send Real-Time Print Log
                             // Send Real-Time Print Log with extensive details
                             const printPayload = {
                                 type: 'print',
@@ -1363,6 +1362,7 @@ async function startDataCollection() {
                                     totalPages: job.totalPages,
                                     pagesPrinted: job.pagesPrinted,
                                     copies: job.copies || 1,
+                                    totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
                                     printType: job.printType, // 'bw' or 'color'
                                     paperSize: job.paperSize, // A4, Letter, etc.
                                     mediaType: job.mediaType || 'Plain Paper', // Glossy, Matte, etc.
@@ -1371,14 +1371,15 @@ async function startDataCollection() {
                                     printQuality: job.printQuality || 'Normal',
                                     sizeKB: job.sizeKB,
                                     status: job.status,
-                                    timestamp: job.timestamp
+                                    timestamp: job.timestamp,
+                                    source: job.source || 'spooler_queue'
                                 }
                             };
                             sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
 
                             // Also add to session summary for billing consistency
                             if (currentSession) {
-                                const exists = currentSession.printJobs.find(j => j.id === job.id);
+                                const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
                                 if (!exists) currentSession.printJobs.push(job);
                             }
                         }
@@ -1722,7 +1723,7 @@ async function startDataCollection() {
                 if (sentPrintJobIds.has(job.jobId)) continue;
 
                 sentPrintJobIds.add(job.jobId);
-                console.log(`[PRINT] Event Log captured: "${job.document}" - ${job.totalPages} pages on ${job.printer} (${job.printType}, ${job.mediaType})`);
+                console.log(`[PRINT] Event Log captured: "${job.document}" - ${job.totalPages} pages x ${job.copies} copies on ${job.printer} (${job.printType}, ${job.mediaType})`);
 
                 const printPayload = {
                     type: 'print',
@@ -1739,6 +1740,7 @@ async function startDataCollection() {
                         totalPages: job.totalPages,
                         pagesPrinted: job.totalPages,
                         copies: job.copies || 1,
+                        totalSheets: job.totalSheets || (job.totalPages * (job.copies || 1)),
                         printType: job.printType,
                         paperSize: job.paperSize,
                         mediaType: job.mediaType || 'Plain Paper',

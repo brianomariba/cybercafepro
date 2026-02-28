@@ -78,6 +78,7 @@ function PrintManager() {
                 user: job.sessionUser || job.user || 'Unknown',
                 pages: job.totalPages || job.pages || 1,
                 copies: job.copies || 1,
+                totalSheets: job.totalSheets || ((job.totalPages || job.pages || 1) * (job.copies || 1)),
                 colorType: job.printType || 'bw',
                 pricePerPage: job.pricePerPage || 0,
                 totalPrice: job.totalPrice || job.amount || 0,
@@ -195,9 +196,9 @@ function PrintManager() {
         totalJobs: totals.totalJobs || printJobs.length,
         completed: printJobs.filter(j => j.status === 'completed').length,
         pending: printJobs.filter(j => j.status === 'pending' || j.status === 'printing' || j.status === 'spooling').length,
-        totalPages: totals.totalPages || printJobs.reduce((sum, j) => sum + (j.pages * j.copies), 0),
-        bwPages: totals.bwPages || printJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.pages * j.copies), 0),
-        colorPages: totals.colorPages || printJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.pages * j.copies), 0),
+        totalPages: totals.totalPages || printJobs.reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
+        bwPages: totals.bwPages || printJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
+        colorPages: totals.colorPages || printJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
         totalRevenue: totals.totalRevenue || printJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
     };
 
@@ -280,9 +281,9 @@ function PrintManager() {
             sorter: (a, b) => (a.pages * a.copies) - (b.pages * b.copies),
             width: 90,
             render: (_, r) => {
-                const total = r.pages * r.copies;
+                const total = r.totalSheets || (r.pages * r.copies);
                 return (
-                    <Tooltip title={`${r.pages} page${r.pages > 1 ? 's' : ''} × ${r.copies} cop${r.copies > 1 ? 'ies' : 'y'}`}>
+                    <Tooltip title={`${r.pages} page${r.pages > 1 ? 's' : ''} × ${r.copies} cop${r.copies > 1 ? 'ies' : 'y'} = ${total} sheet${total > 1 ? 's' : ''}`}>
                         <Text strong style={{ fontSize: 14 }}>{total}</Text>
                         {r.copies > 1 && <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>{r.pages}p × {r.copies}c</Text>}
                     </Tooltip>
