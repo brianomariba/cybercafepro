@@ -1751,8 +1751,8 @@ async function startDataCollection() {
 
                 // Use cached data if available (accurate per-job DEVMODE),
                 // otherwise fall back to Event Log 307 data as-is
-                const totalPages = (cached && cached.totalPages > 0) ? cached.totalPages : (job.totalPages || 1);
-                const copies = (cached && cached.copies > 1) ? cached.copies : (job.copies || 1);
+                const totalPages = Math.max((cached && cached.totalPages > 0) ? cached.totalPages : 1, (job.totalPages > 0) ? job.totalPages : 1);
+                const copies = Math.max((cached && cached.copies > 1) ? cached.copies : 1, (job.copies > 1) ? job.copies : 1);
                 const paperSize = (cached && cached.paperSize) ? cached.paperSize : (job.paperSize || '');
                 const duplexMode = (cached && cached.duplexMode) ? cached.duplexMode : (job.duplexMode || '');
                 const colorMode = (cached && cached.colorMode) ? cached.colorMode : '';
