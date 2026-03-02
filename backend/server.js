@@ -2344,8 +2344,8 @@ app.post('/api/v1/agent/log', async (req, res) => {
                         updateFields['data.totalSheets'] = newSheets;
                     }
                     // Also update source if the new source is more reliable
-                    if (enhancedData.source === 'event_log_307') {
-                        updateFields['data.source'] = 'event_log_307';
+                    if (enhancedData.source === 'event_log_307' || enhancedData.source === 'realtime_watcher') {
+                        updateFields['data.source'] = enhancedData.source;
                         updateFields['data.status'] = 'Printed';
                     }
 
@@ -2520,6 +2520,8 @@ app.get('/api/v1/admin/sessions', async (req, res) => {
  */
 app.get('/api/v1/admin/print-jobs', async (req, res) => {
     try {
+        // Always fetch fresh pricing from DB (reflects admin changes immediately)
+        const currentPricing = await getPricing();
         const { limit = 100, clientId, user, printType } = req.query;
 
         const query = { type: 'print' };
@@ -2533,13 +2535,20 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
         const jobs = logs.map(l => {
             const doc = l.toObject();
             const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
+            // Calculate per-job pricing
+            const sheets = logData.totalSheets || ((logData.totalPages || logData.pages || 1) * (logData.copies || 1));
+            const isColor = logData.printType === 'color';
+            const pricePerPage = isColor ? currentPricing.printColor : currentPricing.printBW;
+            const totalPrice = sheets * pricePerPage;
             return {
                 ...logData,
                 id: doc._id,
                 clientId: doc.clientId,
                 hostname: doc.hostname,
                 sessionUser: doc.sessionUser,
-                receivedAt: doc.receivedAt
+                receivedAt: doc.receivedAt,
+                pricePerPage,
+                totalPrice
             };
         });
 
@@ -2560,8 +2569,8 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
             colorRevenue: 0
         };
         totals.totalPages = totals.bwPages + totals.colorPages;
-        totals.bwRevenue = totals.bwPages * pricing.printBW;
-        totals.colorRevenue = totals.colorPages * pricing.printColor;
+        totals.bwRevenue = totals.bwPages * currentPricing.printBW;
+        totals.colorRevenue = totals.colorPages * currentPricing.printColor;
         totals.totalRevenue = totals.bwRevenue + totals.colorRevenue;
 
         res.json({

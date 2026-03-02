@@ -202,26 +202,39 @@ function inferPaperSize(documentName, sizeBytes) {
 }
 
 /**
- * Infer media/paper type from driver media type string and document name
+ * Infer media/paper type from driver media type string and document name.
+ * Handles both human-readable names AND raw DEVMODE values from Get-PrintJob.
  */
 function inferMediaType(mediaTypeStr, documentName) {
-    const media = (mediaTypeStr || '').toLowerCase();
+    const media = (mediaTypeStr || '').toLowerCase().trim();
     const doc = (documentName || '').toLowerCase();
 
-    // Driver-reported media types
-    if (media.includes('glossy')) return 'Glossy';
-    if (media.includes('matte')) return 'Matte';
-    if (media.includes('photo')) return 'Photo Paper';
-    if (media.includes('cardstock') || media.includes('card stock')) return 'Cardstock';
-    if (media.includes('envelope')) return 'Envelope';
-    if (media.includes('transparency') || media.includes('ohp')) return 'Transparency';
-    if (media.includes('label')) return 'Labels';
-    if (media.includes('recycled')) return 'Recycled';
-    if (media.includes('bond')) return 'Bond';
-    if (media.includes('vellum')) return 'Vellum';
-    if (media.includes('heavy') || media.includes('thick')) return 'Heavyweight';
-    if (media.includes('thin') || media.includes('light')) return 'Lightweight';
-    if (media.includes('plain')) return 'Plain Paper';
+    // Skip empty/default/generic driver values (these mean "use printer default")
+    const isGenericDefault = !media || media === '0' || media === 'default' ||
+        media === 'autoselect' || media === 'auto' || media === 'stationery' ||
+        media === 'unknown' || media === 'unspecified';
+
+    if (!isGenericDefault) {
+        // Driver-reported media types
+        if (media.includes('glossy')) return 'Glossy';
+        if (media.includes('matte')) return 'Matte';
+        if (media.includes('photo')) return 'Photo Paper';
+        if (media.includes('cardstock') || media.includes('card stock')) return 'Cardstock';
+        if (media.includes('envelope')) return 'Envelope';
+        if (media.includes('transparency') || media.includes('ohp')) return 'Transparency';
+        if (media.includes('label')) return 'Labels';
+        if (media.includes('recycled')) return 'Recycled';
+        if (media.includes('bond')) return 'Bond';
+        if (media.includes('vellum')) return 'Vellum';
+        if (media.includes('heavy') || media.includes('thick')) return 'Heavyweight';
+        if (media.includes('thin') || media.includes('light')) return 'Lightweight';
+        if (media.includes('plain')) return 'Plain Paper';
+        if (media.includes('premium')) return 'Premium Paper';
+        if (media.includes('cotton')) return 'Cotton Paper';
+        if (media.includes('letterhead')) return 'Letterhead';
+        if (media.includes('colored') || media.includes('colour')) return 'Colored Paper';
+        if (media.includes('preprinted')) return 'Pre-printed';
+    }
 
     // Document name heuristics as fallback
     if (doc.includes('glossy')) return 'Glossy';
@@ -837,25 +850,24 @@ try {
             } catch {}
         }
 
-        # Fallback: parse from message text
+        # Fallback: parse from message text (fixed regex — no double escaping)
         if ($pages -eq 0 -or $pages -eq $null) {
             $msg = $evt.Message
             if ($msg) {
-                if ($msg -match '(\\d+)\\s+page') { $pages = [int]$Matches[1] }
-                if ($msg -match 'Size in bytes:\\s*(\\d+)') { $sizeBytes = [long]$Matches[1] }
-                if ($id -eq 0 -and $msg -match 'Document\\s+(\\d+)') { $id = [int]$Matches[1] }
-                if ($doc -eq 'Unknown' -and $msg -match 'Document\\s+\\d+,\\s+(.+?)\\s+owned') { $doc = $Matches[1] }
-                if ($user -eq 'Unknown' -and $msg -match 'owned by\\s+(.+?)\\s+on') { $user = $Matches[1] }
-                if ($printer -eq 'Unknown' -and $msg -match 'printed on\\s+(.+?)\\s+through') { $printer = $Matches[1] }
+                if ($msg -match '(\d+)\s+page') { $pages = [int]$Matches[1] }
+                if ($msg -match 'Size in bytes:\s*(\d+)') { $sizeBytes = [long]$Matches[1] }
+                if ($id -eq 0 -and $msg -match 'Document\s+(\d+)') { $id = [int]$Matches[1] }
+                if ($doc -eq 'Unknown' -and $msg -match 'Document\s+\d+,\s+(.+?)\s+owned') { $doc = $Matches[1] }
+                if ($user -eq 'Unknown' -and $msg -match 'owned by\s+(.+?)\s+on') { $user = $Matches[1] }
+                if ($printer -eq 'Unknown' -and $msg -match 'printed on\s+(.+?)\s+through') { $printer = $Matches[1] }
             }
         }
 
         if ([int]$pages -le 0) { $pages = 1 }
 
         # Extract copies count
-        # Event Log 307 does not directly have a copies field, so we try multiple sources:
         $copies = 1
-        # 1. Try to parse from event message (some Windows versions include "X copy/copies")
+        # 1. Try to parse from event message
         try {
             $msg2 = $evt.Message
             if ($msg2) {
@@ -865,12 +877,19 @@ try {
                 }
             }
         } catch {}
-        # 2. Try WMI (job might still be registered briefly after printing)
-        if ($copies -le 1) {
+
+        # 2. Try WMI for this specific job — get DEVMODE-level per-job settings
+        # This is KEY: per-job DEVMODE has the actual paper size, media type, and page count
+        $wmiTotalPages = 0
+        $wmiMediaType = ""
+        $wmiPaperSize = ""
+        $wmiDuplex = ""
+        if ($copies -le 1 -or $pages -le 1) {
             try {
                 $wmiJobName = "$printer, $id"
                 $wmiJob = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName'" -ErrorAction Stop
                 if ($wmiJob) {
+                    if ($wmiJob.TotalPages -gt 0) { $wmiTotalPages = [int]$wmiJob.TotalPages }
                     try {
                         if ($wmiJob.Parameters -match 'Copies=(\d+)') {
                             $parsedCopies = [int]$Matches[1]
@@ -881,21 +900,54 @@ try {
             } catch {}
         }
 
-        # Get media type and paper size from printer configuration
+        # Use WMI page count if it's higher than event log (drivers often under-report)
+        if ($wmiTotalPages -gt [int]$pages) {
+            $pages = $wmiTotalPages
+        }
+
+        # Get media type, paper size, duplex from PRINTER CONFIGURATION
+        # Then try to get per-job overrides from WMI DEVMODE
         $mediaType = "Plain Paper"
         $paperSize = "A4"
         $duplexMode = "OneSided"
         $driverName = ""
+        $colorMode = "Unknown"
         try {
             $pConfig = Get-PrintConfiguration -PrinterName $printer -ErrorAction Stop
             if ($pConfig.MediaType) { $mediaType = [string]$pConfig.MediaType }
             if ($pConfig.PaperSize) { $paperSize = [string]$pConfig.PaperSize }
             if ($pConfig.DuplexingMode) { $duplexMode = [string]$pConfig.DuplexingMode }
+            if ($pConfig.Color -ne $null) { $colorMode = [string]$pConfig.Color }
         } catch {}
         try {
             $pInfo = Get-Printer -Name $printer -ErrorAction Stop
             $driverName = $pInfo.DriverName
         } catch {}
+
+        # Try to get per-job DEVMODE paper size via PrinterProperties or recent PrintJob
+        # Win32_PrintJob.Parameters sometimes contains paper info
+        try {
+            $wmiJobName2 = "$printer, $id"
+            $wmiJob2 = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName2'" -ErrorAction Stop
+            if ($wmiJob2) {
+                # Check for paper size in Parameters string
+                $params = [string]$wmiJob2.Parameters
+                if ($params -match 'PaperSize=(\w+)') {
+                    $wmiPaperSize = $Matches[1]
+                }
+                if ($params -match 'MediaType=(\w+)') {
+                    $wmiMediaType = $Matches[1]
+                }
+                if ($params -match 'Duplex=(\w+)') {
+                    $wmiDuplex = $Matches[1]
+                }
+            }
+        } catch {}
+
+        # Apply per-job overrides if available
+        if ($wmiPaperSize -ne '') { $paperSize = $wmiPaperSize }
+        if ($wmiMediaType -ne '') { $mediaType = $wmiMediaType }
+        if ($wmiDuplex -ne '') { $duplexMode = $wmiDuplex }
 
         $results += [PSCustomObject]@{
             TimeCreated = [string]$evt.TimeCreated
@@ -911,6 +963,7 @@ try {
             PaperSize = [string]$paperSize
             DuplexMode = [string]$duplexMode
             DriverName = [string]$driverName
+            ColorMode = [string]$colorMode
         }
     }
 } catch {
@@ -924,7 +977,7 @@ if ($results.Count -eq 0) {
 }
 `;
 
-    const stdout = await runPS(script, 10000);
+    const stdout = await runPS(script, 15000);
     if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
         return [];
     }
@@ -940,7 +993,7 @@ if ($results.Count -eq 0) {
                 DocumentName: j.Document,
                 DriverName: j.DriverName || '',
                 JobColor: null,
-                Color: null
+                Color: j.ColorMode || null
             });
 
             let enhancedPrintType = printType;
@@ -967,7 +1020,6 @@ if ($results.Count -eq 0) {
                 }
             }
 
-            // Event Log 307 stores the copies info in the Copies field we extract from PS
             const copies = parseInt(j.Copies) || 1;
             const totalSheets = computeTotalSheets(pageCount, copies, duplexMode);
 
@@ -1364,9 +1416,13 @@ function clearPrinterCache() {
 }
 
 /**
- * LIGHTWEIGHT: Get just page counts from Win32_PrintJob.
- * Single WMI query, very fast (<1 second). Safe to poll every 3 seconds.
- * Returns: [{ jobKey, printer, jobId, document, totalPages, copies }]
+ * ENHANCED: Get page counts AND per-job DEVMODE settings from Win32_PrintJob.
+ * This captures paper size, media type, duplex, and color mode from the
+ * ACTUAL JOB (not printer defaults). These settings are ONLY available
+ * while the job is actively in the spooler queue.
+ * 
+ * Returns: [{ jobKey, printer, jobId, document, totalPages, copies,
+ *             paperSize, mediaType, duplexMode, colorMode }]
  */
 async function getSpoolerJobsFast() {
     const script = `
@@ -1382,10 +1438,36 @@ try {
         $pagesPrinted = [int]$j.PagesPrinted
         $copies = 1
         
-        # Try to extract copies
+        # Try to extract copies from Parameters
         try {
             if ($j.Parameters -match 'Copies=(\\d+)') {
                 $copies = [int]$Matches[1]
+            }
+        } catch {}
+
+        # Per-job DEVMODE settings (paper size, media type, duplex, color)
+        # These come from the APPLICATION that submitted the print job,
+        # not from the printer defaults. This is the ONLY window to capture them.
+        $paperSize = ""
+        $mediaType = ""
+        $duplexMode = ""
+        $colorMode = ""
+        try {
+            $pj = Get-PrintJob -PrinterName $printerName -ID ([int]$jobId) -ErrorAction Stop
+            if ($pj) {
+                # PrintJob object exposes per-job DEVMODE fields
+                if ($pj.PaperSize) { $paperSize = [string]$pj.PaperSize }
+                if ($pj.MediaType) { $mediaType = [string]$pj.MediaType }
+                if ($pj.DuplexingMode) { $duplexMode = [string]$pj.DuplexingMode }
+                if ($pj.Color -ne $null) { $colorMode = [string]$pj.Color }
+                # Also try to get copies from PrintJob if not found in Parameters
+                if ($copies -le 1 -and $pj.Copies -gt 1) {
+                    $copies = [int]$pj.Copies
+                }
+                # If WMI TotalPages was 0, try Get-PrintJob's value
+                if ($totalPages -le 0 -and $pj.TotalPages -gt 0) {
+                    $totalPages = [int]$pj.TotalPages
+                }
             }
         } catch {}
 
@@ -1397,6 +1479,10 @@ try {
             PagesPrinted = $pagesPrinted
             Copies = $copies
             Size = [long]$j.Size
+            PaperSize = $paperSize
+            MediaType = $mediaType
+            DuplexMode = $duplexMode
+            ColorMode = $colorMode
         }
     }
 } catch {}
@@ -1406,7 +1492,7 @@ else { $results | ConvertTo-Json -Depth 2 }
 `;
 
     try {
-        const stdout = await runPS(script, 5000);
+        const stdout = await runPS(script, 8000);
         if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') return [];
 
         const parsed = JSON.parse(stdout);
@@ -1422,7 +1508,11 @@ else { $results | ConvertTo-Json -Depth 2 }
                 totalPages: parseInt(j.TotalPages) || 0,
                 pagesPrinted: parseInt(j.PagesPrinted) || 0,
                 copies: parseInt(j.Copies) || 1,
-                sizeBytes: parseInt(j.Size) || 0
+                sizeBytes: parseInt(j.Size) || 0,
+                paperSize: j.PaperSize || '',
+                mediaType: j.MediaType || '',
+                duplexMode: j.DuplexMode || '',
+                colorMode: j.ColorMode || ''
             };
         });
     } catch (e) {
@@ -1463,6 +1553,344 @@ try {
     }
 }
 
+/**
+ * REAL-TIME SPOOLER WATCHER
+ * 
+ * Runs a persistent PowerShell process that uses WMI event subscription
+ * to get INSTANT notification when a print job enters the spooler.
+ * 
+ * Unlike polling (which checks every 1.5s), this fires within milliseconds
+ * of the job appearing — giving us time to read the full DEVMODE before
+ * the job completes and the settings are lost.
+ * 
+ * The watcher emits JSON lines to stdout, one per detected job.
+ * The caller provides an onJob callback to handle each job.
+ * 
+ * Returns a control object with stop() method.
+ */
+function startSpoolerWatcher(onJob) {
+    let psProcess = null;
+    let running = false;
+    let restartTimer = null;
+    let buffer = '';
+
+    const WATCHER_SCRIPT = `
+# Real-Time Print Job Watcher using WMI Event Subscription
+# + System.Printing.PrintTicket for EXACT user-selected settings
+#
+# PrintTicket is the XML representation of what the user picked
+# in the print dialog. It contains EVERY setting — not filtered
+# by the driver, not defaults. The actual selections.
+
+$ErrorActionPreference = 'SilentlyContinue'
+
+# Load System.Printing assembly for PrintTicket access
+Add-Type -AssemblyName System.Printing
+Add-Type -AssemblyName ReachFramework
+
+$query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_PrintJob'"
+
+try {
+    # Register the event
+    $watcher = New-Object System.Management.ManagementEventWatcher($query)
+    $watcher.Options.Timeout = [System.Management.ManagementOptions]::InfiniteTimeout
+
+    # Signal that the watcher is ready
+    Write-Output '{"__status":"ready"}'
+    [Console]::Out.Flush()
+
+    while ($true) {
+        try {
+            # Wait for next print job event (blocks until a job appears)
+            $event = $watcher.WaitForNextEvent()
+            $job = $event.TargetInstance
+
+            if ($job -eq $null) { continue }
+
+            $nameParts = $job.Name -split ', '
+            $printerName = $nameParts[0]
+            $jobId = if ($nameParts.Length -gt 1) { $nameParts[1] } else { '0' }
+
+            $totalPages = [int]$job.TotalPages
+            $pagesPrinted = [int]$job.PagesPrinted
+            $copies = 1
+            $document = [string]$job.Document
+            $sizeBytes = [long]$job.Size
+            $owner = [string]$job.Owner
+
+            # Try to extract copies from Parameters
+            try {
+                $params = [string]$job.Parameters
+                if ($params -match 'Copies=(\\d+)') {
+                    $copies = [int]$Matches[1]
+                }
+            } catch {}
+
+            # Default values
+            $paperSize = ""
+            $mediaType = ""
+            $duplexMode = ""
+            $colorMode = ""
+
+            # ===== READ PRINTTICKET — the EXACT user-selected settings =====
+            # System.Printing gives us the PrintTicket XML which is the
+            # definitive record of what the user chose in the print dialog.
+            try {
+                $server = New-Object System.Printing.LocalPrintServer
+                $queue = $server.GetPrintQueue($printerName)
+                if ($queue) {
+                    $jobs = $queue.GetPrintJobInfoCollection()
+                    foreach ($pj in $jobs) {
+                        if ($pj.JobIdentifier -eq [int]$jobId) {
+                            # Get the PrintTicket XML
+                            $ticket = $pj.JobTicket
+                            if ($ticket -eq $null) { $ticket = $pj.PrintTicket }
+
+                            if ($ticket) {
+                                $xml = $ticket.GetXmlStream()
+                                $reader = New-Object System.IO.StreamReader($xml)
+                                $ticketXml = $reader.ReadToEnd()
+                                $reader.Close()
+
+                                # Parse the PrintTicket XML for user's actual selections
+                                [xml]$doc = $ticketXml
+                                $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+                                $ns.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework")
+                                $ns.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords")
+
+                                # Paper Size (e.g., psk:ISOA4, psk:NorthAmericaLetter)
+                                $sizeNode = $doc.SelectSingleNode("//psf:Feature[@name='psk:PageMediaSize']/psf:Option", $ns)
+                                if ($sizeNode) {
+                                    $rawSize = $sizeNode.GetAttribute("name")
+                                    if ($rawSize) {
+                                        $paperSize = $rawSize -replace '^psk:', '' -replace '^ns0000:', ''
+                                    }
+                                }
+
+                                # Paper/Media Type (e.g., psk:Plain, psk:PhotographicGlossy)
+                                $mediaNode = $doc.SelectSingleNode("//psf:Feature[@name='psk:PageMediaType']/psf:Option", $ns)
+                                if ($mediaNode) {
+                                    $rawMedia = $mediaNode.GetAttribute("name")
+                                    if ($rawMedia) {
+                                        $mediaType = $rawMedia -replace '^psk:', '' -replace '^ns0000:', ''
+                                    }
+                                }
+
+                                # Color Mode (psk:Color or psk:Monochrome or psk:Grayscale)
+                                $colorNode = $doc.SelectSingleNode("//psf:Feature[@name='psk:PageOutputColor']/psf:Option", $ns)
+                                if ($colorNode) {
+                                    $rawColor = $colorNode.GetAttribute("name")
+                                    if ($rawColor) {
+                                        $colorMode = $rawColor -replace '^psk:', '' -replace '^ns0000:', ''
+                                    }
+                                }
+
+                                # Copies
+                                $copiesNode = $doc.SelectSingleNode("//psf:ParameterInit[@name='psk:JobCopiesAllDocuments']/psf:Value", $ns)
+                                if ($copiesNode -and $copiesNode.InnerText) {
+                                    $parsedCopies = [int]$copiesNode.InnerText
+                                    if ($parsedCopies -gt 0) { $copies = $parsedCopies }
+                                }
+
+                                # Duplex (psk:OneSided, psk:TwoSidedLongEdge, psk:TwoSidedShortEdge)
+                                $duplexNode = $doc.SelectSingleNode("//psf:Feature[@name='psk:JobDuplexAllDocumentsContiguously']/psf:Option", $ns)
+                                if ($duplexNode) {
+                                    $rawDuplex = $duplexNode.GetAttribute("name")
+                                    if ($rawDuplex) {
+                                        $duplexMode = $rawDuplex -replace '^psk:', '' -replace '^ns0000:', ''
+                                    }
+                                }
+                            }
+
+                            # Also get page count from PrintSystemJobInfo if WMI reported 0
+                            if ($totalPages -le 0 -and $pj.NumberOfPages -gt 0) {
+                                $totalPages = [int]$pj.NumberOfPages
+                            }
+                            break
+                        }
+                    }
+                    $queue.Dispose()
+                }
+                $server.Dispose()
+            } catch {}
+
+            # If TotalPages is still 0, the job is still spooling — retry
+            if ($totalPages -le 0) {
+                for ($retry = 0; $retry -lt 3; $retry++) {
+                    Start-Sleep -Milliseconds 500
+                    try {
+                        $retryJob = Get-PrintJob -PrinterName $printerName -ID ([int]$jobId) -ErrorAction Stop
+                        if ($retryJob -and $retryJob.TotalPages -gt 0) {
+                            $totalPages = [int]$retryJob.TotalPages
+                            if ($copies -le 1 -and $retryJob.Copies -gt 1) { $copies = [int]$retryJob.Copies }
+                            break
+                        }
+                    } catch { break }
+                }
+            }
+
+            # Output the captured job as a JSON line
+            $result = [PSCustomObject]@{
+                Printer = $printerName
+                JobId = [string]$jobId
+                Document = $document
+                TotalPages = $totalPages
+                PagesPrinted = $pagesPrinted
+                Copies = $copies
+                Size = $sizeBytes
+                Owner = $owner
+                PaperSize = $paperSize
+                MediaType = $mediaType
+                DuplexMode = $duplexMode
+                ColorMode = $colorMode
+                CapturedAt = (Get-Date -Format 'o')
+            }
+            $json = $result | ConvertTo-Json -Compress
+            Write-Output $json
+            [Console]::Out.Flush()
+        } catch {
+            # Individual event processing error — log and continue
+            Write-Output ('{"__error":"' + $_.Exception.Message.Replace('"','\\"') + '"}')
+            [Console]::Out.Flush()
+        }
+    }
+} catch {
+    Write-Output ('{"__fatal":"' + $_.Exception.Message.Replace('"','\\"') + '"}')
+    [Console]::Out.Flush()
+} finally {
+    if ($watcher) { $watcher.Stop(); $watcher.Dispose() }
+}
+`;
+
+    function start() {
+        if (running) return;
+
+        const tmpFile = path.join(os.tmpdir(), 'hawknine_spooler_watcher.ps1');
+        try {
+            fs.writeFileSync(tmpFile, WATCHER_SCRIPT, 'utf8');
+        } catch (e) {
+            console.error('[SpoolerWatcher] Failed to write watcher script:', e.message);
+            return;
+        }
+
+        running = true;
+        console.log('[SpoolerWatcher] Starting real-time print job watcher...');
+
+        psProcess = execFile('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', tmpFile
+        ], { maxBuffer: 1024 * 1024 * 10, timeout: 0 }); // No timeout — runs forever
+
+        psProcess.stdout.on('data', (chunk) => {
+            buffer += chunk.toString();
+            // Process complete JSON lines
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep incomplete last line in buffer
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+
+                try {
+                    const data = JSON.parse(trimmed);
+
+                    // Handle status messages
+                    if (data.__status === 'ready') {
+                        console.log('[SpoolerWatcher] ✅ Real-time watcher is active');
+                        continue;
+                    }
+                    if (data.__error) {
+                        console.warn('[SpoolerWatcher] Event error:', data.__error);
+                        continue;
+                    }
+                    if (data.__fatal) {
+                        console.error('[SpoolerWatcher] Fatal error:', data.__fatal);
+                        continue;
+                    }
+
+                    // Process captured print job
+                    if (data.Printer && data.JobId) {
+                        const jobKey = generatePrintJobKey(data.Printer, data.JobId, data.Document, null);
+                        const jobData = {
+                            jobKey: jobKey,
+                            printer: data.Printer,
+                            jobId: data.JobId,
+                            document: data.Document || 'Unknown',
+                            totalPages: parseInt(data.TotalPages) || 0,
+                            pagesPrinted: parseInt(data.PagesPrinted) || 0,
+                            copies: parseInt(data.Copies) || 1,
+                            sizeBytes: parseInt(data.Size) || 0,
+                            owner: data.Owner || '',
+                            paperSize: data.PaperSize || '',
+                            mediaType: data.MediaType || '',
+                            duplexMode: data.DuplexMode || '',
+                            colorMode: data.ColorMode || '',
+                            capturedAt: data.CapturedAt || new Date().toISOString(),
+                            source: 'wmi_event_realtime'
+                        };
+
+                        console.log(`[SpoolerWatcher] 🖨️ Instant capture: "${jobData.document}" - ${jobData.totalPages} pages, ${jobData.copies} copies, paper=${jobData.paperSize || 'default'}, media=${jobData.mediaType || 'default'}, color=${jobData.colorMode || 'unknown'}`);
+
+                        if (typeof onJob === 'function') {
+                            onJob(jobData);
+                        }
+                    }
+                } catch (parseErr) {
+                    // Ignore unparseable lines (PowerShell noise)
+                }
+            }
+        });
+
+        psProcess.stderr.on('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg && !msg.includes('TerminatingError')) {
+                console.warn('[SpoolerWatcher] stderr:', msg.substring(0, 200));
+            }
+        });
+
+        psProcess.on('close', (code) => {
+            running = false;
+            console.log(`[SpoolerWatcher] Process exited with code ${code}`);
+            // Cleanup temp file
+            try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+
+            // Auto-restart after 5 seconds unless explicitly stopped
+            if (!psProcess._stopped) {
+                console.log('[SpoolerWatcher] Auto-restarting in 5 seconds...');
+                restartTimer = setTimeout(() => start(), 5000);
+            }
+        });
+
+        psProcess.on('error', (err) => {
+            console.error('[SpoolerWatcher] Process error:', err.message);
+            running = false;
+        });
+    }
+
+    function stop() {
+        if (restartTimer) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+        }
+        if (psProcess) {
+            psProcess._stopped = true;
+            try {
+                psProcess.kill();
+            } catch (e) { /* ignore */ }
+            psProcess = null;
+        }
+        running = false;
+        console.log('[SpoolerWatcher] Stopped');
+    }
+
+    // Start immediately
+    start();
+
+    return { stop, isRunning: () => running };
+}
+
 module.exports = {
     getRecentPrintJobs,
     getRecentCompletedJobs,
@@ -1477,5 +1905,6 @@ module.exports = {
     generatePrintJobKey,
     computeTotalSheets,
     getSpoolerJobsFast,
-    getJobPageCount
+    getJobPageCount,
+    startSpoolerWatcher
 };

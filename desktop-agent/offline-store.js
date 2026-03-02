@@ -10,10 +10,11 @@ class OfflineStore {
     constructor(storeDir = __dirname) {
         this.storeFile = path.join(storeDir, '.offline-store.json');
         this.pendingActionsFile = path.join(storeDir, '.pending-actions.json');
+        this.spoolerCacheFile = path.join(storeDir, '.spooler-cache.json');
+        this.printJobsFile = path.join(storeDir, '.print-jobs-log.json');
         this.data = {
             inventory: [],
             services: [],
-            templates: [],
             templates: [],
             guides: [],
             submissions: [],
@@ -293,6 +294,114 @@ class OfflineStore {
         const syncTime = new Date(this.data.lastSync).getTime();
         const now = Date.now();
         return Math.round((now - syncTime) / (1000 * 60));
+    }
+
+    // ==================== SPOOLER CACHE PERSISTENCE ====================
+    // The in-memory spoolerPageCache holds per-job DEVMODE data that is
+    // ONLY available while the job is in the spooler. If the app crashes
+    // or restarts before Event Log 307 fires, this data is lost forever.
+    // These methods persist the cache to disk for recovery.
+
+    /**
+     * Save the current spooler cache Map to disk.
+     * @param {Map} spoolerCache - Map of jobKey -> cached DEVMODE data
+     */
+    saveSpoolerCache(spoolerCache) {
+        try {
+            const entries = Array.from(spoolerCache.entries());
+            // Only save entries from the last 10 minutes (same as in-memory TTL)
+            const cutoff = Date.now() - 600000;
+            const recent = entries.filter(([, v]) => (v.cachedAt || 0) > cutoff);
+            fs.writeFileSync(this.spoolerCacheFile, JSON.stringify(recent), 'utf8');
+        } catch (e) {
+            // Silent — this is best-effort persistence
+        }
+    }
+
+    /**
+     * Load persisted spooler cache from disk.
+     * @returns {Map} Map of jobKey -> cached DEVMODE data
+     */
+    loadSpoolerCache() {
+        try {
+            if (!fs.existsSync(this.spoolerCacheFile)) return new Map();
+            const raw = fs.readFileSync(this.spoolerCacheFile, 'utf8');
+            const entries = JSON.parse(raw);
+            if (!Array.isArray(entries)) return new Map();
+            // Filter out expired entries
+            const cutoff = Date.now() - 600000;
+            const valid = entries.filter(([, v]) => (v.cachedAt || 0) > cutoff);
+            if (valid.length > 0) {
+                console.log(`[OfflineStore] Recovered ${valid.length} spooler cache entries from disk.`);
+            }
+            return new Map(valid);
+        } catch (e) {
+            return new Map();
+        }
+    }
+
+    // ==================== PRINT JOB LOG ====================
+    // Local log of all captured print jobs. Used for:
+    //   1. Offline auditing — admin can see what was printed even if server was down
+    //   2. Deduplication — on reconnect, we can check what was already sent
+    //   3. Billing recovery — if DataQueue entries are lost, this log has the data
+
+    /**
+     * Add a print job to the local log.
+     * @param {object} printData - The print payload data object
+     */
+    addPrintJob(printData) {
+        try {
+            let jobs = this._loadPrintJobs();
+            // Dedup by jobId
+            if (printData.jobId) {
+                const existIdx = jobs.findIndex(j => j.jobId === printData.jobId);
+                if (existIdx >= 0) {
+                    // Update with potentially better data
+                    jobs[existIdx] = { ...jobs[existIdx], ...printData, updatedAt: new Date().toISOString() };
+                } else {
+                    jobs.push({ ...printData, loggedAt: new Date().toISOString() });
+                }
+            } else {
+                jobs.push({ ...printData, loggedAt: new Date().toISOString() });
+            }
+            // Keep last 200 jobs
+            if (jobs.length > 200) jobs = jobs.slice(-200);
+            fs.writeFileSync(this.printJobsFile, JSON.stringify(jobs), 'utf8');
+        } catch (e) {
+            console.error('[OfflineStore] Failed to log print job:', e.message);
+        }
+    }
+
+    /**
+     * Get all locally logged print jobs.
+     * @returns {Array} Array of print job objects
+     */
+    getPrintJobs() {
+        return this._loadPrintJobs();
+    }
+
+    /**
+     * Clear the local print jobs log.
+     */
+    clearPrintJobs() {
+        try {
+            fs.writeFileSync(this.printJobsFile, '[]', 'utf8');
+        } catch (e) { /* silent */ }
+    }
+
+    /**
+     * @private Load print jobs from disk.
+     */
+    _loadPrintJobs() {
+        try {
+            if (!fs.existsSync(this.printJobsFile)) return [];
+            const raw = fs.readFileSync(this.printJobsFile, 'utf8');
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            return [];
+        }
     }
 }
 

@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, startSpoolerWatcher } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 
 // Load Configuration
@@ -194,7 +194,8 @@ let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
 // Some drivers (e.g. EPSON) report Pages=1 in Event Log 307 regardless of actual pages.
 // The spooler queue gets page counts from the APPLICATION layer (Word, PDF reader, etc.),
 // which is always accurate. We cache these and merge when Event Log 307 confirms completion.
-let spoolerPageCache = new Map(); // jobKey -> { totalPages, copies, document, printer, ... }
+// IMPORTANT: Load from disk to recover cached data if the app was restarted mid-print.
+let spoolerPageCache = offlineStore.loadSpoolerCache(); // jobKey -> { totalPages, copies, document, printer, ... }
 let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-time & DB sync
 const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
@@ -1668,56 +1669,76 @@ async function startDataCollection() {
         }
     }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
-    // ===== FAST SPOOLER CACHE (every 3 seconds) =====
-    // Dedicated lightweight loop that ONLY caches page counts from Win32_PrintJob.
-    // This runs much faster than the heartbeat and catches jobs that complete quickly.
-    // Uses getSpoolerJobsFast() which is a single WMI query (<1 second).
-    // Does NOT log anything — Event Log 307 is the only trigger for server logging.
-    setInterval(async () => {
-        try {
-            const jobs = await getSpoolerJobsFast();
+    // ===== PRINT JOB CAPTURE — SINGLE SOURCE OF TRUTH =====
+    //
+    // Architecture:
+    //   1. REAL-TIME WATCHER: Persistent WMI event subscription detects jobs
+    //      the instant they enter the spooler. Immediately reads full DEVMODE
+    //      (pages, paper type, media type, color, duplex, copies) and caches it.
+    //
+    //   2. EVENT LOG 307: Fires when a job completes printing. Looks up the
+    //      cached DEVMODE data and sends the complete, accurate record to server.
+    //
+    // NO polling, NO fallback queries, NO size estimation, NO competing sources.
+    // One path in, one path out.
 
-            for (const job of jobs) {
-                if (job.jobKey && job.totalPages > 0) {
-                    // Only update cache if we have better data
-                    const existing = spoolerPageCache.get(job.jobKey);
-                    if (!existing || job.totalPages >= existing.totalPages) {
-                        spoolerPageCache.set(job.jobKey, {
-                            totalPages: job.totalPages,
-                            copies: job.copies || 1,
-                            document: job.document,
-                            printer: job.printer,
-                            sizeBytes: job.sizeBytes,
-                            cachedAt: Date.now()
-                        });
-                    }
-                }
-            }
+    // Start the real-time watcher — this is the ONLY data capture mechanism
+    try {
+        startSpoolerWatcher((job) => {
+            if (!job.jobKey) return;
 
-            // Clean old cache entries (older than 5 minutes)
-            const cacheExpiry = Date.now() - 300000;
-            for (const [key, value] of spoolerPageCache) {
-                if (value.cachedAt < cacheExpiry) {
-                    spoolerPageCache.delete(key);
-                }
+            // Cache the captured DEVMODE data for when Event Log 307 confirms completion
+            const existing = spoolerPageCache.get(job.jobKey);
+            if (!existing || job.totalPages > (existing.totalPages || 0)) {
+                spoolerPageCache.set(job.jobKey, {
+                    totalPages: job.totalPages,
+                    pagesPrinted: job.pagesPrinted || 0,
+                    copies: job.copies || 1,
+                    document: job.document,
+                    printer: job.printer,
+                    sizeBytes: job.sizeBytes,
+                    paperSize: job.paperSize || '',
+                    mediaType: job.mediaType || '',
+                    duplexMode: job.duplexMode || '',
+                    colorMode: job.colorMode || '',
+                    cachedAt: Date.now()
+                });
+                console.log(`[PRINT] ✅ Captured: "${job.document}" @ ${job.printer} — ${job.totalPages} pages, ${job.copies} copies, paper=${job.paperSize || 'default'}, media=${job.mediaType || 'default'}, color=${job.colorMode || 'unknown'}`);
+
+                // Persist spooler cache to disk — survives app restarts
+                offlineStore.saveSpoolerCache(spoolerPageCache);
             }
-        } catch (e) {
-            // Silently fail
+        });
+    } catch (e) {
+        console.error('[PRINT] Real-time watcher failed to start:', e.message);
+    }
+
+    // Cache cleanup — remove entries older than 10 minutes + persist to disk
+    setInterval(() => {
+        const expiry = Date.now() - 600000;
+        let removed = 0;
+        for (const [key, value] of spoolerPageCache) {
+            if (value.cachedAt < expiry) {
+                spoolerPageCache.delete(key);
+                removed++;
+            }
         }
-    }, 3000); // Every 3 seconds — fast enough to catch any job
+        // Persist after cleanup
+        if (removed > 0 || spoolerPageCache.size > 0) {
+            offlineStore.saveSpoolerCache(spoolerPageCache);
+        }
+    }, 60000);
 
-    // ===== PRINT JOB CAPTURE via Event Log 307 (every 10 seconds) =====
-    // Event Log 307 is the SINGLE trigger for logging print jobs.
-    // It confirms a job actually completed (not just spooled).
-    // Page counts are MERGED with spooler cache because some drivers
-    // (e.g. EPSON inkjet) report Pages=1 in Event Log regardless of actual pages.
-    // FALLBACK: if cache miss and pages<=1, does one last WMI query for the job.
+    // EVENT LOG 307 — completion signal only
+    // When a job completes, look up its data from the real-time cache and send to server.
+    let printPollRunning = false;
     setInterval(async () => {
         if (isLocked || !currentSession) return;
+        if (printPollRunning) return;
+        printPollRunning = true;
 
         try {
-            // Get jobs completed in the last 30 seconds (wide overlap for safety)
-            const completedJobs = await getRecentCompletedJobs(30);
+            const completedJobs = await getRecentCompletedJobs(60);
 
             for (const job of completedJobs) {
                 if (!job.jobId) continue;
@@ -1725,41 +1746,74 @@ async function startDataCollection() {
 
                 sentPrintJobIds.add(job.jobId);
 
-                // === MERGE: Get best page count from all available sources ===
-                let bestTotalPages = job.totalPages || 1;
-                let bestCopies = job.copies || 1;
-                let bestPaperSize = job.paperSize;
-                let bestMediaType = job.mediaType || 'Plain Paper';
-                let bestDuplexMode = job.duplexMode;
-                let bestPrintType = job.printType;
-                let bestSizeKB = job.sizeKB;
-
-                // Source 1: Spooler cache (most reliable for page count)
+                // Look up real-time captured data from watcher cache
                 const cached = spoolerPageCache.get(job.jobId);
-                if (cached) {
-                    if (cached.totalPages > bestTotalPages) {
-                        bestTotalPages = cached.totalPages;
-                        console.log(`[PRINT] Pages corrected from spooler cache: ${job.totalPages} -> ${bestTotalPages}`);
-                    }
-                    if (cached.copies > bestCopies) bestCopies = cached.copies;
-                    spoolerPageCache.delete(job.jobId);
+
+                // Use cached data if available (accurate per-job DEVMODE),
+                // otherwise fall back to Event Log 307 data as-is
+                const totalPages = (cached && cached.totalPages > 0) ? cached.totalPages : (job.totalPages || 1);
+                const copies = (cached && cached.copies > 1) ? cached.copies : (job.copies || 1);
+                const paperSize = (cached && cached.paperSize) ? cached.paperSize : (job.paperSize || '');
+                const duplexMode = (cached && cached.duplexMode) ? cached.duplexMode : (job.duplexMode || '');
+                const colorMode = (cached && cached.colorMode) ? cached.colorMode : '';
+                const dataSource = cached ? 'realtime_watcher' : 'event_log_only';
+
+                // Media type: normalize PrintTicket values to human-readable names
+                // PrintTicket gives us: Plain, Stationery, PhotographicGlossy, PhotographicMatte, etc.
+                let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
+                if (mediaType && typeof mediaType === 'string') {
+                    const mt = mediaType.toLowerCase();
+                    // Map PrintTicket psk: values to friendly names
+                    const mediaMap = {
+                        'plain': 'Plain Paper', 'stationery': 'Plain Paper',
+                        'autoselect': 'Plain Paper', 'default': 'Plain Paper', '0': 'Plain Paper', '': 'Plain Paper',
+                        'photographicglossy': 'Glossy Photo', 'photographic': 'Photo Paper',
+                        'photographicmatte': 'Matte Photo', 'photographichighgloss': 'High Gloss Photo',
+                        'photographicsatin': 'Satin Photo', 'photographicsemigloss': 'Semi-Gloss Photo',
+                        'transparency': 'Transparency', 'tshirttransfer': 'T-Shirt Transfer',
+                        'envelope': 'Envelope', 'cardstock': 'Cardstock',
+                        'labels': 'Labels', 'backlitfilm': 'Film',
+                        'bond': 'Bond', 'recycled': 'Recycled',
+                        'heavyweight': 'Heavyweight', 'lightweight': 'Lightweight',
+                    };
+                    mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mediaType);
                 }
 
-                // Source 2: FALLBACK — if pages still looks wrong, try direct WMI one last time
-                if (bestTotalPages <= 1) {
-                    try {
-                        const wmiData = await getJobPageCount(job.printer, job.id);
-                        if (wmiData && wmiData.totalPages > bestTotalPages) {
-                            bestTotalPages = wmiData.totalPages;
-                            console.log(`[PRINT] Pages corrected from WMI fallback: 1 -> ${bestTotalPages}`);
-                        }
-                        if (wmiData && wmiData.copies > bestCopies) bestCopies = wmiData.copies;
-                    } catch (e) { /* Job already removed from WMI */ }
+                // Color mode: PrintTicket gives us Color/Monochrome/Grayscale
+                let printType = job.printType || 'bw';
+                if (colorMode) {
+                    const cm = colorMode.toLowerCase();
+                    if (cm === 'color') printType = 'color';
+                    else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
+                    else if (cm === 'true') printType = 'color'; // old format fallback
                 }
 
-                const totalSheets = computeTotalSheets(bestTotalPages, bestCopies, bestDuplexMode);
+                // Paper size: normalize PrintTicket values (ISOA4 → A4, NorthAmericaLetter → Letter)
+                let normalizedPaperSize = paperSize;
+                if (normalizedPaperSize) {
+                    const sizeMap = {
+                        'isoa4': 'A4', 'isoa3': 'A3', 'isoa5': 'A5',
+                        'northamericaletter': 'Letter', 'northamericalegal': 'Legal',
+                        'northamericatabloid': 'Tabloid', 'northamericaexecutive': 'Executive',
+                        'isob5': 'B5', 'isob4': 'B4', 'japanpostcard': 'Postcard',
+                        'isodlenvelopeinvited': 'DL Envelope',
+                    };
+                    normalizedPaperSize = sizeMap[normalizedPaperSize.toLowerCase()] || normalizedPaperSize;
+                }
 
-                console.log(`[PRINT] Captured: "${job.document}" - ${bestTotalPages} pages x ${bestCopies} copies = ${totalSheets} sheets on ${job.printer} (${bestPrintType}, ${bestMediaType})`);
+                // Duplex: normalize (OneSided → Single-sided, TwoSidedLongEdge → Duplex Long Edge)
+                let normalizedDuplex = duplexMode;
+                if (normalizedDuplex) {
+                    const duplexMap = {
+                        'onesided': 'Single-sided', 'twosidedlongedge': 'Duplex (Long Edge)',
+                        'twosidedshortedge': 'Duplex (Short Edge)',
+                    };
+                    normalizedDuplex = duplexMap[normalizedDuplex.toLowerCase()] || normalizedDuplex;
+                }
+
+                const totalSheets = computeTotalSheets(totalPages, copies, normalizedDuplex);
+
+                console.log(`[PRINT] 🖨️ "${job.document}" — ${totalPages}pg × ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
 
                 const printPayload = {
                     type: 'print',
@@ -1773,39 +1827,45 @@ async function startDataCollection() {
                         printer: job.printer,
                         printerDriver: job.printerDriver,
                         document: job.document,
-                        totalPages: bestTotalPages,
-                        pagesPrinted: bestTotalPages,
-                        copies: bestCopies,
+                        totalPages: totalPages,
+                        pagesPrinted: totalPages,
+                        copies: copies,
                         totalSheets: totalSheets,
-                        printType: bestPrintType,
-                        paperSize: bestPaperSize,
-                        mediaType: bestMediaType,
-                        isColorPrint: bestPrintType === 'color',
-                        duplexMode: bestDuplexMode,
+                        printType: printType,
+                        paperSize: normalizedPaperSize,
+                        mediaType: mediaType,
+                        isColorPrint: printType === 'color',
+                        duplexMode: normalizedDuplex,
                         printQuality: job.printQuality || 'Normal',
-                        sizeKB: bestSizeKB,
+                        sizeKB: job.sizeKB,
                         status: 'Printed',
                         timestamp: job.timestamp,
-                        source: 'event_log_307'
+                        source: dataSource
                     }
                 };
                 sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
 
+                // Log to local offline store — durable audit trail for billing recovery
+                offlineStore.addPrintJob(printPayload.data);
+
                 // Add to session for billing
-                const mergedJob = { ...job, totalPages: bestTotalPages, copies: bestCopies, totalSheets, printType: bestPrintType };
+                const finalJob = { ...job, totalPages, copies, totalSheets, printType, mediaType, paperSize: normalizedPaperSize, duplexMode: normalizedDuplex };
                 if (currentSession) {
                     const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
-                    if (!exists) currentSession.printJobs.push(mergedJob);
+                    if (!exists) currentSession.printJobs.push(finalJob);
                 }
+            }
+
+            // Clean old sentPrintJobIds (keep last 500 to prevent memory leak)
+            if (sentPrintJobIds.size > 500) {
+                const entries = [...sentPrintJobIds];
+                sentPrintJobIds = new Set(entries.slice(-250));
             }
         } catch (e) {
             // Silently fail — event log might not be enabled yet
         }
-    }, 10000); // Every 10 seconds
-
-    // Print History Sync REMOVED — Event Log 307 is the ONLY source for print data.
-    // This eliminates duplicate entries that were caused by the same job being
-    // captured by both Event Log 307 poller AND the history sync.
+        printPollRunning = false;
+    }, 5000);
 }
 
 // ==================== SERVER COMMUNICATION & SOCKETS ====================
@@ -2184,13 +2244,29 @@ async function sendToServer(url, data) {
         if (url.includes('/sync')) {
             console.log(`[SYNC] Success - Client: ${data.clientId}, Status: ${data.status}`);
         }
+        // Mark as online if we succeed
+        if (!isOnline) {
+            isOnline = true;
+            console.log('[SYNC] Connection restored — back online.');
+        }
     } catch (error) {
-        if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-            // Queue for retry
+        const isNetworkError = !error.response; // No response = network-level failure
+        const isServerError = error.response && error.response.status >= 500; // 5xx = server issue
+        const isPrintData = data && data.type === 'print';
+
+        if (isNetworkError || isServerError) {
+            // Queue for retry — ALL network failures and 5xx server errors
             dataQueue.enqueue(url, data);
-            console.log(`[SYNC] Queued for retry - ${error.code}`);
+            const reason = error.code || (isServerError ? `HTTP ${error.response.status}` : 'network_error');
+            if (isPrintData) {
+                console.log(`[SYNC] ⚠️ Print data queued for retry — ${reason} (job: ${data.data?.jobId || 'unknown'})`);
+            } else {
+                console.log(`[SYNC] Queued for retry — ${reason}`);
+            }
+            isOnline = false;
         } else {
-            console.error('API Error:', error.message, error.response?.data);
+            // 4xx or other client errors — log but don't retry (would keep failing)
+            console.error('[SYNC] API Error:', error.message, error.response?.data);
         }
     }
 }

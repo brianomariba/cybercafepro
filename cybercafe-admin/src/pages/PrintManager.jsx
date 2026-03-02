@@ -82,7 +82,12 @@ function PrintManager() {
                 colorType: job.printType || 'bw',
                 pricePerPage: job.pricePerPage || 0,
                 totalPrice: job.totalPrice || job.amount || 0,
-                status: job.status || 'completed',
+                status: (() => {
+                    const s = (job.status || 'completed').toLowerCase();
+                    if (s === 'printed') return 'completed';
+                    if (s === 'spooling') return 'printing';
+                    return s;
+                })(),
                 timestamp: job.timestamp || job.receivedAt || new Date().toISOString(),
                 printerName: job.printer || 'Unknown',
                 mediaType: job.mediaType || job.paperType || 'Plain Paper',
@@ -156,8 +161,10 @@ function PrintManager() {
     };
 
     const getStatusTag = (status) => {
-        switch (status) {
-            case 'completed': return <Tag icon={<CheckCircleOutlined />} color="success">Completed</Tag>;
+        const s = (status || '').toLowerCase();
+        switch (s) {
+            case 'completed':
+            case 'printed': return <Tag icon={<CheckCircleOutlined />} color="success">Completed</Tag>;
             case 'printing': return <Tag icon={<ClockCircleOutlined spin />} color="processing">Printing</Tag>;
             case 'pending': return <Tag icon={<ClockCircleOutlined />} color="warning">Pending</Tag>;
             case 'failed': return <Tag icon={<ExclamationCircleOutlined />} color="error">Failed</Tag>;
@@ -420,21 +427,21 @@ function PrintManager() {
                         <div className="stat-icon blue"><FileTextOutlined /></div>
                         <div className="stat-value">{stats.totalPages}</div>
                     </div>
-                    <div className="stat-label">Total Pages Today</div>
+                    <div className="stat-label">Total Sheets Printed</div>
                 </div>
                 <div className="stat-card">
                     <div className="stat-header">
                         <div className="stat-icon" style={{ background: 'rgba(107, 107, 128, 0.15)', color: '#b0b0c0' }}><FileTextOutlined /></div>
                         <div className="stat-value">{stats.bwPages}</div>
                     </div>
-                    <div className="stat-label">B&W Pages</div>
+                    <div className="stat-label">B&W Sheets</div>
                 </div>
                 <div className="stat-card pink">
                     <div className="stat-header">
                         <div className="stat-icon pink"><FileImageOutlined /></div>
                         <div className="stat-value">{stats.colorPages}</div>
                     </div>
-                    <div className="stat-label">Color Pages</div>
+                    <div className="stat-label">Color Sheets</div>
                 </div>
                 <div className="stat-card green">
                     <div className="stat-header">
@@ -680,7 +687,7 @@ function PrintManager() {
                             <Col span={12}>
                                 <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
                                     <Text type="secondary">Pages & Copies</Text>
-                                    <div>{selectedJob.pages} pgs × {selectedJob.copies}</div>
+                                    <div>{selectedJob.pages} pgs × {selectedJob.copies} = <strong>{selectedJob.totalSheets} sheets</strong></div>
                                 </div>
                             </Col>
                             <Col span={12}>
@@ -705,6 +712,18 @@ function PrintManager() {
                                     <div>{selectedJob.paperSize || 'A4'}</div>
                                 </div>
                             </Col>
+                            <Col span={12}>
+                                <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
+                                    <Text type="secondary">Duplex Mode</Text>
+                                    <div>{selectedJob.duplexMode || 'Single-sided'}</div>
+                                </div>
+                            </Col>
+                            <Col span={12}>
+                                <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
+                                    <Text type="secondary">Print Quality</Text>
+                                    <div>{selectedJob.printQuality || 'Normal'}</div>
+                                </div>
+                            </Col>
                             <Col span={24}>
                                 <div style={{ padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
                                     <Text type="secondary">Printer</Text>
@@ -715,8 +734,15 @@ function PrintManager() {
                                 </div>
                             </Col>
                         </Row>
-                        <div style={{ padding: 16, background: 'rgba(0, 255, 136, 0.1)', borderRadius: 12, display: 'flex', justifyContent: 'space-between' }}>
-                            <div><Text type="secondary">Total Cost</Text></div>
+                        <div style={{ padding: 16, background: 'rgba(0, 255, 136, 0.1)', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <Text type="secondary">Total Cost</Text>
+                                {selectedJob.pricePerPage > 0 && (
+                                    <div style={{ fontSize: 11, color: '#b0b0c0' }}>
+                                        {formatKSH(selectedJob.pricePerPage)}/sheet × {selectedJob.totalSheets} sheets
+                                    </div>
+                                )}
+                            </div>
                             <div style={{ fontSize: 20, fontWeight: 'bold', color: '#00ff88' }}>{formatKSH(selectedJob.totalPrice)}</div>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
