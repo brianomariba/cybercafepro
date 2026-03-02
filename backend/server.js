@@ -2638,12 +2638,13 @@ app.get('/api/v1/admin/printers', async (req, res) => {
 
         const todayPrintLogs = await Log.find(todayPrintQuery).lean();
 
-        // Aggregate today's stats per client and per printer
+        // Aggregate today's stats per client and per printer (case-insensitive keys)
         const clientPrinterStats = {};
         for (const log of todayPrintLogs) {
             const cId = log.clientId;
             const printerName = log.data?.printer || 'Unknown';
-            const key = `${cId}::${printerName}`;
+            // Use case-insensitive key so "EPSON L3250 Series" matches "Epson L3250 Series"
+            const key = `${cId}::${printerName.toLowerCase().trim()}`;
 
             if (!clientPrinterStats[key]) {
                 clientPrinterStats[key] = {
@@ -2667,12 +2668,41 @@ app.get('/api/v1/admin/printers', async (req, res) => {
             }
         }
 
-        // Merge today's stats into printer data
+        // Merge today's stats into printer data + deduplicate printers by name
         const enrichedPrinterLogs = printerLogs.map(client => {
-            const enrichedPrinters = (client.printers || []).map(printer => {
-                const key = `${client.clientId}::${printer.name}`;
-                const todayStats = clientPrinterStats[key] || {
+            // Deduplicate: keep only the first occurrence of each printer name
+            const seenNames = new Set();
+            const uniquePrinters = (client.printers || []).filter(printer => {
+                const normalizedName = (printer.name || '').trim().toLowerCase();
+                if (seenNames.has(normalizedName)) return false;
+                seenNames.add(normalizedName);
+                return true;
+            });
+
+            const enrichedPrinters = uniquePrinters.map(printer => {
+                // Case-insensitive lookup to match print job logs
+                const key = `${client.clientId}::${(printer.name || '').toLowerCase().trim()}`;
+                const serverStats = clientPrinterStats[key] || {
                     totalPages: 0, bwPages: 0, colorPages: 0, totalJobs: 0
+                };
+
+                // Agent sends last24h stats from the local Windows Event Log
+                // which is always accurate. Use these as a supplement when
+                // server-side stats are incomplete (jobs not synced yet).
+                const agentStats = printer.last24h || {
+                    totalPages: 0, bwPages: 0, colorPages: 0, totalJobs: 0
+                };
+
+                // Merge: use the HIGHER count from either source to ensure
+                // we never under-report. Server stats are authoritative when
+                // available; agent stats fill in the gaps for unsynced jobs.
+                const todayStats = {
+                    totalPages: Math.max(serverStats.totalPages || 0, agentStats.totalPages || 0),
+                    bwPages: Math.max(serverStats.bwPages || 0, agentStats.bwPages || 0),
+                    colorPages: Math.max(serverStats.colorPages || 0, agentStats.colorPages || 0),
+                    totalJobs: Math.max(serverStats.totalJobs || 0, agentStats.totalJobs || 0),
+                    serverSynced: serverStats.totalJobs || 0,
+                    agentReported: agentStats.totalJobs || 0
                 };
 
                 return {
@@ -2691,6 +2721,37 @@ app.get('/api/v1/admin/printers', async (req, res) => {
     } catch (error) {
         console.error('Fetch Printers Error:', error);
         res.status(500).json({ error: 'Failed to fetch printers' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printers/single
+ * Remove a specific printer from a specific client's printer log
+ * Body: { clientId, printerName }
+ */
+app.delete('/api/v1/admin/printers/single', requireAdminAuth, async (req, res) => {
+    try {
+        const { clientId, printerName } = req.body;
+        if (!clientId || !printerName) {
+            return res.status(400).json({ error: 'clientId and printerName are required' });
+        }
+
+        // Find all printer logs for this client and remove the specific printer from the array
+        const result = await Log.updateMany(
+            { type: 'printers', clientId },
+            { $pull: { 'data.printers': { name: printerName } } }
+        );
+
+        console.log(`[PRINTERS] Admin removed printer "${printerName}" from client "${clientId}": ${result.modifiedCount} logs updated`);
+
+        res.json({
+            success: true,
+            message: `Printer "${printerName}" removed from ${clientId}`,
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        console.error('[PRINTERS] Remove single printer failed:', error);
+        res.status(500).json({ error: 'Failed to remove printer' });
     }
 });
 

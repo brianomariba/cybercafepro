@@ -581,6 +581,7 @@ export const updateInventoryAccessControl = async (id, data) => (await api.put(`
 export const clearAllInventory = async () => (await api.delete('/admin/inventory/all')).data;
 export const clearSalesHistory = async () => (await api.delete('/admin/inventory/sales-history')).data;
 export const removeConnectedPrinters = async () => (await api.delete('/admin/printers/connected')).data;
+export const removeSinglePrinter = async (clientId, printerName) => (await api.delete('/admin/printers/single', { data: { clientId, printerName } })).data;
 
 // ==================== USER SUBMISSIONS ====================
 export const getSubmissions = async (status, targetType) => {
@@ -683,6 +684,7 @@ export default {
     clearAllInventory,
     clearSalesHistory,
     removeConnectedPrinters,
+    removeSinglePrinter,
 
     // Settings & Security
     getSettings,

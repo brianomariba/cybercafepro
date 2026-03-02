@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty, Statistic, Progress, DatePicker } from 'antd';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Tabs, Row, Col, Modal, message, List, Empty, Statistic, Progress, DatePicker, Popconfirm } from 'antd';
 import {
     PrinterOutlined,
     FileTextOutlined,
@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -585,7 +585,24 @@ function PrintManager() {
                                                                 <Button type="link" onClick={() => {
                                                                     setSelectedPrinter({ ...printer, hostname: client.hostname });
                                                                     setPrinterDetailsVisible(true);
-                                                                }}>Details</Button>
+                                                                }}>Details</Button>,
+                                                                <Popconfirm
+                                                                    title={`Remove "${printer.name}"?`}
+                                                                    description="This printer will reappear if the agent reports it again."
+                                                                    onConfirm={async () => {
+                                                                        try {
+                                                                            await removeSinglePrinter(client.clientId, printer.name);
+                                                                            message.success(`Removed ${printer.name}`);
+                                                                            fetchData();
+                                                                        } catch {
+                                                                            message.error('Failed to remove printer');
+                                                                        }
+                                                                    }}
+                                                                    okText="Remove"
+                                                                    okButtonProps={{ danger: true }}
+                                                                >
+                                                                    <Button type="link" danger size="small">Remove</Button>
+                                                                </Popconfirm>
                                                             ]}
                                                         >
                                                             <List.Item.Meta
@@ -614,6 +631,11 @@ function PrintManager() {
                                                                                 status={printer.isOnline ? "success" : "error"}
                                                                                 text={<Text type="secondary" style={{ fontSize: 12 }}>{printer.status || 'Unknown'}</Text>}
                                                                             />
+                                                                            {printer.activeJobs > 0 && (
+                                                                                <Tag color="processing" style={{ margin: 0, fontSize: 10 }}>
+                                                                                    {printer.activeJobs} active
+                                                                                </Tag>
+                                                                            )}
                                                                         </Space>
                                                                         <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
                                                                         {/* Show page counters */}
@@ -631,10 +653,18 @@ function PrintManager() {
                                                                                 </Tooltip>
                                                                             </div>
                                                                         )}
-                                                                        {/* Show today's B&W vs Color breakdown */}
+                                                                        {/* Show today's / last 24h B&W vs Color breakdown */}
                                                                         {printer.todayStats && (printer.todayStats.totalPages > 0) && (
                                                                             <div style={{ marginTop: 4 }}>
                                                                                 {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
+                                                                                {/* Show sync status when agent has more data than server */}
+                                                                                {printer.todayStats.agentReported > 0 && printer.todayStats.serverSynced < printer.todayStats.agentReported && (
+                                                                                    <Tooltip title={`${printer.todayStats.serverSynced} of ${printer.todayStats.agentReported} jobs synced to server`}>
+                                                                                        <Text style={{ fontSize: 10, color: '#ff9500' }}>
+                                                                                            ⏳ {printer.todayStats.agentReported - printer.todayStats.serverSynced} pending sync
+                                                                                        </Text>
+                                                                                    </Tooltip>
+                                                                                )}
                                                                             </div>
                                                                         )}
                                                                     </Space>
@@ -837,6 +867,17 @@ function PrintManager() {
                                                 </Col>
                                             </Row>
                                             {renderPageBreakdown(selectedPrinter.todayStats.bwPages, selectedPrinter.todayStats.colorPages)}
+                                            {/* Show sync status in detail modal */}
+                                            {selectedPrinter.todayStats.agentReported > 0 && (
+                                                <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>
+                                                        Server synced: <Text style={{ color: '#00ff88', fontSize: 11 }}>{selectedPrinter.todayStats.serverSynced || 0}</Text> jobs
+                                                    </Text>
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>
+                                                        Agent reported: <Text style={{ color: '#00d4ff', fontSize: 11 }}>{selectedPrinter.todayStats.agentReported}</Text> jobs
+                                                    </Text>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                     {selectedPrinter.jobErrors > 0 && (
