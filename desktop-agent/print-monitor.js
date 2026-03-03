@@ -1660,6 +1660,59 @@ public class ForegroundWindow {
 }
 "@
 
+# Add Win32 API for reading per-job DEVMODE from spooler
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class PrintJobApi {
+    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool OpenPrinter(string pPrinterName, out IntPtr hPrinter, IntPtr pDefault);
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool GetJob(IntPtr hPrinter, int jobId, int level, IntPtr buffer, int bufSize, out int needed);
+
+    // Read dmColor and dmMediaType from per-job DEVMODE
+    public static int[] GetJobDevmode(string printerName, int jobId) {
+        // Returns [dmColor, dmMediaType, dmDuplex, dmOrientation, dmPaperSize] or null
+        IntPtr hPrinter;
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return null;
+        try {
+            int needed = 0;
+            GetJob(hPrinter, jobId, 2, IntPtr.Zero, 0, out needed);
+            if (needed <= 0) return null;
+            IntPtr buf = Marshal.AllocHGlobal(needed);
+            try {
+                if (!GetJob(hPrinter, jobId, 2, buf, needed, out needed)) return null;
+                // JOB_INFO_2: pDevMode is at offset depending on pointer size
+                // On x64: offset 72 (9th pointer/int field)
+                int ptrSize = IntPtr.Size;
+                // JOB_INFO_2 layout: JobId(4) + 7 string ptrs + pDevMode ptr
+                // Offset to pDevMode = 4 + padding + 7*ptrSize + ...
+                // Easier: marshal the pDevMode pointer directly
+                IntPtr pDevMode;
+                if (ptrSize == 8) {
+                    // x64: JobId(4)+pad(4) + 7 ptrs(56) = offset 64
+                    pDevMode = Marshal.ReadIntPtr(buf, 64);
+                } else {
+                    // x86: JobId(4) + 7 ptrs(28) = offset 32
+                    pDevMode = Marshal.ReadIntPtr(buf, 32);
+                }
+                if (pDevMode == IntPtr.Zero) return null;
+                // DEVMODE: dmColor at offset 28 (short), dmMediaType at offset 100 (int)
+                // But DEVMODE starts with dmDeviceName[32] = 64 bytes
+                short dmColor = Marshal.ReadInt16(pDevMode, 92);      // 64+28
+                short dmDuplex = Marshal.ReadInt16(pDevMode, 94);     // 64+30
+                int dmMediaType = Marshal.ReadInt32(pDevMode, 164);   // 64+100
+                short dmOrientation = Marshal.ReadInt16(pDevMode, 76);// 64+12
+                short dmPaperSize = Marshal.ReadInt16(pDevMode, 78);  // 64+14
+                return new int[] { dmColor, dmMediaType, dmDuplex, dmOrientation, dmPaperSize };
+            } finally { Marshal.FreeHGlobal(buf); }
+        } finally { ClosePrinter(hPrinter); }
+    }
+}
+"@
+
 $query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_PrintJob'"
 
 try {
@@ -1779,6 +1832,44 @@ try {
                                         $duplexMode = $rawDuplex -replace '^psk:', '' -replace '^ns0000:', ''
                                     }
                                 }
+
+                                # ===== DECODE DEVMODE SNAPSHOT =====
+                                # EPSON drivers store the REAL media type in a proprietary
+                                # DEVMODE blob (ns0000:PageDevmodeSnapshot), NOT in psk:PageMediaType.
+                                # Reverse-engineered offsets:
+                                #   Offset 92-93: dmColor (1=Mono, 2=Color)
+                                #   Offset 196-197: EPSON media type ID
+                                #   Offset 344: non-plain flag (2=Plain, 4=non-Plain)
+                                $dmSnapNode = $doc.SelectSingleNode("//psf:ParameterInit[contains(@name,'DevmodeSnapshot')]/psf:Value", $ns)
+                                if ($dmSnapNode -and $dmSnapNode.InnerText) {
+                                    try {
+                                        $dmBytes = [Convert]::FromBase64String($dmSnapNode.InnerText)
+                                        if ($dmBytes.Length -gt 197) {
+                                            # Read EPSON media type ID at offset 196-197
+                                            $epsonMediaId = [BitConverter]::ToInt16($dmBytes, 196)
+                                            # Map EPSON media IDs to human-readable names
+                                            # (reverse-engineered via MergeAndValidatePrintTicket)
+                                            $epsonMediaMap = @{
+                                                1 = 'Plain'
+                                                275 = 'PhotographicSemiGloss'
+                                                318 = 'Bond'
+                                                325 = 'PhotographicHighGloss'
+                                                326 = 'PhotographicMatte'
+                                            }
+                                            if ($epsonMediaMap.ContainsKey($epsonMediaId)) {
+                                                $mediaType = $epsonMediaMap[$epsonMediaId]
+                                            } elseif ($epsonMediaId -gt 1) {
+                                                $mediaType = "EpsonMedia_$epsonMediaId"
+                                            }
+                                            # Also read dmColor as fallback
+                                            if ($colorMode -eq '' -and $dmBytes.Length -gt 93) {
+                                                $snapColor = [BitConverter]::ToInt16($dmBytes, 92)
+                                                if ($snapColor -eq 1) { $colorMode = 'Monochrome' }
+                                                elseif ($snapColor -eq 2) { $colorMode = 'Color' }
+                                            }
+                                        }
+                                    } catch {}
+                                }
                             }
 
                             # Also get page count from PrintSystemJobInfo if WMI reported 0
@@ -1792,6 +1883,38 @@ try {
                 }
                 $server.Dispose()
             } catch {}
+
+            # ===== FALLBACK: Read DEVMODE via Win32 GetJob API =====
+            # EPSON drivers don't populate the standard PrintTicket for media type.
+            # The DEVMODE is the ONLY source of truth for the user's actual selection.
+            if ($mediaType -eq '' -or $mediaType -eq 'Plain' -or $colorMode -eq '') {
+                try {
+                    $dm = [PrintJobApi]::GetJobDevmode($printerName, [int]$jobId)
+                    if ($dm -ne $null) {
+                        # dm[0]=dmColor, dm[1]=dmMediaType, dm[2]=dmDuplex
+                        if ($colorMode -eq '') {
+                            if ($dm[0] -eq 1) { $colorMode = 'Monochrome' }
+                            elseif ($dm[0] -eq 2) { $colorMode = 'Color' }
+                        }
+                        # dmMediaType: 0=default, 1=Standard, 2=Transparency, 3=Glossy, 4=Heavyweight
+                        # EPSON uses higher values for their custom types
+                        if ($dm[1] -gt 0) {
+                            switch ($dm[1]) {
+                                1 { $mediaType = 'Plain' }
+                                2 { $mediaType = 'Transparency' }
+                                3 { $mediaType = 'Glossy' }
+                                4 { $mediaType = 'Heavyweight' }
+                                default { $mediaType = "MediaType_$($dm[1])" }
+                            }
+                        }
+                        if ($duplexMode -eq '') {
+                            if ($dm[2] -eq 1) { $duplexMode = 'OneSided' }
+                            elseif ($dm[2] -eq 2) { $duplexMode = 'TwoSidedShortEdge' }
+                            elseif ($dm[2] -eq 3) { $duplexMode = 'TwoSidedLongEdge' }
+                        }
+                    }
+                } catch {}
+            }
 
             # Retry if we're missing critical data (pages, color, media type)
             # Fast jobs (1 page) can complete before the first read captures everything
