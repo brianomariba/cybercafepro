@@ -3955,6 +3955,42 @@ app.delete('/api/v1/admin/finance-data', requireAdminAuth, async (req, res) => {
 });
 
 /**
+ * DELETE /api/v1/admin/reports-data
+ * Clear all reports/monitoring data: activity logs, session logs, file activity, USB events
+ */
+app.delete('/api/v1/admin/reports-data', requireAdminAuth, async (req, res) => {
+    try {
+        // Delete activity logs
+        const activityResult = await Log.deleteMany({ type: 'activity' });
+        // Delete session logs (session start/end tracking)
+        const sessionResult = await Log.deleteMany({ type: 'session' });
+        // Delete file activity logs
+        const fileResult = await Log.deleteMany({ type: 'file' });
+        // Delete USB event logs
+        const usbResult = await Log.deleteMany({ type: 'usb' });
+
+        const totalDeleted = (activityResult.deletedCount || 0) + (sessionResult.deletedCount || 0) +
+            (fileResult.deletedCount || 0) + (usbResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin cleared reports data: ${activityResult.deletedCount} activity, ${sessionResult.deletedCount} session, ${fileResult.deletedCount} file, ${usbResult.deletedCount} USB logs`);
+
+        res.json({
+            success: true,
+            deleted: {
+                activityLogs: activityResult.deletedCount || 0,
+                sessionLogs: sessionResult.deletedCount || 0,
+                fileActivity: fileResult.deletedCount || 0,
+                usbEvents: usbResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Reports Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete reports data' });
+    }
+});
+
+/**
  * GET /api/v1/admin/transactions
  * List all transactions from database
  */

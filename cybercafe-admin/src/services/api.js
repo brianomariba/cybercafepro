@@ -583,6 +583,7 @@ export const clearSalesHistory = async () => (await api.delete('/admin/inventory
 export const removeConnectedPrinters = async () => (await api.delete('/admin/printers/connected')).data;
 export const removeSinglePrinter = async (clientId, printerName) => (await api.delete('/admin/printers/single', { data: { clientId, printerName } })).data;
 export const clearAllFinanceData = async () => (await api.delete('/admin/finance-data')).data;
+export const clearAllReportsData = async () => (await api.delete('/admin/reports-data')).data;
 
 // ==================== USER SUBMISSIONS ====================
 export const getSubmissions = async (status, targetType) => {
@@ -687,6 +688,7 @@ export default {
     removeConnectedPrinters,
     removeSinglePrinter,
     clearAllFinanceData,
+    clearAllReportsData,
 
     // Settings & Security
     getSettings,

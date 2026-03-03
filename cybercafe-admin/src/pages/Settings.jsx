@@ -28,9 +28,10 @@ import {
     PictureOutlined,
     ClearOutlined,
     ExclamationCircleOutlined,
+    BarChartOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, clearAllFinanceData } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, clearAllFinanceData, clearAllReportsData } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -336,6 +337,23 @@ function Settings() {
             message.error(err.response?.data?.error || 'Failed to delete finance data');
         } finally {
             setCleaningFinanceData(false);
+        }
+    };
+
+    // Delete all reports data
+    const [cleaningReportsData, setCleaningReportsData] = useState(false);
+    const handleDeleteAllReportsData = async () => {
+        setCleaningReportsData(true);
+        try {
+            const result = await clearAllReportsData();
+            const d = result.deleted || {};
+            message.success(
+                `Reports data cleared: ${d.activityLogs || 0} activity, ${d.sessionLogs || 0} session, ${d.fileActivity || 0} file, ${d.usbEvents || 0} USB logs deleted`
+            );
+        } catch (err) {
+            message.error(err.response?.data?.error || 'Failed to delete reports data');
+        } finally {
+            setCleaningReportsData(false);
         }
     };
 
@@ -1108,6 +1126,66 @@ function Settings() {
                                             block
                                         >
                                             Delete All Finance Data
+                                        </Button>
+                                    </Popconfirm>
+                                </Space>
+                            </div>
+                        </Card>
+                    </Col>
+
+                    <Col xs={24} lg={12}>
+                        <Card
+                            title={
+                                <Space>
+                                    <BarChartOutlined style={{ color: '#ff3b5c' }} />
+                                    <span>Reports Data Cleanup</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: 24,
+                                background: 'rgba(255, 59, 92, 0.06)',
+                                border: '1px solid rgba(255, 59, 92, 0.15)',
+                                borderRadius: 12,
+                                marginBottom: 16
+                            }}>
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
+                                        <Text strong>Delete All Reports Data</Text>
+                                    </div>
+                                    <Text type="secondary" style={{ fontSize: 13 }}>
+                                        This will permanently remove all monitoring and reporting
+                                        records from the system. This includes:
+                                    </Text>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
+                                        <li>Activity logs (logins, actions, system events)</li>
+                                        <li>Session tracking logs</li>
+                                        <li>File activity records (access, transfers)</li>
+                                        <li>USB device event logs</li>
+                                    </ul>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        ⚠️ This action cannot be undone. New activity will be
+                                        recorded automatically as agents report.
+                                    </Text>
+                                    <Divider style={{ margin: '8px 0' }} />
+                                    <Popconfirm
+                                        title="Delete all reports data?"
+                                        description="This will permanently remove ALL activity, session, file, and USB logs. This cannot be undone."
+                                        onConfirm={handleDeleteAllReportsData}
+                                        okText="Yes, Delete All"
+                                        cancelText="Cancel"
+                                        okButtonProps={{ danger: true }}
+                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
+                                    >
+                                        <Button
+                                            danger
+                                            type="primary"
+                                            icon={<DeleteOutlined />}
+                                            loading={cleaningReportsData}
+                                            block
+                                        >
+                                            Delete All Reports Data
                                         </Button>
                                     </Popconfirm>
                                 </Space>
