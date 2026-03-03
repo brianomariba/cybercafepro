@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -111,22 +111,16 @@ function PrintManager() {
         }
     };
 
-    const handleRemovePrinters = () => {
-        Modal.confirm({
-            title: 'Are you sure?',
-            icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
-            content: 'This will remove all connected printer records from the system. Agents will re-report their printers automatically on the next cycle, but old disconnected printers will be cleaned up.',
-            okText: 'Yes, Clean Up',
-            okType: 'danger',
-            cancelText: 'Cancel',
-            onOk: async () => {
-                try {
-                    await removeConnectedPrinters();
-                    message.success('Printer records cleared');
-                    fetchData();
-                } catch { message.error('Failed to clear printer records'); }
-            }
-        });
+    const handleRemovePrinters = async () => {
+        try {
+            const result = await deleteAllPrinterData();
+            const printJobs = result?.deleted?.printJobs || 0;
+            const printers = result?.deleted?.printers || 0;
+            message.success(`Cleared ${printJobs} print jobs and ${printers} printer records`);
+            fetchData();
+        } catch {
+            message.error('Failed to clear print data');
+        }
     };
 
     useEffect(() => {
@@ -548,9 +542,18 @@ function PrintManager() {
                         children: (
                             <div>
                                 <div style={{ display: 'flex', justifyContent: 'flex-end', paddingBottom: 16 }}>
-                                    <Button icon={<DeleteOutlined />} onClick={handleRemovePrinters} danger size="small">
-                                        Clear History / Remove Old Printers
-                                    </Button>
+                                    <Popconfirm
+                                        title="Clear All Print Data?"
+                                        description="This will permanently delete all print jobs and printer records. Agents will re-report printers on the next cycle."
+                                        onConfirm={handleRemovePrinters}
+                                        okText="Yes, Clear All Print Data"
+                                        okButtonProps={{ danger: true }}
+                                        placement="bottomRight"
+                                    >
+                                        <Button icon={<DeleteOutlined />} danger type="primary" ghost size="small">
+                                            Clear History / Remove Old Printers
+                                        </Button>
+                                    </Popconfirm>
                                 </div>
                                 <Row gutter={[24, 24]}>
                                     {printers.length === 0 && (

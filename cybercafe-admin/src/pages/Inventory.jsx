@@ -82,6 +82,9 @@ function Inventory() {
     const [acStockLimits, setAcStockLimits] = useState([]);
     const [acSaving, setAcSaving] = useState(false);
 
+    // Bulk selection state
+    const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+
     const fetchInventory = async () => {
         setLoading(true);
         try { setItems(await getInventory()); } catch { message.error('Failed to load inventory'); }
@@ -137,40 +140,108 @@ function Inventory() {
         } catch (error) { message.error(error.response?.data?.error || 'Sale failed'); }
     };
 
-    const handleClearInventory = () => {
+    const doClearInventory = async () => {
+        try {
+            await clearAllInventory();
+            message.success('All inventory items cleared');
+            setSelectedRowKeys([]);
+            fetchInventory();
+        } catch { message.error('Failed to clear inventory'); }
+    };
+
+    // Bulk delete selected items
+    const handleBulkDelete = () => {
+        if (selectedRowKeys.length === 0) return;
         Modal.confirm({
-            title: 'Are you absolutely sure?',
+            title: `Delete ${selectedRowKeys.length} item(s)?`,
             icon: <WarningOutlined style={{ color: '#ff4d4f' }} />,
-            content: 'This will permanently delete ALL inventory items. This action CANNOT be undone.',
-            okText: 'Yes, Delete All',
+            content: (
+                <div>
+                    <p>This will permanently delete the following items:</p>
+                    <div style={{ maxHeight: 200, overflowY: 'auto', marginTop: 8 }}>
+                        {items.filter(i => selectedRowKeys.includes(i._id)).map(i => (
+                            <Tag key={i._id} color="red" style={{ margin: '2px 4px' }}>{i.name} ({i.stock} units)</Tag>
+                        ))}
+                    </div>
+                </div>
+            ),
+            okText: `Delete ${selectedRowKeys.length} Items`,
             okType: 'danger',
             cancelText: 'Cancel',
             onOk: async () => {
                 try {
-                    await clearAllInventory();
-                    message.success('All inventory items cleared');
+                    let successCount = 0;
+                    for (const id of selectedRowKeys) {
+                        try {
+                            await deleteInventoryItem(id);
+                            successCount++;
+                        } catch { /* continue with others */ }
+                    }
+                    message.success(`Deleted ${successCount} of ${selectedRowKeys.length} items`);
+                    setSelectedRowKeys([]);
                     fetchInventory();
-                } catch { message.error('Failed to clear inventory'); }
+                } catch { message.error('Bulk delete failed'); }
             }
         });
     };
 
-    const handleClearSalesHistory = () => {
+    // Bulk sell — opens a combined modal (simple approach: sell 1 each)
+    const handleBulkSell = () => {
+        if (selectedRowKeys.length === 0) return;
+        const sellableItems = items.filter(i => selectedRowKeys.includes(i._id) && i.stock > 0);
+        if (sellableItems.length === 0) {
+            message.warning('None of the selected items have stock available');
+            return;
+        }
         Modal.confirm({
-            title: 'Are you absolutely sure?',
-            icon: <WarningOutlined style={{ color: '#ff4d4f' }} />,
-            content: 'This will permanently delete ALL sales history from the inventory. This action CANNOT be undone.',
-            okText: 'Yes, Clear Sales History',
-            okType: 'danger',
+            title: `Sell 1 unit of ${sellableItems.length} item(s)?`,
+            icon: <ShoppingCartOutlined style={{ color: '#52c41a' }} />,
+            content: (
+                <div>
+                    <p>This will sell <strong>1 unit</strong> of each selected item (cash payment):</p>
+                    <div style={{ maxHeight: 200, overflowY: 'auto', marginTop: 8 }}>
+                        {sellableItems.map(i => (
+                            <div key={i._id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                <Text>{i.name}</Text>
+                                <Text strong style={{ color: '#52c41a' }}>{formatKSH(i.price)}</Text>
+                            </div>
+                        ))}
+                    </div>
+                    <div style={{ marginTop: 12, padding: 8, background: 'rgba(82,196,26,0.1)', borderRadius: 8, textAlign: 'right' }}>
+                        <Text strong style={{ fontSize: 16, color: '#52c41a' }}>Total: {formatKSH(sellableItems.reduce((s, i) => s + i.price, 0))}</Text>
+                    </div>
+                </div>
+            ),
+            okText: `Sell ${sellableItems.length} Items`,
+            okButtonProps: { style: { background: '#52c41a', borderColor: '#52c41a' } },
             cancelText: 'Cancel',
             onOk: async () => {
                 try {
-                    await clearSalesHistory();
-                    message.success('Sales history cleared');
+                    let successCount = 0;
+                    for (const item of sellableItems) {
+                        try {
+                            await sellInventoryItem(item._id, { quantity: 1, paymentMethod: 'cash', clientId: 'admin', reason: 'Bulk sale from admin' });
+                            successCount++;
+                        } catch { /* continue */ }
+                    }
+                    message.success(`Sold 1 unit each of ${successCount} items`);
+                    setSelectedRowKeys([]);
+                    fetchInventory();
                     fetchSalesHistory();
-                } catch { message.error('Failed to clear sales history'); }
+                } catch { message.error('Bulk sell failed'); }
             }
         });
+    };
+
+    const doClearSalesHistory = async () => {
+        try {
+            await clearSalesHistory();
+            message.success('Sales history cleared');
+            fetchSalesHistory();
+        } catch (err) {
+            console.error('Clear sales history failed:', err);
+            message.error('Failed to clear sales history');
+        }
     };
 
     // Show item detail with its sales history
@@ -662,11 +733,83 @@ function Inventory() {
                                         { value: 'low', label: '⚠️ Low Stock' },
                                         { value: 'out', label: '🚫 Out of Stock' }
                                     ]} />
-                                    <Button icon={<DeleteOutlined />} onClick={handleClearInventory} size="small" danger>Clear Inventory</Button>
+                                    <Popconfirm
+                                        title="Clear All Inventory?"
+                                        description={<span>This will permanently delete <strong>all {items.length} items</strong>. This cannot be undone.</span>}
+                                        onConfirm={doClearInventory}
+                                        okText="Yes, Clear All"
+                                        okButtonProps={{ danger: true }}
+                                        placement="bottomRight"
+                                    >
+                                        <Button icon={<DeleteOutlined />} size="small" danger type="primary" ghost
+                                            disabled={items.length === 0}
+                                        >Clear Inventory</Button>
+                                    </Popconfirm>
                                 </Space>
                             }
                         >
-                            <Table columns={columns} dataSource={filteredItems} rowKey="_id" loading={loading} pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }} rowClassName={(r) => r.stock <= (r.lowStockThreshold || 5) ? 'low-stock-row' : ''} />
+                            {/* Bulk Actions Toolbar */}
+                            {selectedRowKeys.length > 0 && (
+                                <div style={{
+                                    marginBottom: 16, padding: '10px 16px',
+                                    background: 'linear-gradient(135deg, rgba(0,180,216,0.12), rgba(123,44,191,0.08))',
+                                    borderRadius: 10, border: '1px solid rgba(0,180,216,0.25)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                    animation: 'fadeIn 0.2s ease'
+                                }}>
+                                    <Space>
+                                        <Badge count={selectedRowKeys.length} style={{ backgroundColor: '#00B4D8' }} />
+                                        <Text strong>{selectedRowKeys.length} item{selectedRowKeys.length > 1 ? 's' : ''} selected</Text>
+                                    </Space>
+                                    <Space size={8}>
+                                        <Button size="small" icon={<DollarOutlined />} onClick={handleBulkSell}
+                                            style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}
+                                        >Sell 1 Each</Button>
+                                        <Button size="small" icon={<DeleteOutlined />} onClick={handleBulkDelete} danger type="primary">Delete Selected</Button>
+                                        <Button size="small" onClick={() => setSelectedRowKeys([])}>Deselect All</Button>
+                                    </Space>
+                                </div>
+                            )}
+                            <Table
+                                columns={columns}
+                                dataSource={filteredItems}
+                                rowKey="_id"
+                                loading={loading}
+                                pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'] }}
+                                rowClassName={(r) => r.stock <= (r.lowStockThreshold || 5) ? 'low-stock-row' : ''}
+                                rowSelection={{
+                                    selectedRowKeys,
+                                    onChange: (keys) => setSelectedRowKeys(keys),
+                                    selections: [
+                                        Table.SELECTION_ALL,
+                                        Table.SELECTION_NONE,
+                                        {
+                                            key: 'low-stock',
+                                            text: '⚠️ Select Low Stock',
+                                            onSelect: () => {
+                                                const keys = items.filter(i => i.stock > 0 && i.stock <= (i.lowStockThreshold || 5)).map(i => i._id);
+                                                setSelectedRowKeys(keys);
+                                            }
+                                        },
+                                        {
+                                            key: 'out-of-stock',
+                                            text: '🚫 Select Out of Stock',
+                                            onSelect: () => {
+                                                const keys = items.filter(i => i.stock === 0).map(i => i._id);
+                                                setSelectedRowKeys(keys);
+                                            }
+                                        },
+                                        {
+                                            key: 'in-stock',
+                                            text: '✅ Select In Stock',
+                                            onSelect: () => {
+                                                const keys = items.filter(i => i.stock > (i.lowStockThreshold || 5)).map(i => i._id);
+                                                setSelectedRowKeys(keys);
+                                            }
+                                        }
+                                    ]
+                                }}
+                            />
                         </Card>
                     )
                 },
@@ -687,7 +830,18 @@ function Inventory() {
                                     <Button icon={<DownloadOutlined />} onClick={exportCSV} size="small">Export CSV</Button>
                                     <Button icon={<ExportOutlined />} onClick={generatePDFReport} size="small" type="primary" style={{ background: '#7B2CBF', borderColor: '#7B2CBF' }}>PDF Report</Button>
                                     <Button icon={<ReloadOutlined />} onClick={fetchSalesHistory} loading={salesLoading} size="small">Refresh</Button>
-                                    <Button icon={<DeleteOutlined />} onClick={handleClearSalesHistory} size="small" danger>Clear Sales</Button>
+                                    <Popconfirm
+                                        title="Clear All Sales History?"
+                                        description={<span>This will permanently delete <strong>all {salesHistory.length} sales records</strong>. This cannot be undone.</span>}
+                                        onConfirm={doClearSalesHistory}
+                                        okText="Yes, Clear All Sales"
+                                        okButtonProps={{ danger: true }}
+                                        placement="bottomRight"
+                                    >
+                                        <Button icon={<DeleteOutlined />} size="small" danger type="primary" ghost
+                                            disabled={salesHistory.length === 0}
+                                        >Clear Sales</Button>
+                                    </Popconfirm>
                                 </Space>}>
                                 <Table columns={salesColumns} dataSource={filteredSales} rowKey={r => r._id || r.id} loading={salesLoading} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 900 }} locale={{ emptyText: 'No sales found' }} />
                             </Card>
@@ -977,7 +1131,11 @@ function Inventory() {
                 </>)}
             </Modal>
 
-            <style>{`.low-stock-row { background: rgba(255,77,79,0.05) !important; } .low-stock-row:hover td { background: rgba(255,77,79,0.1) !important; }`}</style>
+            <style>{`
+                .low-stock-row { background: rgba(255,77,79,0.05) !important; }
+                .low-stock-row:hover td { background: rgba(255,77,79,0.1) !important; }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </div>
     );
 }

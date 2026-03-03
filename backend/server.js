@@ -2760,7 +2760,7 @@ app.delete('/api/v1/admin/printers/single', requireAdminAuth, async (req, res) =
  * Deletes all printer-related data (print jobs and printer discovery logs)
  * Used for system cleanup from admin settings
  */
-app.delete('/api/v1/admin/printer-data', async (req, res) => {
+app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
     try {
         // Delete all print job logs
         const printJobsResult = await Log.deleteMany({ type: 'print' });
