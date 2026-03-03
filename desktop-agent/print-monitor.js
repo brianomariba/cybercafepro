@@ -270,35 +270,32 @@ function detectColorCapability(nameLower, driverLower) {
 }
 
 /**
- * Infer paper size from document name and size bytes
+ * Fallback paper size when no Windows data is available.
+ * ZERO GUESSWORK — no document name analysis.
+ * The actual paper size is captured from PrintTicket (psk:PageMediaSize)
+ * or Get-PrintConfiguration by the SpoolerWatcher. This function is only
+ * called when all Windows sources failed (should be very rare).
  */
 function inferPaperSize(documentName, sizeBytes) {
-    const docLower = (documentName || '').toLowerCase();
-    if (docLower.includes('a3')) return 'A3';
-    if (docLower.includes('a4')) return 'A4';
-    if (docLower.includes('a5')) return 'A5';
-    if (docLower.includes('legal')) return 'Legal';
-    if (docLower.includes('letter')) return 'Letter';
-    if (docLower.includes('photo') || docLower.includes('4x6')) return '4x6 Photo';
-    if (docLower.includes('envelope') || docLower.includes('env')) return 'Envelope';
-    return 'A4';
+    return 'A4'; // Default when Windows didn't report any size
 }
 
 /**
- * Infer media/paper type from driver media type string and document name.
- * Handles both human-readable names AND raw DEVMODE values from Get-PrintJob.
+ * Resolve media/paper type from Windows-reported driver media type string.
+ * ZERO GUESSWORK — only trusts what the printer driver / PrintTicket reports.
+ * Handles both human-readable names AND raw DEVMODE/PrintTicket values.
+ * Returns 'Plain Paper' when no data (the most common real-world default).
  */
 function inferMediaType(mediaTypeStr, documentName) {
     const media = (mediaTypeStr || '').toLowerCase().trim();
-    const doc = (documentName || '').toLowerCase();
 
-    // Skip empty/default/generic driver values (these mean "use printer default")
+    // Skip empty/default/generic driver values (these mean "use printer default" = Plain Paper)
     const isGenericDefault = !media || media === '0' || media === 'default' ||
         media === 'autoselect' || media === 'auto' || media === 'stationery' ||
         media === 'unknown' || media === 'unspecified';
 
     if (!isGenericDefault) {
-        // Driver-reported media types
+        // Driver/PrintTicket reported media types — trust these
         if (media.includes('glossy')) return 'Glossy';
         if (media.includes('matte')) return 'Matte';
         if (media.includes('photo')) return 'Photo Paper';
@@ -319,26 +316,15 @@ function inferMediaType(mediaTypeStr, documentName) {
         if (media.includes('preprinted')) return 'Pre-printed';
     }
 
-    // Document name heuristics as fallback
-    if (doc.includes('glossy')) return 'Glossy';
-    if (doc.includes('matte')) return 'Matte';
-    if (doc.includes('photo')) return 'Photo Paper';
-    if (doc.includes('label')) return 'Labels';
-    if (doc.includes('envelope')) return 'Envelope';
-    if (doc.includes('card')) return 'Cardstock';
-
+    // No guessing from document names — default to Plain Paper
     return 'Plain Paper';
 }
 
 /**
- * Get print quality from document name hints
+ * Fallback print quality — defaults to Normal.
+ * Actual quality is captured from PrintTicket when available.
  */
 function inferPrintQuality(documentName, driverName) {
-    const docLower = (documentName || '').toLowerCase();
-    const driverLower = (driverName || '').toLowerCase();
-    if (docLower.includes('draft') || docLower.includes('low')) return 'Draft';
-    if (docLower.includes('photo') || docLower.includes('high') || docLower.includes('best')) return 'High Quality';
-    if (driverLower.includes('photo')) return 'Photo Quality';
     return 'Normal';
 }
 
