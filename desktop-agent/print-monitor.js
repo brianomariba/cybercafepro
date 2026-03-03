@@ -1793,17 +1793,62 @@ try {
                 $server.Dispose()
             } catch {}
 
-            # If TotalPages is still 0, the job is still spooling — retry
-            if ($totalPages -le 0) {
+            # Retry if we're missing critical data (pages, color, media type)
+            # Fast jobs (1 page) can complete before the first read captures everything
+            if ($totalPages -le 0 -or $colorMode -eq '' -or $mediaType -eq '') {
                 for ($retry = 0; $retry -lt 3; $retry++) {
-                    Start-Sleep -Milliseconds 500
+                    Start-Sleep -Milliseconds 300
                     try {
-                        $retryJob = Get-PrintJob -PrinterName $printerName -ID ([int]$jobId) -ErrorAction Stop
-                        if ($retryJob -and $retryJob.TotalPages -gt 0) {
-                            $totalPages = [int]$retryJob.TotalPages
-                            if ($copies -le 1 -and $retryJob.Copies -gt 1) { $copies = [int]$retryJob.Copies }
-                            break
+                        # Retry PrintTicket read if missing color/media
+                        if ($colorMode -eq '' -or $mediaType -eq '') {
+                            $srv2 = New-Object System.Printing.LocalPrintServer
+                            $q2 = $srv2.GetPrintQueue($printerName)
+                            if ($q2) {
+                                $jc2 = $q2.GetPrintJobInfoCollection()
+                                foreach ($pj2 in $jc2) {
+                                    if ($pj2.JobIdentifier -eq [int]$jobId) {
+                                        $tk2 = $pj2.JobTicket
+                                        if ($tk2 -eq $null) { $tk2 = $pj2.PrintTicket }
+                                        if ($tk2) {
+                                            $xs2 = $tk2.GetXmlStream()
+                                            $rd2 = New-Object System.IO.StreamReader($xs2)
+                                            $tx2 = $rd2.ReadToEnd()
+                                            $rd2.Close()
+                                            [xml]$d2 = $tx2
+                                            $n2 = New-Object System.Xml.XmlNamespaceManager($d2.NameTable)
+                                            $n2.AddNamespace("psf", "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework")
+                                            $n2.AddNamespace("psk", "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords")
+                                            if ($colorMode -eq '') {
+                                                $cn2 = $d2.SelectSingleNode("//psf:Feature[@name='psk:PageOutputColor']/psf:Option", $n2)
+                                                if ($cn2) { $r2 = $cn2.GetAttribute("name"); if ($r2) { $colorMode = $r2 -replace '^psk:', '' -replace '^ns0000:', '' } }
+                                            }
+                                            if ($mediaType -eq '') {
+                                                $mn2 = $d2.SelectSingleNode("//psf:Feature[@name='psk:PageMediaType']/psf:Option", $n2)
+                                                if ($mn2) { $r3 = $mn2.GetAttribute("name"); if ($r3) { $mediaType = $r3 -replace '^psk:', '' -replace '^ns0000:', '' } }
+                                            }
+                                            if ($paperSize -eq '') {
+                                                $sn2 = $d2.SelectSingleNode("//psf:Feature[@name='psk:PageMediaSize']/psf:Option", $n2)
+                                                if ($sn2) { $r4 = $sn2.GetAttribute("name"); if ($r4) { $paperSize = $r4 -replace '^psk:', '' -replace '^ns0000:', '' } }
+                                            }
+                                        }
+                                        if ($totalPages -le 0 -and $pj2.NumberOfPages -gt 0) { $totalPages = [int]$pj2.NumberOfPages }
+                                        break
+                                    }
+                                }
+                                $q2.Dispose()
+                            }
+                            $srv2.Dispose()
                         }
+                        # Also try Get-PrintJob for page count
+                        if ($totalPages -le 0) {
+                            $retryJob = Get-PrintJob -PrinterName $printerName -ID ([int]$jobId) -ErrorAction Stop
+                            if ($retryJob -and $retryJob.TotalPages -gt 0) {
+                                $totalPages = [int]$retryJob.TotalPages
+                                if ($copies -le 1 -and $retryJob.Copies -gt 1) { $copies = [int]$retryJob.Copies }
+                            }
+                        }
+                        # Stop retrying if we have everything
+                        if ($totalPages -gt 0 -and $colorMode -ne '' -and $mediaType -ne '') { break }
                     } catch { break }
                 }
             }
