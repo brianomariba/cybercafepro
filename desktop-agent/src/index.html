@@ -544,10 +544,17 @@
             loginBtn.disabled = false;
 
             if (response.success) {
-                // Switch to Widget View
-                document.getElementById('lock-screen').classList.remove('active');
-                document.getElementById('widget-screen').classList.add('active');
-                document.getElementById('sessionUser').innerText = response.name || response.user || 'User';
+                if (response.silent) {
+                    // Silent login: Portal window is already open, don't switch to widget view.
+                    // Just clear the form fields so lock screen is clean if we return.
+                    document.getElementById('username').value = '';
+                    document.getElementById('password').value = '';
+                } else {
+                    // Legacy: Switch to Widget View (should not happen in normal flow)
+                    document.getElementById('lock-screen').classList.remove('active');
+                    document.getElementById('widget-screen').classList.add('active');
+                    document.getElementById('sessionUser').innerText = response.name || response.user || 'User';
+                }
             } else {
                 errorMsg.innerText = response.message || "Authentication failed";
                 document.getElementById('username').focus();

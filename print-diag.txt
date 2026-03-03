@@ -1,0 +1,13 @@
+﻿=== RECENT PRINT JOBS ===
+Time=03/03/2026 22:12:47 | ID=5 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=1 | Size=350988
+Time=03/03/2026 22:09:19 | ID=4 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=4 | Size=3158172
+Time=03/03/2026 22:05:00 | ID=3 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=2 | Size=1164164
+Time=03/03/2026 21:58:05 | ID=2 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=5 | Size=98280
+Time=03/02/2026 18:58:21 | ID=4 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=5 | Size=98280
+Time=03/02/2026 18:55:59 | ID=3 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=1 | Size=23980
+Time=03/02/2026 18:47:04 | ID=2 | Doc=Print Document | Printer=EPSON L3150 Series | Pages=1 | Size=615996
+
+=== PRINTER COLOR CONFIG ===
+Printer=OneNote (Desktop) | Driver=Send to Microsoft OneNote 16 Driver | ColorConfig=True | Paper=Letter
+Printer=Microsoft Print to PDF | Driver=Microsoft Print To PDF | ColorConfig=True | Paper=Letter
+Printer=EPSON L3150 Series | Driver=EPSON L3150 Series | ColorConfig=True | Paper=Letter

@@ -405,12 +405,9 @@ function setupTray() {
                     label: 'Show/Hide Info Widget',
                     visible: !isLocked,
                     click: () => {
-                        if (mainWindow) {
-                            if (mainWindow.isVisible()) mainWindow.hide();
-                            else {
-                                mainWindow.show();
-                                mainWindow.focus();
-                            }
+                        // Open the portal window instead of showing the mainWindow widget
+                        if (currentSession) {
+                            createPortalWindow(currentSession.user);
                         }
                     }
                 },
@@ -512,11 +509,12 @@ ipcMain.on('login-attempt', async (event, credentials) => {
         if (response.data.success) {
             await startSession(credentials.username);
             saveSessionState(credentials.username); // Persist session across restarts
-            event.reply('login-response', {
-                success: true,
-                user: credentials.username,
-                name: response.data.user?.name || credentials.username
-            });
+            // Do NOT send login-response with success here.
+            // startSession() already hides the lock screen and opens the portal window.
+            // Sending login-response would switch the renderer to the widget (SESSION SECURED)
+            // screen, which would then appear if the user closes and reopens the portal.
+            // Instead, just reset the login button state silently.
+            event.reply('login-response', { success: true, silent: true });
         } else {
             event.reply('login-response', {
                 success: false,
@@ -1098,6 +1096,15 @@ function createPortalWindow(username) {
 
     portalWindow.on('closed', () => {
         portalWindow = null;
+        // If session is still active, reopen the portal so the user never sees
+        // the old widget "SESSION SECURED" screen on mainWindow.
+        if (!isLocked && currentSession) {
+            setTimeout(() => {
+                if (!isLocked && currentSession && !portalWindow) {
+                    createPortalWindow(currentSession.user);
+                }
+            }, 300);
+        }
     });
 
     console.log(`[Portal] Portal window created for: ${username}`);
@@ -1758,6 +1765,15 @@ async function startDataCollection() {
                 const colorMode = (cached && cached.colorMode) ? cached.colorMode : '';
                 const dataSource = cached ? 'realtime_watcher' : 'event_log_only';
 
+                // Document name: prefer the cached name (resolved from window title)
+                // over the event log name which is often generic "Print Document"
+                const genericDocNames = ['print document', 'untitled', 'unknown', 'document', 'local print'];
+                let documentName = job.document || 'Document';
+                if (cached && cached.document && !genericDocNames.includes(cached.document.toLowerCase().trim())) {
+                    documentName = cached.document;
+                }
+
+
                 // Media type: normalize PrintTicket values to human-readable names
                 // PrintTicket gives us: Plain, Stationery, PhotographicGlossy, PhotographicMatte, etc.
                 let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
@@ -1780,12 +1796,16 @@ async function startDataCollection() {
                 }
 
                 // Color mode: PrintTicket gives us Color/Monochrome/Grayscale
+                // IMPORTANT: Only trust explicit PrintTicket values, NOT printer config values.
+                // PrintTicket values are: 'Color', 'Monochrome', 'Grayscale'
+                // Printer config values are: 'True'/'False' (capability, NOT per-job)
                 let printType = job.printType || 'bw';
                 if (colorMode) {
                     const cm = colorMode.toLowerCase();
                     if (cm === 'color') printType = 'color';
                     else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
-                    else if (cm === 'true') printType = 'color'; // old format fallback
+                    // NOTE: 'true'/'false' are printer config values, not PrintTicket values.
+                    // Do NOT treat 'true' as color — it just means the printer CAN do color.
                 }
 
                 // Paper size: normalize PrintTicket values (ISOA4 → A4, NorthAmericaLetter → Letter)
@@ -1813,7 +1833,7 @@ async function startDataCollection() {
 
                 const totalSheets = computeTotalSheets(totalPages, copies, normalizedDuplex);
 
-                console.log(`[PRINT] 🖨️ "${job.document}" — ${totalPages}pg × ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
+                console.log(`[PRINT] 🖨️ "${documentName}" — ${totalPages}pg × ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
 
                 const printPayload = {
                     type: 'print',
@@ -1826,7 +1846,7 @@ async function startDataCollection() {
                         jobId: job.jobId,
                         printer: job.printer,
                         printerDriver: job.printerDriver,
-                        document: job.document,
+                        document: documentName,
                         totalPages: totalPages,
                         pagesPrinted: totalPages,
                         copies: copies,

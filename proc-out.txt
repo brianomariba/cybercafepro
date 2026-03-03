@@ -1,0 +1,1 @@
+﻿PID=16544|CMD="C:\Program Files\Adobe\Adobe Creative Cloud Experience\libs\node.exe" "C:\Program Files\Adobe\Adobe Creative Cloud Experience\js\main.js"

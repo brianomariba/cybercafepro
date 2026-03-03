@@ -52,89 +52,6 @@ function computeTotalSheets(totalPages, copies, duplexMode) {
 }
 
 /**
- * Extract a meaningful document name from a window title.
- * When applications print with a generic name like "Print Document",
- * the window title usually contains the actual document name.
- * 
- * Common window title patterns:
- *   "report.pdf - Google Chrome"
- *   "Assignment.docx - Microsoft Word"
- *   "photo.jpg - Windows Photo Viewer"
- *   "Budget 2026.xlsx - Excel"
- *   "Untitled - Notepad"
- *   "file.pdf (page 1 of 3)"
- *   "Print Preview - file.pdf"
- */
-function extractDocNameFromTitle(windowTitle) {
-    if (!windowTitle || typeof windowTitle !== 'string') return null;
-    const title = windowTitle.trim();
-    if (!title) return null;
-
-    // Skip system/print dialog windows
-    const skipPatterns = [
-        /^print$/i, /^printing$/i, /^print\s*dialog/i, /^save\s/i, /^open\s/i,
-        /^hawknine/i, /^task\s*(bar|manager)/i, /^desktop$/i,
-        /^microsoft\s+store/i, /^settings$/i, /^file\s+explorer/i
-    ];
-    for (const pat of skipPatterns) {
-        if (pat.test(title)) return null;
-    }
-
-    // Known file extensions to look for
-    const extPattern = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|odt|ods|odp|csv|html|htm|xml|jpg|jpeg|png|gif|bmp|tiff|tif|svg|webp|eml|msg)/i;
-
-    // Strategy 1: Find a segment that contains a file extension
-    // Split by common delimiters: " - ", " — ", " | ", " · "
-    const segments = title.split(/\s+[-–—|·]\s+/);
-    for (const seg of segments) {
-        const trimSeg = seg.trim();
-        if (extPattern.test(trimSeg)) {
-            // Clean up: remove leading/trailing brackets, page info, asterisks
-            let cleaned = trimSeg
-                .replace(/^\[|\]$/g, '')
-                .replace(/\s*\(page\s+\d+.*?\)/i, '')
-                .replace(/\s*-\s*\d+%$/i, '')
-                .replace(/^\*\s*/, '')
-                .replace(/\s*\*$/, '')
-                .trim();
-            if (cleaned.length > 0 && cleaned.length < 200) {
-                return cleaned;
-            }
-        }
-    }
-
-    // Strategy 2: Look for "filename.ext" pattern anywhere in the title
-    const fileMatch = title.match(/([^\\/:"*?<>|]+\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|odt|csv|jpg|jpeg|png|gif|bmp|tif|tiff|svg|webp|html|htm))/i);
-    if (fileMatch && fileMatch[1]) {
-        return fileMatch[1].trim();
-    }
-
-    // Strategy 3: If title has " - AppName" format, use the first part
-    // but only if it looks like a meaningful document name (not too short, not an app name)
-    const appSuffixes = [
-        /\s*-\s*(google\s+chrome|microsoft\s+edge|firefox|opera|brave|vivaldi|safari)$/i,
-        /\s*-\s*(microsoft\s+)?(word|excel|powerpoint|onenote|outlook|visio|publisher|access)$/i,
-        /\s*-\s*(notepad\+*\+*|sublime\s+text|visual\s+studio|vs\s+code|atom|brackets)$/i,
-        /\s*-\s*(adobe\s+)?(acrobat|reader|photoshop|illustrator|indesign)$/i,
-        /\s*-\s*(windows\s+)?(photo\s+viewer|photos|paint|media\s+player)$/i,
-        /\s*-\s*(libre\s*office\s+)?(writer|calc|impress|draw|base)$/i,
-        /\s*-\s*(wps\s+)?(writer|spreadsheets|presentation)$/i
-    ];
-    for (const suffix of appSuffixes) {
-        if (suffix.test(title)) {
-            let docPart = title.replace(suffix, '').trim();
-            // Remove common prefixes
-            docPart = docPart.replace(/^(print\s+preview\s*[-–—:]\s*)/i, '');
-            if (docPart.length >= 2 && docPart.length < 200 && !/^(untitled|new\s+document|document\s*\d*|sheet\s*\d*|presentation\s*\d*)$/i.test(docPart)) {
-                return docPart;
-            }
-        }
-    }
-
-    return null;
-}
-
-/**
  * Run a PowerShell script reliably by writing to a temp .ps1 file.
  * This avoids ALL quoting/escaping issues with exec().
  */
@@ -343,65 +260,142 @@ function inferPrintQuality(documentName, driverName) {
 }
 
 /**
- * Detect if the print job is color or B&W.
+ * Detect if the print job is color or B&W based on multiple signals.
  * 
- * ZERO GUESSWORK — only trusts Windows-reported per-job color settings.
- * No filename heuristics, no document name guessing.
- * 
- * Data sources (in priority order):
- *   1. job.JobColor — per-job DEVMODE/PrintTicket (from SpoolerWatcher or WMI)
- *      Values: 'Color', 'Monochrome', 'Grayscale', 1 (mono), 2 (color)
- *   2. job.Color — printer-level config (ONLY used to check if printer can do color)
- *      Values: true/false, 'True'/'False' — this is NOT per-job!
- * 
- * Logic:
- *   - If we have per-job color data → use it (definitive, no guessing)
- *   - If printer is NOT color-capable → B&W (can't print color regardless)
- *   - If no per-job data available → B&W (safe default for billing)
+ * Strategy:
+ * 1. If user explicitly chose Monochrome (dmColor=1) → B&W (trust user choice)
+ * 2. If printer Color config is explicitly false/monochrome → B&W
+ * 3. Check if printer supports color (via Windows config cache first, then heuristic fallback)
+ *    - If NOT color-capable → B&W
+ * 4. If printer IS color-capable AND driver is set to color mode (JobColor=2 / Color=True):
+ *    - Check for explicit B&W document indicators → B&W
+ *    - Check for explicit color document indicators → Color
+ *    - For generic/ambiguous documents (like "Print Document"), trust the driver color setting → Color
+ * 5. Content-based analysis as final fallback
  */
 function detectPrintType(job) {
-    // 1. Per-job color setting — the DEFINITIVE answer
-    // Comes from: PrintTicket XML (psk:PageOutputColor), WMI Win32_PrintJob.Color,
-    //             Get-PrintJob per-job Color, or DEVMODE dmColor
-    if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown' && job.JobColor !== '') {
-        const jobColorVal = typeof job.JobColor === 'string' ? job.JobColor.toLowerCase().trim() : job.JobColor;
+    const driverLower = (job.DriverName || job.printerDriver || '').toLowerCase();
+    const printerNameLower = (job.PrinterName || job.printer || '').toLowerCase();
+    const docNameLower = (job.DocumentName || job.document || '').toLowerCase();
 
-        // B&W / Grayscale
+    // 1. If user explicitly selected Monochrome/Grayscale in print dialog → definitely B&W
+    // DEVMODE dmColor: 1 = Monochrome (user chose B&W), 2 = Color (default on color printers)
+    if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown') {
+        const jobColorVal = typeof job.JobColor === 'string' ? job.JobColor.toLowerCase().trim() : job.JobColor;
         if (jobColorVal === 1 || jobColorVal === '1' || jobColorVal === 'monochrome' ||
             jobColorVal === 'grayscale' || jobColorVal === 'false') {
-            return 'bw';
-        }
-        // Color
-        if (jobColorVal === 2 || jobColorVal === '2' || jobColorVal === 'color' || jobColorVal === 'true') {
-            return 'color';
+            return 'bw'; // User explicitly chose B&W - trust this
         }
     }
 
-    // 2. If the printer is NOT color-capable, every job is B&W regardless
-    const printerName = job.PrinterName || job.printer || '';
-    const driverLower = (job.DriverName || job.printerDriver || '').toLowerCase();
-    const printerNameLower = printerName.toLowerCase();
+    // 2. If printer Color config is explicitly false/monochrome → B&W
+    if (job.Color === false || (typeof job.Color === 'string' &&
+        (job.Color.toLowerCase() === 'false' || job.Color.toLowerCase() === 'monochrome' || job.Color.toLowerCase() === 'grayscale'))) {
+        return 'bw';
+    }
 
+    // 3. Check if the printer supports color
+    // FIRST: check the printer cache (uses Windows Get-PrintConfiguration — most accurate)
     let isColorPrinter = false;
+    const printerName = job.PrinterName || job.printer || '';
     if (printerCache.has(printerName)) {
-        isColorPrinter = printerCache.get(printerName).isColor === true;
-    } else if (typeof job.Color === 'string' && job.Color.toLowerCase() === 'true') {
-        isColorPrinter = true;
-    } else if (job.Color === true) {
-        isColorPrinter = true;
-    } else if (job.Color === false || (typeof job.Color === 'string' &&
-        ['false', 'monochrome', 'grayscale'].includes(job.Color.toLowerCase()))) {
-        isColorPrinter = false;
+        const cached = printerCache.get(printerName);
+        isColorPrinter = cached.isColor === true;
     } else {
-        isColorPrinter = detectColorCapability(printerNameLower, driverLower);
+        // Check if Color config from Windows reports True
+        if (typeof job.Color === 'string' && job.Color.toLowerCase() === 'true') {
+            isColorPrinter = true;
+        } else if (job.Color === true) {
+            isColorPrinter = true;
+        } else {
+            // Final fallback: heuristic based on printer name/driver keywords
+            isColorPrinter = detectColorCapability(printerNameLower, driverLower);
+        }
     }
 
     if (!isColorPrinter) return 'bw';
 
-    // 3. Printer CAN do color, but we have NO per-job color data.
-    // Default to B&W — without proof from Windows that the user selected color,
-    // we don't assume it. The SpoolerWatcher should capture this for every job;
-    // if it didn't, B&W is the safe billing default.
+    // --- At this point, the printer IS color-capable ---
+
+    // Check if driver is actively in color mode (JobColor=2 or Color=True)
+    let driverInColorMode = false;
+    if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown') {
+        const jobColorVal = typeof job.JobColor === 'string' ? job.JobColor.toLowerCase().trim() : job.JobColor;
+        if (jobColorVal === 2 || jobColorVal === '2' || jobColorVal === 'color' || jobColorVal === 'true') {
+            driverInColorMode = true;
+        }
+    }
+    if (typeof job.Color === 'string' && job.Color.toLowerCase() === 'true') {
+        driverInColorMode = true;
+    } else if (job.Color === true) {
+        driverInColorMode = true;
+    }
+
+    // 4. Document-based analysis
+
+    // --- Definite B&W: document types/names that are almost never color ---
+    const bwDocIndicators = [
+        'text', 'draft', 'invoice', 'receipt', 'contract', 'form',
+        'memo', 'spreadsheet', 'b&w', 'bw', 'black', 'mono', 'grayscale',
+        'blueprint', 'schematic', 'outline', 'notes', 'resume', 'cv',
+        'fax', 'statement', 'agreement', 'affidavit', 'deed',
+        'transcript', 'manuscript', 'thesis', 'essay', 'assignment', 'exam',
+        'test print', 'notepad'
+    ];
+    const bwExtensions = ['.txt', '.csv', '.log', '.rtf', '.xml', '.json'];
+
+    if (bwDocIndicators.some(kw => docNameLower.includes(kw)) ||
+        bwExtensions.some(ext => docNameLower.endsWith(ext))) {
+        return 'bw';
+    }
+
+    // --- Definite Color: file types/names that are almost always color ---
+    const colorExtensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif',
+        '.gif', '.psd', '.ai', '.svg', '.webp', '.heic', '.raw',
+        '.pptx', '.ppt', '.key'];
+    const colorDocIndicators = ['photo', 'image', 'picture', 'poster', 'flyer', 'banner',
+        'brochure', 'certificate', 'presentation', 'slide', 'artwork',
+        'design', 'illustration', 'graphic', 'chart', 'infographic',
+        'color', 'colour', 'cover', 'catalog', 'magazine', 'comic',
+        'calendar', 'postcard', 'greeting card', 'invitation', 'label design'];
+
+    if (colorExtensions.some(ext => docNameLower.endsWith(ext)) ||
+        colorDocIndicators.some(kw => docNameLower.includes(kw))) {
+        return 'color';
+    }
+
+    // --- Application-based B&W: known document-producing apps ---
+    const bwAppPatterns = [
+        'microsoft word', 'word -', '- word',
+        'microsoft excel', 'excel -', '- excel',
+        'notepad', 'wordpad',
+        'adobe reader', 'adobe acrobat',
+        'libreoffice writer', 'libreoffice calc',
+        'openoffice', 'wps office',
+    ];
+    // Document extensions that are MOSTLY B&W (but not exclusively)
+    const bwDocExtensions = ['.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods'];
+
+    if (bwAppPatterns.some(kw => docNameLower.includes(kw))) {
+        // Even from these apps, check if document name has explicit color hints
+        const hasColorHint = ['photo', 'image', 'color', 'poster', 'flyer', 'banner',
+            'brochure', 'certificate', 'glossy', 'picture', 'artwork']
+            .some(kw => docNameLower.includes(kw));
+        if (!hasColorHint) return 'bw';
+    }
+
+    if (bwDocExtensions.some(ext => docNameLower.endsWith(ext))) {
+        return 'bw';
+    }
+
+    // 5. For generic/ambiguous document names (e.g., "Print Document", "Untitled"):
+    // If the printer is color-capable AND the driver is set to color mode,
+    // trust the driver setting — the user/app chose to print in color.
+    if (driverInColorMode) {
+        return 'color';
+    }
+
+    // 6. Default: B&W for billing safety
     return 'bw';
 }
 
@@ -599,7 +593,7 @@ if ($results.Count -eq 0) {
         const parsed = JSON.parse(stdout);
         const jobs = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
 
-        return jobs.filter(job => job && job.Id).map(job => {
+        console.log('Raw stdout:\n' + stdout); return jobs.filter(job => job && job.Id).map(job => {
             const printType = detectPrintType(job);
             const isColorPrinter = detectColorCapability(
                 (job.PrinterName || '').toLowerCase(),
@@ -956,7 +950,6 @@ try {
         $duplexMode = "OneSided"
         $driverName = ""
         $colorMode = "Unknown"
-        $jobColorMode = ""
         try {
             $pConfig = Get-PrintConfiguration -PrinterName $printer -ErrorAction Stop
             if ($pConfig.MediaType) { $mediaType = [string]$pConfig.MediaType }
@@ -969,15 +962,12 @@ try {
             $driverName = $pInfo.DriverName
         } catch {}
 
-        # Try to get per-job DEVMODE settings from WMI (job may still be briefly in spooler)
-        # Win32_PrintJob has Color (per-job DEVMODE) and Parameters (paper info)
+        # Try to get per-job DEVMODE paper size via PrinterProperties or recent PrintJob
+        # Win32_PrintJob.Parameters sometimes contains paper info
         try {
             $wmiJobName2 = "$printer, $id"
             $wmiJob2 = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName2'" -ErrorAction Stop
             if ($wmiJob2) {
-                # CRITICAL: Get per-job Color from WMI — this is the DEVMODE dmColor
-                # NOT the printer default. Values: 'Color' or 'Monochrome'
-                if ($wmiJob2.Color) { $jobColorMode = [string]$wmiJob2.Color }
                 # Check for paper size in Parameters string
                 $params = [string]$wmiJob2.Parameters
                 if ($params -match 'PaperSize=(\w+)') {
@@ -997,23 +987,6 @@ try {
         if ($wmiMediaType -ne '') { $mediaType = $wmiMediaType }
         if ($wmiDuplex -ne '') { $duplexMode = $wmiDuplex }
 
-        # If WMI didn't capture per-job color, try Get-PrintJob fallback
-        if ($jobColorMode -eq '') {
-            try {
-                $pjFb2 = Get-PrintJob -PrinterName $printer -ID ([int]$id) -ErrorAction Stop
-                if ($pjFb2 -and $pjFb2.Color -ne $null) {
-                    $c2 = [string]$pjFb2.Color
-                    if ($c2 -eq 'True') { $jobColorMode = 'Color' }
-                    elseif ($c2 -eq 'False') { $jobColorMode = 'Monochrome' }
-                    elseif ($c2 -ne '') { $jobColorMode = $c2 }
-                }
-            } catch {}
-        }
-        # If printer is definitively B&W-only, set Monochrome
-        if ($jobColorMode -eq '' -and $colorMode -ne 'Unknown' -and $colorMode -eq 'False') {
-            $jobColorMode = 'Monochrome'
-        }
-
         $results += [PSCustomObject]@{
             TimeCreated = [string]$evt.TimeCreated
             Id = [int]$id
@@ -1029,7 +1002,6 @@ try {
             DuplexMode = [string]$duplexMode
             DriverName = [string]$driverName
             ColorMode = [string]$colorMode
-            JobColorMode = [string]$jobColorMode
         }
     }
 } catch {
@@ -1058,8 +1030,8 @@ if ($results.Count -eq 0) {
                 PrinterName: j.Printer,
                 DocumentName: j.Document,
                 DriverName: j.DriverName || '',
-                JobColor: j.JobColorMode || null,  // Per-job DEVMODE color (from WMI)
-                Color: j.ColorMode || null          // Printer config color (capability only)
+                JobColor: null,
+                Color: j.ColorMode || null
             });
 
             let enhancedPrintType = printType;
@@ -1643,7 +1615,6 @@ function startSpoolerWatcher(onJob) {
     const WATCHER_SCRIPT = `
 # Real-Time Print Job Watcher using WMI Event Subscription
 # + System.Printing.PrintTicket for EXACT user-selected settings
-# + Foreground window title capture for real document names
 #
 # PrintTicket is the XML representation of what the user picked
 # in the print dialog. It contains EVERY setting — not filtered
@@ -1654,25 +1625,6 @@ $ErrorActionPreference = 'SilentlyContinue'
 # Load System.Printing assembly for PrintTicket access
 Add-Type -AssemblyName System.Printing
 Add-Type -AssemblyName ReachFramework
-
-# Add Win32 API for getting the foreground window title
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
-public class ForegroundWindow {
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-    public static string GetTitle() {
-        IntPtr handle = GetForegroundWindow();
-        StringBuilder sb = new StringBuilder(512);
-        GetWindowText(handle, sb, sb.Capacity);
-        return sb.ToString();
-    }
-}
-"@
 
 $query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_PrintJob'"
 
@@ -1703,13 +1655,6 @@ try {
             $document = [string]$job.Document
             $sizeBytes = [long]$job.Size
             $owner = [string]$job.Owner
-
-            # Capture the foreground window title — this often contains the real document name
-            # when the application submits a generic name like "Print Document"
-            $windowTitle = ""
-            try {
-                $windowTitle = [ForegroundWindow]::GetTitle()
-            } catch {}
 
             # Try to extract copies from Parameters
             try {
@@ -1822,43 +1767,11 @@ try {
                 }
             }
 
-            # ===== ENSURE colorMode IS CAPTURED — no guesswork allowed =====
-            # If PrintTicket didn't give us colorMode, try other Windows sources.
-            if ($colorMode -eq '') {
-                # Fallback 1: Get-PrintJob per-job Color property
-                try {
-                    $pjFb = Get-PrintJob -PrinterName $printerName -ID ([int]$jobId) -ErrorAction Stop
-                    if ($pjFb -and $pjFb.Color -ne $null) {
-                        $fbColor = [string]$pjFb.Color
-                        if ($fbColor -eq 'True') { $colorMode = 'Color' }
-                        elseif ($fbColor -eq 'False') { $colorMode = 'Monochrome' }
-                        elseif ($fbColor -ne '') { $colorMode = $fbColor }
-                    }
-                } catch {}
-            }
-
-            if ($colorMode -eq '') {
-                # Fallback 2: WMI Win32_PrintJob.Color (per-job DEVMODE dmColor)
-                try {
-                    $wmiCJob = Get-CimInstance Win32_PrintJob -Filter "Name='$printerName, $jobId'" -ErrorAction Stop
-                    if ($wmiCJob -and $wmiCJob.Color) { $colorMode = [string]$wmiCJob.Color }
-                } catch {}
-            }
-
-            if ($colorMode -eq '') {
-                # Fallback 3: If printer is NOT color-capable, set Monochrome
-                try {
-                    $pcfg = Get-PrintConfiguration -PrinterName $printerName -ErrorAction Stop
-                    if ($pcfg.Color -eq $false) { $colorMode = 'Monochrome' }
-                } catch {}
-            }
-
             # Output the captured job as a JSON line
             $result = [PSCustomObject]@{
                 Printer = $printerName
                 JobId = [string]$jobId
                 Document = $document
-                WindowTitle = [string]$windowTitle
                 TotalPages = $totalPages
                 PagesPrinted = $pagesPrinted
                 Copies = $copies
@@ -1938,22 +1851,11 @@ try {
                     // Process captured print job
                     if (data.Printer && data.JobId) {
                         const jobKey = generatePrintJobKey(data.Printer, data.JobId, data.Document, null);
-
-                        // Resolve document name: use window title if the spooler name is generic
-                        let resolvedDocName = data.Document || 'Unknown';
-                        const genericNames = ['print document', 'untitled', 'unknown', 'document', 'local print'];
-                        if (genericNames.includes(resolvedDocName.toLowerCase().trim())) {
-                            const betterName = extractDocNameFromTitle(data.WindowTitle || '');
-                            if (betterName) {
-                                resolvedDocName = betterName;
-                            }
-                        }
-
                         const jobData = {
                             jobKey: jobKey,
                             printer: data.Printer,
                             jobId: data.JobId,
-                            document: resolvedDocName,
+                            document: data.Document || 'Unknown',
                             totalPages: parseInt(data.TotalPages) || 0,
                             pagesPrinted: parseInt(data.PagesPrinted) || 0,
                             copies: parseInt(data.Copies) || 1,
@@ -1967,7 +1869,7 @@ try {
                             source: 'wmi_event_realtime'
                         };
 
-                        console.log(`[SpoolerWatcher] 🖨️ Instant capture: "${jobData.document}" (raw: "${data.Document}", window: "${(data.WindowTitle || '').substring(0, 80)}") - ${jobData.totalPages} pages, ${jobData.copies} copies, paper=${jobData.paperSize || 'default'}, media=${jobData.mediaType || 'default'}, color=${jobData.colorMode || 'unknown'}`);
+                        console.log(`[SpoolerWatcher] 🖨️ Instant capture: "${jobData.document}" - ${jobData.totalPages} pages, ${jobData.copies} copies, paper=${jobData.paperSize || 'default'}, media=${jobData.mediaType || 'default'}, color=${jobData.colorMode || 'unknown'}`);
 
                         if (typeof onJob === 'function') {
                             onJob(jobData);
