@@ -30,7 +30,7 @@ import {
     ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, clearAllFinanceData } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -320,6 +320,22 @@ function Settings() {
             message.error(err.response?.data?.error || 'Failed to delete browser data');
         } finally {
             setCleaningBrowserData(false);
+        }
+    };
+
+    // Delete all finance data
+    const [cleaningFinanceData, setCleaningFinanceData] = useState(false);
+    const handleDeleteAllFinanceData = async () => {
+        setCleaningFinanceData(true);
+        try {
+            const result = await clearAllFinanceData();
+            message.success(
+                `Finance data cleared: ${result.deleted?.transactions || 0} transactions and ${result.deleted?.sessionBillingLogs || 0} billing logs deleted`
+            );
+        } catch (err) {
+            message.error(err.response?.data?.error || 'Failed to delete finance data');
+        } finally {
+            setCleaningFinanceData(false);
         }
     };
 
@@ -1033,6 +1049,65 @@ function Settings() {
                                             block
                                         >
                                             Delete All Browser Data
+                                        </Button>
+                                    </Popconfirm>
+                                </Space>
+                            </div>
+                        </Card>
+                    </Col>
+
+                    <Col xs={24} lg={12}>
+                        <Card
+                            title={
+                                <Space>
+                                    <DollarOutlined style={{ color: '#ff3b5c' }} />
+                                    <span>Finance Data Cleanup</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: 24,
+                                background: 'rgba(255, 59, 92, 0.06)',
+                                border: '1px solid rgba(255, 59, 92, 0.15)',
+                                borderRadius: 12,
+                                marginBottom: 16
+                            }}>
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
+                                        <Text strong>Delete All Finance Data</Text>
+                                    </div>
+                                    <Text type="secondary" style={{ fontSize: 13 }}>
+                                        This will permanently remove all financial records
+                                        from the system. This includes:
+                                    </Text>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
+                                        <li>All transaction records (sessions, tasks, inventory sales)</li>
+                                        <li>Session billing and revenue logs</li>
+                                        <li>Revenue summaries and history</li>
+                                    </ul>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        ⚠️ This action cannot be undone. The finance dashboard will reset to
+                                        zero and new transactions will be recorded automatically going forward.
+                                    </Text>
+                                    <Divider style={{ margin: '8px 0' }} />
+                                    <Popconfirm
+                                        title="Delete all finance data?"
+                                        description="This will permanently remove ALL transactions, revenue records, and billing history. This cannot be undone."
+                                        onConfirm={handleDeleteAllFinanceData}
+                                        okText="Yes, Delete All"
+                                        cancelText="Cancel"
+                                        okButtonProps={{ danger: true }}
+                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
+                                    >
+                                        <Button
+                                            danger
+                                            type="primary"
+                                            icon={<DeleteOutlined />}
+                                            loading={cleaningFinanceData}
+                                            block
+                                        >
+                                            Delete All Finance Data
                                         </Button>
                                     </Popconfirm>
                                 </Space>

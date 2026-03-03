@@ -3926,6 +3926,35 @@ app.delete('/api/v1/admin/service-categories/:id', requireAdminAuth, async (req,
 // ==================== TRANSACTIONS ====================
 
 /**
+ * DELETE /api/v1/admin/finance-data
+ * Clear all finance data: transactions and related session billing logs
+ */
+app.delete('/api/v1/admin/finance-data', requireAdminAuth, async (req, res) => {
+    try {
+        // Delete all transactions
+        const txnResult = await Transaction.deleteMany({});
+        // Delete session billing logs (type: 'session-end' logs that contain billing info)
+        const sessionBillingResult = await Log.deleteMany({ type: 'session-end' });
+
+        const totalDeleted = (txnResult.deletedCount || 0) + (sessionBillingResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin cleared finance data: ${txnResult.deletedCount} transactions, ${sessionBillingResult.deletedCount} session billing logs`);
+
+        res.json({
+            success: true,
+            deleted: {
+                transactions: txnResult.deletedCount || 0,
+                sessionBillingLogs: sessionBillingResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Finance Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete finance data' });
+    }
+});
+
+/**
  * GET /api/v1/admin/transactions
  * List all transactions from database
  */
