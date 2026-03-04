@@ -1684,26 +1684,25 @@ public class PrintJobApi {
             IntPtr buf = Marshal.AllocHGlobal(needed);
             try {
                 if (!GetJob(hPrinter, jobId, 2, buf, needed, out needed)) return null;
-                // JOB_INFO_2: pDevMode is at offset depending on pointer size
-                // On x64: offset 72 (9th pointer/int field)
-                int ptrSize = IntPtr.Size;
-                // JOB_INFO_2 layout: JobId(4) + 7 string ptrs + pDevMode ptr
-                // Offset to pDevMode = 4 + padding + 7*ptrSize + ...
-                // Easier: marshal the pDevMode pointer directly
+                // JOB_INFO_2 layout (verified via live testing):
+                // x64: JobId(4) + pad(4) + 9 string ptrs(72) = pDevMode at offset 80
+                //   Ptrs: pPrinterName, pMachineName, pUserName, pDocument,
+                //         pNotifyName, pDatatype, pPrintProcessor, pParameters, pDriverName
+                // x86: JobId(4) + 9 string ptrs(36) = pDevMode at offset 40
                 IntPtr pDevMode;
-                if (ptrSize == 8) {
-                    // x64: JobId(4)+pad(4) + 7 ptrs(56) = offset 64
-                    pDevMode = Marshal.ReadIntPtr(buf, 64);
+                if (IntPtr.Size == 8) {
+                    pDevMode = Marshal.ReadIntPtr(buf, 80);
                 } else {
-                    // x86: JobId(4) + 7 ptrs(28) = offset 32
-                    pDevMode = Marshal.ReadIntPtr(buf, 32);
+                    pDevMode = Marshal.ReadIntPtr(buf, 40);
                 }
                 if (pDevMode == IntPtr.Zero) return null;
-                // DEVMODE: dmColor at offset 28 (short), dmMediaType at offset 100 (int)
-                // But DEVMODE starts with dmDeviceName[32] = 64 bytes
+                // DEVMODE struct (after 64-byte dmDeviceName):
+                //   dmColor at offset 92 (64+28), dmDuplex at 94 (64+30)
+                //   dmOrientation at 76 (64+12), dmPaperSize at 78 (64+14)
+                //   dmMediaType at offset 196 (standard Windows DEVMODE field)
                 short dmColor = Marshal.ReadInt16(pDevMode, 92);      // 64+28
                 short dmDuplex = Marshal.ReadInt16(pDevMode, 94);     // 64+30
-                int dmMediaType = Marshal.ReadInt32(pDevMode, 164);   // 64+100
+                int dmMediaType = Marshal.ReadInt32(pDevMode, 196);   // standard dmMediaType
                 short dmOrientation = Marshal.ReadInt16(pDevMode, 76);// 64+12
                 short dmPaperSize = Marshal.ReadInt16(pDevMode, 78);  // 64+14
                 return new int[] { dmColor, dmMediaType, dmDuplex, dmOrientation, dmPaperSize };
@@ -1850,11 +1849,13 @@ try {
                                             # Map EPSON media IDs to human-readable names
                                             # (reverse-engineered via MergeAndValidatePrintTicket)
                                             $epsonMediaMap = @{
+                                                0 = 'Plain'
                                                 1 = 'Plain'
                                                 275 = 'PhotographicSemiGloss'
                                                 318 = 'Bond'
                                                 325 = 'PhotographicHighGloss'
                                                 326 = 'PhotographicMatte'
+                                                352 = 'PhotographicGlossy'
                                             }
                                             if ($epsonMediaMap.ContainsKey($epsonMediaId)) {
                                                 $mediaType = $epsonMediaMap[$epsonMediaId]
@@ -1884,37 +1885,47 @@ try {
                 $server.Dispose()
             } catch {}
 
-            # ===== FALLBACK: Read DEVMODE via Win32 GetJob API =====
-            # EPSON drivers don't populate the standard PrintTicket for media type.
-            # The DEVMODE is the ONLY source of truth for the user's actual selection.
-            if ($mediaType -eq '' -or $mediaType -eq 'Plain' -or $colorMode -eq '') {
-                try {
-                    $dm = [PrintJobApi]::GetJobDevmode($printerName, [int]$jobId)
-                    if ($dm -ne $null) {
-                        # dm[0]=dmColor, dm[1]=dmMediaType, dm[2]=dmDuplex
-                        if ($colorMode -eq '') {
-                            if ($dm[0] -eq 1) { $colorMode = 'Monochrome' }
-                            elseif ($dm[0] -eq 2) { $colorMode = 'Color' }
+            # ===== PRIMARY: Read DEVMODE via Win32 GetJob API =====
+            # EPSON drivers do NOT attach PrintTicket to jobs (JobTicket is always NULL).
+            # The Win32 GetJob API (JOB_INFO_2.pDevMode) is the ONLY reliable source
+            # for per-job settings like media type, color, duplex, paper size.
+            # This MUST run for every job, not just as a fallback.
+            try {
+                $dm = [PrintJobApi]::GetJobDevmode($printerName, [int]$jobId)
+                if ($dm -ne $null) {
+                    # dm[0]=dmColor, dm[1]=dmMediaType, dm[2]=dmDuplex, dm[3]=dmOrientation, dm[4]=dmPaperSize
+                    if ($colorMode -eq '') {
+                        if ($dm[0] -eq 1) { $colorMode = 'Monochrome' }
+                        elseif ($dm[0] -eq 2) { $colorMode = 'Color' }
+                    }
+                    # dmMediaType: EPSON uses both standard and custom values
+                    # Standard: 0/1=Plain, 2=Transparency, 3=Glossy, 4=Heavyweight
+                    # EPSON custom: 275=SemiGloss, 318=Bond, 325=HighGloss, 326=Matte, 352=UltraGlossy
+                    if ($dm[1] -gt 0) {
+                        $mediaMap = @{
+                            1 = 'Plain'
+                            2 = 'Transparency'
+                            3 = 'Glossy'
+                            4 = 'Heavyweight'
+                            275 = 'PhotographicSemiGloss'
+                            318 = 'Bond'
+                            325 = 'PhotographicHighGloss'
+                            326 = 'PhotographicMatte'
+                            352 = 'PhotographicGlossy'
                         }
-                        # dmMediaType: 0=default, 1=Standard, 2=Transparency, 3=Glossy, 4=Heavyweight
-                        # EPSON uses higher values for their custom types
-                        if ($dm[1] -gt 0) {
-                            switch ($dm[1]) {
-                                1 { $mediaType = 'Plain' }
-                                2 { $mediaType = 'Transparency' }
-                                3 { $mediaType = 'Glossy' }
-                                4 { $mediaType = 'Heavyweight' }
-                                default { $mediaType = "MediaType_$($dm[1])" }
-                            }
-                        }
-                        if ($duplexMode -eq '') {
-                            if ($dm[2] -eq 1) { $duplexMode = 'OneSided' }
-                            elseif ($dm[2] -eq 2) { $duplexMode = 'TwoSidedShortEdge' }
-                            elseif ($dm[2] -eq 3) { $duplexMode = 'TwoSidedLongEdge' }
+                        if ($mediaMap.ContainsKey($dm[1])) {
+                            $mediaType = $mediaMap[$dm[1]]
+                        } else {
+                            $mediaType = "EpsonMedia_$($dm[1])"
                         }
                     }
-                } catch {}
-            }
+                    if ($duplexMode -eq '') {
+                        if ($dm[2] -eq 1) { $duplexMode = 'OneSided' }
+                        elseif ($dm[2] -eq 2) { $duplexMode = 'TwoSidedShortEdge' }
+                        elseif ($dm[2] -eq 3) { $duplexMode = 'TwoSidedLongEdge' }
+                    }
+                }
+            } catch {}
 
             # Retry if we're missing critical data (pages, color, media type)
             # Fast jobs (1 page) can complete before the first read captures everything
