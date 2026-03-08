@@ -2330,8 +2330,10 @@ app.post('/api/v1/agent/log', async (req, res) => {
                 const newCopies = enhancedData.copies || 1;
                 const existingCopies = existingPrintJob.data?.copies || 1;
 
-                if (newPages > existingPages || newSheets > existingSheets || newCopies > existingCopies) {
-                    // Update existing record with better data
+                const isStatusUpdateToPrinted = enhancedData.status === 'Printed' && existingPrintJob.data?.status !== 'Printed';
+
+                if (newPages > existingPages || newSheets > existingSheets || newCopies > existingCopies || isStatusUpdateToPrinted) {
+                    // Update existing record with better data or completed status
                     const updateFields = {};
                     if (newPages > existingPages) {
                         updateFields['data.totalPages'] = newPages;
@@ -2343,14 +2345,23 @@ app.post('/api/v1/agent/log', async (req, res) => {
                     if (newSheets > existingSheets) {
                         updateFields['data.totalSheets'] = newSheets;
                     }
-                    // Also update source if the new source is more reliable
-                    if (enhancedData.source === 'event_log_307' || enhancedData.source === 'realtime_watcher') {
-                        updateFields['data.source'] = enhancedData.source;
+
+                    if (enhancedData.status === 'Printed' || enhancedData.status === 'completed') {
                         updateFields['data.status'] = 'Printed';
                     }
 
-                    await Log.findByIdAndUpdate(existingPrintJob._id, { $set: updateFields });
-                    console.log(`[PRINT DEDUP] Updated job ${enhancedData.jobId}: pages ${existingPages}->${newPages}, sheets ${existingSheets}->${newSheets}, copies ${existingCopies}->${newCopies}`);
+                    // Also update source if the new source is more reliable
+                    if (enhancedData.source === 'event_log_307' || enhancedData.source === 'event_log_only') {
+                        updateFields['data.source'] = enhancedData.source;
+                    }
+
+                    const updatedDoc = await Log.findByIdAndUpdate(existingPrintJob._id, { $set: updateFields }, { new: true });
+                    console.log(`[PRINT DEDUP] Updated job ${enhancedData.jobId}: status -> Printed, pages ${existingPages}->${Math.max(existingPages, newPages)}, copies ${existingCopies}->${Math.max(existingCopies, newCopies)}`);
+
+                    // Tell sockets this print log was updated so the UI updates
+                    if (updatedDoc) {
+                        io.emit('new-log', updatedDoc);
+                    }
                     return res.json({ success: true, updated: true, id: existingPrintJob._id });
                 }
 

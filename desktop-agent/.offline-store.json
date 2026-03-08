@@ -154,5 +154,26 @@
     "showTotalItemsToUser": true,
     "lowStockEmailEnabled": true
   },
-  "lastSync": "2026-03-03T22:18:52.938Z"
+  "lastSync": "2026-03-04T00:47:13.622Z",
+  "publicDocuments": [
+    {
+      "orderId": "HN-MMBBJMPXZ0O",
+      "customerName": "brak",
+      "customerPhone": "0724437856",
+      "serviceType": "printing-bw",
+      "instructions": "print now",
+      "files": [
+        {
+          "filename": "1772585341120-722779720-Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "originalName": "Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "downloadUrl": "http://api.hawkninegroup.com/uploads/1772585341120-722779720-Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "size": 108006,
+          "docType": "pdf",
+          "downloaded": true,
+          "downloadedAt": "2026-03-04T00:49:16.680Z"
+        }
+      ],
+      "timestamp": "2026-03-04T00:49:01.125Z"
+    }
+  ]
 }
