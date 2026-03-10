@@ -22,7 +22,7 @@ import {
     SyncOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getBrowserHistory, addToBlocklist, connectSocket, disconnectSocket } from '../services/api';
+import { getBrowserHistory, addToBlocklist, connectSocket, disconnectSocket, getOnlineServices } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -30,12 +30,16 @@ const { RangePicker } = DatePicker;
 
 function BrowserHistory() {
     const [history, setHistory] = useState([]);
+    const [onlineServices, setOnlineServices] = useState([]);
     const [selectedEntry, setSelectedEntry] = useState(null);
     const [detailsVisible, setDetailsVisible] = useState(false);
     const [searchText, setSearchText] = useState('');
     const [filterCategory, setFilterCategory] = useState('all');
     const [filterComputer, setFilterComputer] = useState('all');
     const [filterUser, setFilterUser] = useState('all');
+    const [servicesSearchText, setServicesSearchText] = useState('');
+    const [servicesFilterUser, setServicesFilterUser] = useState('all');
+    const [servicesDateRange, setServicesDateRange] = useState(null);
     const [loading, setLoading] = useState(false);
     const [lastUpdate, setLastUpdate] = useState(null);
 
@@ -60,8 +64,10 @@ function BrowserHistory() {
         if (showLoading) setLoading(true);
         try {
             const data = await getBrowserHistory({ limit: 200 });
+            const servicesData = await getOnlineServices();
             const mapped = mapBrowserData(data);
             setHistory(mapped);
+            setOnlineServices(servicesData || []);
             setLastUpdate(new Date());
         } catch (e) {
             console.error('Failed to load browser history', e);
@@ -98,6 +104,18 @@ function BrowserHistory() {
                 }
             }
         });
+
+        // Add specific socket listener for online services
+        if (socket) {
+            socket.on('online-service-detected', (serviceDoc) => {
+                setOnlineServices(prev => {
+                    const exists = prev.some(s => s._id === serviceDoc._id);
+                    if (exists) return prev;
+                    return [serviceDoc, ...prev].slice(0, 100);
+                });
+                message.success(`New online service detected: ${serviceDoc.service} from ${serviceDoc.hostname}`);
+            });
+        }
 
         // Auto-refresh every 30 seconds
         const refreshInterval = setInterval(() => {
@@ -148,6 +166,24 @@ function BrowserHistory() {
         const matchesComputer = filterComputer === 'all' || h.computer === filterComputer;
         const matchesUser = filterUser === 'all' || h.user === filterUser;
         return matchesSearch && matchesCategory && matchesComputer && matchesUser;
+    });
+
+    const filteredOnlineServices = onlineServices.filter(s => {
+        const matchesSearch = (s.service || '').toLowerCase().includes(servicesSearchText.toLowerCase()) ||
+            (s.hostname || '').toLowerCase().includes(servicesSearchText.toLowerCase()) ||
+            (s.fileName || '').toLowerCase().includes(servicesSearchText.toLowerCase());
+        const user = s.sessionUser || 'Unknown';
+        const matchesUser = servicesFilterUser === 'all' || user === servicesFilterUser;
+
+        let matchesDateRange = true;
+        if (servicesDateRange && servicesDateRange.length === 2 && servicesDateRange[0] && servicesDateRange[1]) {
+            const itemDate = dayjs(s.timestamp);
+            const start = servicesDateRange[0].startOf('day');
+            const end = servicesDateRange[1].endOf('day');
+            matchesDateRange = itemDate.isAfter(start) && itemDate.isBefore(end);
+        }
+
+        return matchesSearch && matchesUser && matchesDateRange;
     });
 
     // Block site feature
@@ -640,6 +676,107 @@ function BrowserHistory() {
                     </div>
                 )}
             </Modal>
+
+            {/* Online Services Table */}
+            <Row style={{ marginTop: 24 }}>
+                <Col span={24}>
+                    <Card
+                        title={
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+                                <Space>
+                                    <CheckCircleOutlined style={{ color: '#00ff88' }} />
+                                    <span>Online Services Done</span>
+                                    <Badge count={onlineServices.length} style={{ backgroundColor: '#00ff88' }} />
+                                </Space>
+                                <Space wrap>
+                                    <Search
+                                        placeholder="Search services, PC, file..."
+                                        style={{ width: 220 }}
+                                        value={servicesSearchText}
+                                        onChange={(e) => setServicesSearchText(e.target.value)}
+                                        allowClear
+                                    />
+                                    <Select
+                                        value={servicesFilterUser}
+                                        onChange={setServicesFilterUser}
+                                        style={{ width: 130 }}
+                                        options={[
+                                            { value: 'all', label: 'All Users' },
+                                            ...[...new Set(onlineServices.map(h => h.sessionUser || 'Unknown'))].map(user => ({
+                                                value: user, label: user
+                                            }))
+                                        ]}
+                                    />
+                                    <RangePicker
+                                        value={servicesDateRange}
+                                        onChange={setServicesDateRange}
+                                        style={{ width: 260 }}
+                                        allowClear
+                                    />
+                                    <Tooltip title={lastUpdate ? `Last updated: ${dayjs(lastUpdate).format('HH:mm:ss')}` : 'Click to refresh'}>
+                                        <Button
+                                            icon={<SyncOutlined spin={loading} />}
+                                            onClick={() => loadHistory()}
+                                            loading={loading}
+                                        >
+                                            Refresh
+                                        </Button>
+                                    </Tooltip>
+                                </Space>
+                            </div>
+                        }
+                    >
+                        <Table
+                            dataSource={filteredOnlineServices}
+                            rowKey="_id"
+                            loading={loading}
+                            pagination={{ pageSize: 10 }}
+                            columns={[
+                                {
+                                    title: 'Computer / User',
+                                    key: 'computer_user',
+                                    render: (_, record) => (
+                                        <Space>
+                                            <div style={{
+                                                width: 32,
+                                                height: 32,
+                                                borderRadius: 6,
+                                                background: 'rgba(0, 212, 255, 0.15)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                color: '#00d4ff'
+                                            }}>
+                                                <DesktopOutlined />
+                                            </div>
+                                            <div>
+                                                <Text strong style={{ fontSize: 13 }}>{record.hostname || 'Unknown'}</Text>
+                                                <br />
+                                                <Text type="secondary" style={{ fontSize: 11 }}>{record.sessionUser || 'Unknown'}</Text>
+                                            </div>
+                                        </Space>
+                                    ),
+                                },
+                                {
+                                    title: 'Service',
+                                    dataIndex: 'service',
+                                    render: (text) => <Tag color="blue">{text}</Tag>
+                                },
+                                {
+                                    title: 'Filename (PDF)',
+                                    dataIndex: 'fileName',
+                                    render: (text) => <Text type="secondary">{text}</Text>
+                                },
+                                {
+                                    title: 'Time',
+                                    dataIndex: 'timestamp',
+                                    render: (text) => dayjs(text).format('DD MMM YYYY, HH:mm:ss')
+                                }
+                            ]}
+                        />
+                    </Card>
+                </Col>
+            </Row>
         </div>
     );
 }

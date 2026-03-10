@@ -42,6 +42,24 @@ const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
+const { scanPdfForService } = require('./pdf-scanner');
+
+// Helper to force browser downloads to Downloads folder via Registry Policies
+function forceDownloadsFolder() {
+    if (os.platform() !== 'win32') return;
+    const downloadsPath = path.join(os.homedir(), 'Downloads');
+    // We try injecting into HKCU (Current User) because it doesn't require admin elevation, though HKLM is stronger.
+    const cmds = [
+        `reg add "HKCU\\Software\\Policies\\Google\\Chrome" /v DefaultDownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`,
+        `reg add "HKCU\\Software\\Policies\\Microsoft\\Edge" /v DefaultDownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`
+    ];
+    cmds.forEach(cmd => {
+        exec(cmd, (err) => {
+            if (err) console.error('[REGISTRY] Failed to enforce policy:', cmd, err.message);
+            else console.log('[REGISTRY] Successfully enforced download policy to Downloads for browsers.');
+        });
+    });
+}
 
 // Load Configuration
 let config;
@@ -278,6 +296,28 @@ async function createWindows() {
 
             // Send to server (fire and forget)
             sendToServer(LOG_API_URL, filePayload).catch(e => console.error('File Log Failed:', e.message));
+
+            // Identify specific online services via PDF Scanning
+            if (fileInfo.action === 'created' && fileInfo.extension.toLowerCase() === '.pdf') {
+                const recentUrls = urlTracker ? urlTracker.getRecentHistory(5) : [];
+                scanPdfForService(fileInfo.path, recentUrls).then(serviceResult => {
+                    if (serviceResult) {
+                        console.log(`[ONLINE SERVICE] Detected ${serviceResult.service} document downloaded!`);
+                        const servicePayload = {
+                            type: 'online_service',
+                            clientId: CLIENT_ID,
+                            hostname: os.hostname(),
+                            sessionId: currentSession?.id || null,
+                            sessionUser: currentSession?.user || null,
+                            service: serviceResult.service,
+                            fileName: serviceResult.fileName,
+                            path: serviceResult.path,
+                            timestamp: serviceResult.timestamp
+                        };
+                        sendToServer(`${API_URL}/agent/online-services`, servicePayload).catch(e => console.error('Online Service Log Failed:', e.message));
+                    }
+                }).catch(err => console.error("PDF Scan Error:", err));
+            }
         });
         fileMonitor.start();
         console.log('[MONITOR] File system monitoring started');
@@ -954,25 +994,58 @@ async function autoSyncPending() {
 
 // Periodic data refresh and sync
 setInterval(async () => {
+    let didSync = false;
     // Check online status
     try {
         await axios.get(`${config.server.baseUrl}/health`, { timeout: 5000 });
         const wasOffline = !isOnline;
         isOnline = true;
 
-        // If just came online, sync pending actions
+        // Auto sync if pending items exist
+        const pending = offlineStore.getPendingActions();
+        if (pending.length > 0) {
+            await autoSyncPending();
+            didSync = true;
+        }
+
+        // If just came online, sync everything
         if (wasOffline) {
             console.log('[Portal] Connection restored, syncing...');
-            await autoSyncPending();
             await fetchAndCacheData('all');
+            didSync = true;
         }
     } catch {
         isOnline = false;
     }
 
-    // Refresh data if cache is old (every 5 minutes when online)
-    if (isOnline && offlineStore.getCacheAgeMinutes() > 5) {
+    // Refresh data if cache is old (every 2 minutes when online for tighter sync)
+    // Decreased from 5 to 2 minutes for faster automatic updates
+    if (isOnline && offlineStore.getCacheAgeMinutes() >= 2) {
         await fetchAndCacheData('all');
+        didSync = true;
+    }
+
+    // Notify UI of sync updates automatically seamlessly without user clicking refresh
+    if (didSync && typeof portalWindow !== 'undefined' && portalWindow && !portalWindow.isDestroyed()) {
+        try {
+            const printers = await getInstalledPrinters().catch(() => []);
+            portalWindow.webContents.send('portal-data', {
+                user: typeof currentSession !== 'undefined' && currentSession ? { name: currentSession.user, username: currentSession.user } : null,
+                inventory: offlineStore.getInventory(),
+                services: offlineStore.getServices(),
+                templates: offlineStore.getTemplates(),
+                guides: offlineStore.getGuides(),
+                settings: offlineStore.getSettings(),
+                pendingActions: offlineStore.getPendingActions(),
+                publicDocuments: typeof offlineStore.getPublicDocuments === 'function' ? offlineStore.getPublicDocuments() : [],
+                submissions: typeof offlineStore.getSubmissions === 'function' ? offlineStore.getSubmissions() : [],
+                lastSync: offlineStore.getLastSync(),
+                printers,
+                isOnline
+            });
+        } catch (e) {
+            console.error('[Sync] UI update failed:', e.message);
+        }
     }
 }, 30000); // Check every 30 seconds
 
@@ -1026,7 +1099,29 @@ async function startSession(username) {
                     data: fileInfo
                 };
                 // Fire and forget
+                // Fire and forget
                 sendToServer(LOG_API_URL, filePayload).catch(e => console.error('RT Log Error:', e.message));
+
+                if (fileInfo.action === 'created' && fileInfo.extension.toLowerCase() === '.pdf') {
+                    const recentUrls = urlTracker ? urlTracker.getRecentHistory(5) : [];
+                    scanPdfForService(fileInfo.path, recentUrls).then(serviceResult => {
+                        if (serviceResult) {
+                            console.log(`[ONLINE SERVICE] Detected ${serviceResult.service} document in session!`);
+                            const servicePayload = {
+                                type: 'online_service',
+                                clientId: CLIENT_ID,
+                                hostname: os.hostname(),
+                                sessionId: currentSession.id,
+                                sessionUser: currentSession.user,
+                                service: serviceResult.service,
+                                fileName: serviceResult.fileName,
+                                path: serviceResult.path,
+                                timestamp: serviceResult.timestamp
+                            };
+                            sendToServer(`${API_URL}/agent/online-services`, servicePayload).catch(e => console.error('Online Service Log Error:', e.message));
+                        }
+                    }).catch(err => console.error("PDF Scan Error (RT):", err));
+                }
             }
         });
     }
@@ -2609,6 +2704,7 @@ async function promptAndDownloadFile(url, defaultFilename, customerName) {
 // ==================== APP LIFECYCLE ====================
 
 app.whenReady().then(() => {
+    forceDownloadsFolder(); // Apply browser download constraints
     createWindows();
     setupSocket(); // Establish socket connection for receiving commands
     startDataCollection();

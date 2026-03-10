@@ -616,6 +616,9 @@ export const deleteSubmission = async (id) => (await api.delete(`/admin/submissi
 export const disconnectComputer = async (clientId, quit = false) =>
     (await api.post('/admin/command', { clientId, command: 'disconnect', params: { quit } })).data;
 
+// ==================== ONLINE SERVICES ====================
+export const getOnlineServices = async () => (await api.get('/admin/online-services')).data;
+
 // Default export
 export default {
     // Auth
@@ -719,5 +722,8 @@ export default {
     deleteSubmission,
 
     // Computer Management
-    disconnectComputer
+    disconnectComputer,
+
+    // Online Services
+    getOnlineServices
 };

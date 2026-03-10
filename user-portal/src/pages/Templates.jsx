@@ -163,7 +163,10 @@ function Templates({ isDarkMode }) {
                                             <Text type="secondary" style={{ display: 'block' }}>{template.type}</Text>
                                         </div>
                                     </div>
-                                    <Button type="primary" icon={<DownloadOutlined />} style={{ marginTop: 16 }} onClick={() => handleDownload(template)}>Download</Button>
+                                    <Space style={{ marginTop: 16 }}>
+                                        <Button icon={<EyeOutlined />} onClick={() => handlePreview(template)}>Preview</Button>
+                                        <Button type="primary" icon={<DownloadOutlined />} onClick={() => handleDownload(template)}>Download</Button>
+                                    </Space>
                                 </Card>
                             </Col>
                         ))}
@@ -220,13 +223,48 @@ function Templates({ isDarkMode }) {
                                     <span style={{ fontSize: 48, color: template.color }}>{template.icon}</span>
                                     <div style={{ marginTop: 16, fontWeight: 'bold' }}>{template.title}</div>
                                     <div style={{ marginTop: 8, color: '#888' }}>{template.description}</div>
-                                    <Button type="primary" icon={<DownloadOutlined />} style={{ marginTop: 16 }} block onClick={() => handleDownload(template)}>Download</Button>
+                                    <Space direction="vertical" style={{ marginTop: 16, width: '100%' }} size="small">
+                                        <Button block icon={<EyeOutlined />} onClick={() => handlePreview(template)}>Preview</Button>
+                                        <Button type="primary" icon={<DownloadOutlined />} block onClick={() => handleDownload(template)}>Download</Button>
+                                    </Space>
                                 </div>
                             </Card>
                         </Col>
                     ))}
                 </Row>
             )}
+
+            {/* Preview Modal */}
+            <Modal
+                title={`Preview: ${previewModal.template?.title || 'Document'}`}
+                open={previewModal.visible}
+                onCancel={() => setPreviewModal({ visible: false, template: null })}
+                width={800}
+                style={{ top: 20 }}
+                footer={[
+                    <Button key="close" onClick={() => setPreviewModal({ visible: false, template: null })}>
+                        Close
+                    </Button>,
+                    <Button key="download" type="primary" icon={<DownloadOutlined />} onClick={() => {
+                        handleDownload(previewModal.template);
+                        setPreviewModal({ visible: false, template: null });
+                    }}>
+                        Download
+                    </Button>
+                ]}
+            >
+                {previewModal.template ? (
+                    <div style={{ height: '70vh', width: '100%', background: isDarkMode ? '#1e293b' : '#f8fafc', borderRadius: 8, overflow: 'hidden' }}>
+                        <iframe
+                            src={downloadTemplateUrl(previewModal.template.id)}
+                            style={{ width: '100%', height: '100%', border: 'none' }}
+                            title="Document Preview"
+                        />
+                    </div>
+                ) : (
+                    <Empty description="No document selected" />
+                )}
+            </Modal>
         </div>
     );
 }

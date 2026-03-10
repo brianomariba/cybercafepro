@@ -77,7 +77,7 @@ const ClientDocuments = ({ isDarkMode }) => {
         const fileName = file.originalName || file.filename || 'download';
         const downloadKey = `${reqOrderId}-${fileIdx}`;
 
-        if (!file.downloadUrl) {
+        if (!file.downloadUrl || String(file.downloadUrl).includes('/undefined')) {
             message.error('Download URL not available for this file');
             return;
         }
@@ -101,10 +101,16 @@ const ClientDocuments = ({ isDarkMode }) => {
 
             message.success(`Downloaded: ${fileName}`);
         } catch (err) {
-            console.error('Download failed, falling back to window.open:', err);
-            // Fallback: open in new tab (browser will handle download/display)
-            window.open(file.downloadUrl, '_blank');
-            message.info(`Opening ${fileName} in new tab...`);
+            console.error('Download failed via fetch, attempting standard anchor download:', err);
+            // Fallback: programmatic anchor tag instead of window.open forces a download attempt rather than opening a new tab
+            const link = document.createElement('a');
+            link.href = file.downloadUrl;
+            link.download = fileName;
+            link.target = '_blank';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            message.info(`Downloading ${fileName}...`);
         } finally {
             setDownloading(prev => ({ ...prev, [downloadKey]: false }));
         }
@@ -215,13 +221,13 @@ const ClientDocuments = ({ isDarkMode }) => {
                                                             {file.originalName || file.filename || 'Unknown file'}
                                                         </Text>
                                                     </div>
-                                                    <Tooltip title="Download">
+                                                    <Tooltip title="Download Original">
                                                         <Button
                                                             type="text"
                                                             icon={<DownloadOutlined />}
                                                             size="small"
-                                                            loading={downloading[`${req.orderId}-${idx}`]}
-                                                            onClick={() => handleDownload(file, req.orderId, idx)}
+                                                            loading={downloading[`${req.orderId}-orig-${idx}`]}
+                                                            onClick={() => handleDownload(file, req.orderId, `orig-${idx}`)}
                                                             style={{ color: '#00B4D8' }}
                                                         />
                                                     </Tooltip>
@@ -229,8 +235,44 @@ const ClientDocuments = ({ isDarkMode }) => {
                                             ))
                                         ) : (
                                             <Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic', padding: '8px' }}>
-                                                No files available
+                                                No uploaded files available
                                             </Text>
+                                        )}
+
+                                        {req.resultFiles && req.resultFiles.length > 0 && (
+                                            <>
+                                                <Divider style={{ margin: '8px 0', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : '#f0f0f0' }} />
+                                                <Text strong style={{ fontSize: 13, color: '#00ff88', marginBottom: 4 }}>
+                                                    ✅ Completed Work ({req.resultFiles.length})
+                                                </Text>
+                                                {req.resultFiles.map((file, idx) => (
+                                                    <div key={`res-${idx}`} style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        padding: '8px',
+                                                        background: isDarkMode ? 'rgba(0,255,136,0.1)' : '#f0fdf4',
+                                                        borderRadius: 6,
+                                                        border: '1px solid rgba(0, 255, 136, 0.2)'
+                                                    }}>
+                                                        <div style={{ fontSize: 20, marginRight: 12 }}>{getFileIcon(file.type || 'other')}</div>
+                                                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                                                            <Text ellipsis style={{ color: isDarkMode ? '#e2e8f0' : '#475569', fontSize: 13 }}>
+                                                                {file.originalName || file.filename || 'Finished file'}
+                                                            </Text>
+                                                        </div>
+                                                        <Tooltip title="Download Completed File">
+                                                            <Button
+                                                                type="text"
+                                                                icon={<DownloadOutlined />}
+                                                                size="small"
+                                                                loading={downloading[`${req.orderId}-res-${idx}`]}
+                                                                onClick={() => handleDownload(file, req.orderId, `res-${idx}`)}
+                                                                style={{ color: '#00ff88' }}
+                                                            />
+                                                        </Tooltip>
+                                                    </div>
+                                                ))}
+                                            </>
                                         )}
                                     </div>
                                 </Card>

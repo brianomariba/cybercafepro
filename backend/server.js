@@ -68,7 +68,7 @@ const InventoryItem = require('./models/InventoryItem');
 const UserSubmission = require('./models/UserSubmission');
 const DocumentRequest = require('./models/DocumentRequest');
 const Client = require('./models/Client');
-
+const OnlineService = require('./models/OnlineService');
 
 const app = express();
 const server = http.createServer(app);
@@ -2925,6 +2925,49 @@ app.delete('/api/v1/admin/browser-data', async (req, res) => {
     } catch (error) {
         console.error('Delete Browser Data Error:', error);
         res.status(500).json({ error: 'Failed to delete browser data' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/online-services
+ * Agent logs detected online service PDFs
+ */
+app.post('/api/v1/agent/online-services', async (req, res) => {
+    try {
+        const { clientId, hostname, sessionId, sessionUser, service, fileName, path, timestamp } = req.body;
+        if (!clientId || !service) return res.status(400).json({ error: 'Missing required fields' });
+
+        const serviceDoc = new OnlineService({
+            clientId,
+            hostname,
+            sessionId,
+            sessionUser,
+            service,
+            fileName,
+            path,
+            timestamp: timestamp || new Date()
+        });
+        await serviceDoc.save();
+
+        // Notify admin via socket
+        io.emit('online-service-detected', serviceDoc);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Agent Online Service Log Error:', error);
+        res.status(500).json({ error: 'Failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/online-services
+ * Admin fetches all online service logs
+ */
+app.get('/api/v1/admin/online-services', async (req, res) => {
+    try {
+        const services = await OnlineService.find().sort({ timestamp: -1 }).limit(100);
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed' });
     }
 });
 
