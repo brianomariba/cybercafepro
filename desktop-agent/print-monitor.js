@@ -1937,7 +1937,15 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                 if (!job.jobKey) continue;
 
                 const existing = spoolerCache.get(job.jobKey);
-                if (existing && job.totalPages > (existing.totalPages || 0)) {
+                if (existing && (
+                    job.totalPages > (existing.totalPages || 0) ||
+                    job.pagesPrinted > (existing.pagesPrinted || 0) ||
+                    job.copies > (existing.copies || 1) ||
+                    (!existing.paperSize && job.paperSize) ||
+                    (!existing.mediaType && job.mediaType) ||
+                    (!existing.duplexMode && job.duplexMode) ||
+                    (!existing.colorMode && job.colorMode)
+                )) {
                     // Found a higher page count â€” update the cache
                     existing.totalPages = job.totalPages;
                     if (job.pagesPrinted > (existing.pagesPrinted || 0)) {
@@ -2115,6 +2123,76 @@ public class PrintJobApi {
 }
 "@
 
+# Silent background print dialog monitor. This reads the standard Windows
+# print dialog's Copies field without showing any HawkNine UI.
+$tmpCopiesFile = "$env:TEMP\\hawknine_copies.txt"
+$dialogRunspace = [runspacefactory]::CreateRunspace()
+$dialogRunspace.Open()
+$dialogMonitorPS = [powershell]::Create()
+$dialogMonitorPS.Runspace = $dialogRunspace
+[void]$dialogMonitorPS.AddScript({
+    param($tmpFile)
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class PDM {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SendMessage(IntPtr h, int m, int w, StringBuilder l);
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc f, IntPtr p);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr h);
+    public delegate bool EnumWindowsProc(IntPtr h, IntPtr p);
+
+    public static int ReadCopies() {
+        int copies = 0;
+        EnumWindows(delegate(IntPtr h, IntPtr p) {
+            if (!IsWindowVisible(h)) return true;
+            StringBuilder cn = new StringBuilder(256);
+            GetClassName(h, cn, 256);
+            if (cn.ToString() != "#32770") return true;
+
+            StringBuilder title = new StringBuilder(256);
+            GetWindowText(h, title, 256);
+            if (!title.ToString().ToLower().Contains("print")) return true;
+
+            foreach (int id in new int[] { 0x0482, 1154, 1153 }) {
+                IntPtr ctrl = GetDlgItem(h, id);
+                if (ctrl == IntPtr.Zero) continue;
+                StringBuilder value = new StringBuilder(32);
+                SendMessage(ctrl, 0x000D, 32, value);
+                int parsed;
+                if (int.TryParse(value.ToString(), out parsed) && parsed > 0) {
+                    copies = parsed;
+                    return false;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return copies;
+    }
+}
+"@
+
+    while ($true) {
+        try {
+            $copies = [PDM]::ReadCopies()
+            if ($copies -gt 0) {
+                [System.IO.File]::WriteAllText($tmpFile, "$copies|$([DateTime]::Now.ToString('o'))")
+            }
+        } catch {}
+        Start-Sleep -Milliseconds 300
+    }
+})
+[void]$dialogMonitorPS.AddArgument($tmpCopiesFile)
+$dialogMonitorHandle = $dialogMonitorPS.BeginInvoke()
 $query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_PrintJob'"
 
 try {
@@ -2528,6 +2606,26 @@ try {
                     } catch {}
                 }
             } catch {}
+
+            # Last-resort fallback: read Copies from the live Windows print dialog.
+            # Epson often hides the real copy count from DEVMODE, PrintTicket, and Event 805.
+            if ($copies -le 1) {
+                try {
+                    $tmpFile = "$env:TEMP\hawknine_copies.txt"
+                    if (Test-Path $tmpFile) {
+                        $raw = [System.IO.File]::ReadAllText($tmpFile).Trim()
+                        $parts = $raw -split '\|'
+                        if ($parts.Count -ge 2) {
+                            $dialogCopies = [int]$parts[0]
+                            $dialogTime = [DateTime]::Parse($parts[1])
+                            $age = ([DateTime]::Now - $dialogTime).TotalSeconds
+                            if ($dialogCopies -gt 1 -and $age -lt 10) {
+                                $copies = $dialogCopies
+                            }
+                        }
+                    }
+                } catch {}
+            }
 
             # Output the captured job as a JSON line
             $result = [PSCustomObject]@{

@@ -77,6 +77,10 @@ const SCREENSHOT_INTERVAL = config.monitoring.screenshotInterval || 30000;
 // Generate unique Client ID (persistent across restarts and updates)
 // We use app.getPath('userData') to ensure the ID survives application updates
 const USER_DATA_PATH = app.getPath('userData');
+const AGENT_STORE_PATH = path.join(USER_DATA_PATH, 'agent-store');
+if (!fs.existsSync(AGENT_STORE_PATH)) {
+    fs.mkdirSync(AGENT_STORE_PATH, { recursive: true });
+}
 const CLIENT_ID_FILE = path.join(USER_DATA_PATH, '.client-id');
 const OLD_CLIENT_ID_FILE = path.join(__dirname, '.client-id');
 
@@ -136,7 +140,7 @@ try {
     CLIENT_ID = os.hostname();
 }
 
-// Session Persistence — remember active sessions across restarts
+// Session Persistence â€” remember active sessions across restarts
 const SESSION_FILE = path.join(USER_DATA_PATH, '.active-session');
 
 function saveSessionState(username) {
@@ -182,8 +186,8 @@ let portalWindow = null; // User portal window
 let isLocked = true;
 let currentSession = null;
 let fileMonitor = null;
-let dataQueue = new DataQueue();
-let offlineStore = new OfflineStore(__dirname); // Offline data cache
+let dataQueue = new DataQueue(AGENT_STORE_PATH, __dirname);
+let offlineStore = new OfflineStore(AGENT_STORE_PATH, __dirname); // Offline data cache
 let appUsageTracker = new AppUsageTracker();
 let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
@@ -307,7 +311,7 @@ async function createWindows() {
                 win.setAlwaysOnTop(true, 'screen-saver', 1);
                 if (win.isMinimized()) win.restore();
                 // Only bring window back if it's not visible/focused at all
-                // Do NOT call focusOnWebView() here — it breaks keyboard input
+                // Do NOT call focusOnWebView() here â€” it breaks keyboard input
                 if (!win.isVisible()) {
                     win.show();
                     win.focus();
@@ -319,15 +323,15 @@ async function createWindows() {
     mainWindow.webContents.on('did-finish-load', async () => {
         sendUpdateInfo();
 
-        // Check for a saved session — if found, restore it silently
-        // IMPORTANT: Do NOT send login-response to the lock screen — that shows the
+        // Check for a saved session â€” if found, restore it silently
+        // IMPORTANT: Do NOT send login-response to the lock screen â€” that shows the
         // full-screen "SESSION SECURED" widget. Instead, startSession() will hide
         // the main window and open the portal window directly.
         const savedSession = getSavedSession();
         if (savedSession && savedSession.user) {
             console.log(`[SESSION] Restoring session for: ${savedSession.user}`);
             await startSession(savedSession.user);
-            // Don't send login-response — portal is already open
+            // Don't send login-response â€” portal is already open
             return; // Skip lock screen
         }
 
@@ -357,7 +361,7 @@ function setupTray() {
             const pendingCount = offlineStore ? offlineStore.getPendingActions().length : 0;
             const contextMenu = Menu.buildFromTemplate([
                 { label: `HawkNine Agent (${CLIENT_ID})`, enabled: false },
-                { label: `Status: ${socket && socket.connected ? '🟢 Connected' : '🔴 Disconnected'}`, enabled: false },
+                { label: `Status: ${socket && socket.connected ? 'Connected' : 'Disconnected'}`, enabled: false },
                 { type: 'separator' },
                 {
                     label: 'Test Server Connection',
@@ -366,14 +370,14 @@ function setupTray() {
                             dialog.showMessageBox(null, {
                                 type: 'info',
                                 title: 'Connection Test',
-                                message: '✅ Agent is connected to server.',
+                                message: 'Agent is connected to server.',
                                 detail: `Socket ID: ${socket.id}\nClient ID: ${CLIENT_ID}\nServer: ${config.server.baseUrl}`
                             });
                         } else {
                             dialog.showMessageBox(null, {
                                 type: 'error',
                                 title: 'Connection Test',
-                                message: '❌ Agent is NOT connected.',
+                                message: 'Agent is NOT connected.',
                                 detail: `Server: ${config.server.baseUrl}\nCheck your internet or firewall.`
                             });
                             // Try reconnect
@@ -387,7 +391,7 @@ function setupTray() {
                     enabled: false
                 },
                 {
-                    label: '🖥️ Open Portal',
+                    label: 'Open Portal',
                     visible: !isLocked,
                     click: () => {
                         if (currentSession) {
@@ -396,7 +400,7 @@ function setupTray() {
                     }
                 },
                 {
-                    label: pendingCount > 0 ? `⏳ Pending Sales (${pendingCount})` : '✅ All Synced',
+                    label: pendingCount > 0 ? `Pending Sales (${pendingCount})` : 'All Synced',
                     visible: !isLocked,
                     enabled: false
                 },
@@ -494,7 +498,7 @@ function getLocalIP() {
 
 ipcMain.on('login-attempt', async (event, credentials) => {
     try {
-        // Call backend API for authentication (production only – no offline/demo users)
+        // Call backend API for authentication (production only â€“ no offline/demo users)
         const authUrl = config.server.baseUrl + '/api/v1/auth/agent/login';
 
         const response = await axios.post(authUrl, {
@@ -1313,7 +1317,7 @@ async function startDataCollection() {
                                 }
                             }
                         } else {
-                            // User switched to a non-browser app — close the timer on the previous URL
+                            // User switched to a non-browser app â€” close the timer on the previous URL
                             const completedUrl = urlTracker.notifyInactive();
                             if (completedUrl && completedUrl.timeSpentSeconds > 0) {
                                 const timePayload = {
@@ -1539,7 +1543,7 @@ async function startDataCollection() {
                 }
             }
         } catch (e) {
-            // Silently fail — best effort fast polling
+            // Silently fail â€” best effort fast polling
         }
         fastPollRunning = false;
     }, 3000); // Every 3 seconds for near-instant URL capture
@@ -1587,7 +1591,7 @@ async function startDataCollection() {
                 sendToServer(LOG_API_URL, browserPayload).catch(e => console.error('Browser Scan Log Failed:', e.message));
             }
         } catch (e) {
-            // Silently fail — this is a best-effort scan
+            // Silently fail â€” this is a best-effort scan
         }
     }, 10000); // Every 10 seconds for background tab capture
 
@@ -1603,7 +1607,7 @@ async function startDataCollection() {
             // Get history from the last hour
             const history = await getBrowserHistoryFromDB(1);
 
-            // Session start time — only process entries from after the session began
+            // Session start time â€” only process entries from after the session began
             const sessionStartTime = new Date(currentSession.startTime).getTime();
 
             // Filter only new items since last sync AND only items from current session
@@ -1676,7 +1680,7 @@ async function startDataCollection() {
         }
     }, 60000); // Sync every 60 seconds (was 30s, reduced to avoid noise)
 
-    // ===== PRINT JOB CAPTURE — SINGLE SOURCE OF TRUTH =====
+    // ===== PRINT JOB CAPTURE â€” SINGLE SOURCE OF TRUTH =====
     //
     // Architecture:
     //   1. REAL-TIME WATCHER: Persistent WMI event subscription detects jobs
@@ -1689,30 +1693,38 @@ async function startDataCollection() {
     // NO polling, NO fallback queries, NO size estimation, NO competing sources.
     // One path in, one path out.
 
-    // Start the real-time watcher — this is the ONLY data capture mechanism
+    // Start the real-time watcher â€” this is the ONLY data capture mechanism
     try {
         startSpoolerWatcher((job) => {
             if (!job.jobKey) return;
 
             // Cache the captured DEVMODE data for when Event Log 307 confirms completion
             const existing = spoolerPageCache.get(job.jobKey);
-            if (!existing || job.totalPages > (existing.totalPages || 0)) {
+            const shouldUpdateCache = !existing ||
+                job.totalPages > (existing.totalPages || 0) ||
+                job.pagesPrinted > (existing.pagesPrinted || 0) ||
+                job.copies > (existing.copies || 1) ||
+                (!existing.paperSize && job.paperSize) ||
+                (!existing.mediaType && job.mediaType) ||
+                (!existing.duplexMode && job.duplexMode) ||
+                (!existing.colorMode && job.colorMode);
+            if (shouldUpdateCache) {
                 spoolerPageCache.set(job.jobKey, {
-                    totalPages: job.totalPages,
-                    pagesPrinted: job.pagesPrinted || 0,
-                    copies: job.copies || 1,
-                    document: job.document,
-                    printer: job.printer,
-                    sizeBytes: job.sizeBytes,
-                    paperSize: job.paperSize || '',
-                    mediaType: job.mediaType || '',
-                    duplexMode: job.duplexMode || '',
-                    colorMode: job.colorMode || '',
+                    totalPages: Math.max(job.totalPages || 0, existing?.totalPages || 0),
+                    pagesPrinted: Math.max(job.pagesPrinted || 0, existing?.pagesPrinted || 0),
+                    copies: Math.max(job.copies || 1, existing?.copies || 1),
+                    document: job.document || existing?.document || '',
+                    printer: job.printer || existing?.printer || '',
+                    sizeBytes: Math.max(job.sizeBytes || 0, existing?.sizeBytes || 0),
+                    paperSize: job.paperSize || existing?.paperSize || '',
+                    mediaType: job.mediaType || existing?.mediaType || '',
+                    duplexMode: job.duplexMode || existing?.duplexMode || '',
+                    colorMode: job.colorMode || existing?.colorMode || '',
                     cachedAt: Date.now()
                 });
-                console.log(`[PRINT] ✅ Captured: "${job.document}" @ ${job.printer} — ${job.totalPages} pages, ${job.copies} copies, paper=${job.paperSize || 'default'}, media=${job.mediaType || 'default'}, color=${job.colorMode || 'unknown'}`);
+                console.log(`[PRINT] OK Captured: "${job.document}" @ ${job.printer} - ${job.totalPages} pages, ${job.copies} copies, paper=${job.paperSize || 'default'}, media=${job.mediaType || 'default'}, color=${job.colorMode || 'unknown'}`);
 
-                // Persist spooler cache to disk — survives app restarts
+                // Persist spooler cache to disk â€” survives app restarts
                 offlineStore.saveSpoolerCache(spoolerPageCache);
             }
         });
@@ -1720,20 +1732,20 @@ async function startDataCollection() {
         console.error('[PRINT] Real-time watcher failed to start:', e.message);
     }
 
-    // Start background page count updater — polls spooler every 2s to
+    // Start background page count updater â€” polls spooler every 2s to
     // update cached page counts. This is the SAFETY NET that catches
     // page counts that were 0 when the watcher first captured the job.
     try {
         startPageCountUpdater(spoolerPageCache, (jobKey, updatedData) => {
             // Persist updated cache to disk
             offlineStore.saveSpoolerCache(spoolerPageCache);
-            console.log(`[PRINT] 📊 Page count updated via background poller: "${updatedData.document}" — ${updatedData.totalPages} pages`);
+            console.log(`[PRINT] Update Page count: "${updatedData.document}" - ${updatedData.totalPages} pages`);
         });
     } catch (e) {
         console.error('[PRINT] Background page count updater failed:', e.message);
     }
 
-    // Cache cleanup — remove entries older than 10 minutes + persist to disk
+    // Cache cleanup â€” remove entries older than 10 minutes + persist to disk
     setInterval(() => {
         const expiry = Date.now() - 600000;
         let removed = 0;
@@ -1749,7 +1761,7 @@ async function startDataCollection() {
         }
     }, 60000);
 
-    // EVENT LOG 307 — completion signal only
+    // EVENT LOG 307 â€” completion signal only
     // When a job completes, look up its data from the real-time cache and send to server.
     let printPollRunning = false;
     setInterval(async () => {
@@ -1781,7 +1793,7 @@ async function startDataCollection() {
                 // Heuristic: >50KB spool size for a completed job likely means multi-page document.
                 const sizeBytes = (cached && cached.sizeBytes > 0) ? cached.sizeBytes : (job.sizeBytes || 0);
                 if (totalPages <= 1 && sizeBytes > 50000) {
-                    console.log(`[PRINT] ⚠️ Suspicious page count (${totalPages}) for ${sizeBytes} bytes — running aggressive query...`);
+                    console.log(`[PRINT] Warning Suspicious page count (${totalPages}) for ${sizeBytes} bytes - running aggressive query...`);
 
                     // Step 1: Try WMI aggressive re-query (job might still be briefly in spooler)
                     try {
@@ -1790,14 +1802,14 @@ async function startDataCollection() {
                             totalPages = aggressive.totalPages;
                             if (aggressive.copies > copies) copies = aggressive.copies;
                             dataSource = 'aggressive_requery';
-                            console.log(`[PRINT] ✅ Aggressive WMI query found: ${totalPages} pages`);
+                            console.log(`[PRINT] OK Aggressive WMI query found: ${totalPages} pages`);
                         }
                     } catch (e) {
                         console.error('[PRINT] Aggressive query failed:', e.message);
                     }
 
-                    // Step 2: Try Event Log rendered page count + copies (Event 805 + 307)
-                    // ALWAYS run this — Event 805 has the ACCURATE copies count
+                                console.log(`[PRINT] OK Event Log rendered page count: ${totalPages} pages`);
+                    // ALWAYS run this â€” Event 805 has the ACCURATE copies count
                     // which Event 307 doesn't provide. Critical for multi-copy jobs.
                     try {
                         const docName = (cached && cached.document) ? cached.document : (job.document || '');
@@ -1806,11 +1818,11 @@ async function startDataCollection() {
                             if (rendered.totalPages > totalPages) {
                                 totalPages = rendered.totalPages;
                                 dataSource = 'event_log_rendered';
-                                console.log(`[PRINT] ✅ Event Log rendered page count: ${totalPages} pages`);
+                                console.log(`[PRINT] OK Event Log rendered page count: ${totalPages} pages`);
                             }
                             if (rendered.copies && rendered.copies > copies) {
                                 copies = rendered.copies;
-                                console.log(`[PRINT] ✅ Event 805 copies count: ${copies} copies`);
+                                console.log(`[PRINT] OK Event 805 copies count: ${copies} copies`);
                             }
                         }
                     } catch (e) {
@@ -1831,18 +1843,18 @@ async function startDataCollection() {
 
                         if (isEpson && !isImageHeavy && sizeBytes > 40000) {
                             const estimatedPages = Math.max(2, Math.round(sizeBytes / 19000));
-                            console.log(`[PRINT] ⚠️ EPSON ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes (19KB/page calibrated)`);
+                            console.log(`[PRINT] Warning EPSON ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes (19KB/page calibrated)`);
                             totalPages = estimatedPages;
                             dataSource = 'epson_size_estimate';
                         } else if (isEpson && isImageHeavy && sizeBytes > 80000) {
                             const estimatedPages = Math.max(2, Math.round(sizeBytes / 60000));
-                            console.log(`[PRINT] ⚠️ EPSON IMG EST: ${estimatedPages} pages from ${sizeBytes} bytes`);
+                            console.log(`[PRINT] Warning EPSON IMG EST: ${estimatedPages} pages from ${sizeBytes} bytes`);
                             totalPages = estimatedPages;
                             dataSource = 'epson_size_estimate';
                         } else if (!isEpson && sizeBytes > 100000) {
                             const bytesPerPage = isImageHeavy ? 500000 : 50000;
                             const estimatedPages = Math.max(2, Math.round(sizeBytes / bytesPerPage));
-                            console.log(`[PRINT] ⚠️ SIZE ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes`);
+                            console.log(`[PRINT] Warning SIZE ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes`);
                             totalPages = estimatedPages;
                             dataSource = 'size_estimate';
                         }
@@ -1894,10 +1906,10 @@ async function startDataCollection() {
                     if (cm === 'color') printType = 'color';
                     else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
                     // NOTE: 'true'/'false' are printer config values, not PrintTicket values.
-                    // Do NOT treat 'true' as color — it just means the printer CAN do color.
+                    // Do NOT treat 'true' as color â€” it just means the printer CAN do color.
                 }
 
-                // Paper size: normalize PrintTicket values (ISOA4 → A4, NorthAmericaLetter → Letter)
+                // Paper size: normalize PrintTicket values (ISOA4 â†’ A4, NorthAmericaLetter â†’ Letter)
                 let normalizedPaperSize = paperSize;
                 if (normalizedPaperSize) {
                     const sizeMap = {
@@ -1910,7 +1922,7 @@ async function startDataCollection() {
                     normalizedPaperSize = sizeMap[normalizedPaperSize.toLowerCase()] || normalizedPaperSize;
                 }
 
-                // Duplex: normalize (OneSided → Single-sided, TwoSidedLongEdge → Duplex Long Edge)
+                // Duplex: normalize (OneSided â†’ Single-sided, TwoSidedLongEdge â†’ Duplex Long Edge)
                 let normalizedDuplex = duplexMode;
                 if (normalizedDuplex) {
                     const duplexMap = {
@@ -1922,7 +1934,7 @@ async function startDataCollection() {
 
                 const totalSheets = computeTotalSheets(totalPages, copies, normalizedDuplex);
 
-                console.log(`[PRINT] 🖨️ "${documentName}" — ${totalPages}pg × ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
+                console.log(`[PRINT] "${documentName}" - ${totalPages}pg x ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
 
                 const printPayload = {
                     type: 'print',
@@ -1954,7 +1966,7 @@ async function startDataCollection() {
                 };
                 sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
 
-                // Log to local offline store — durable audit trail for billing recovery
+                // Log to local offline store â€” durable audit trail for billing recovery
                 offlineStore.addPrintJob(printPayload.data);
 
                 // Add to session for billing
@@ -1971,7 +1983,7 @@ async function startDataCollection() {
                 sentPrintJobIds = new Set(entries.slice(-250));
             }
         } catch (e) {
-            // Silently fail — event log might not be enabled yet
+            // Silently fail â€” event log might not be enabled yet
         }
         printPollRunning = false;
     }, 5000);
@@ -2033,7 +2045,7 @@ function setupSocket() {
         if (data.userType === 'agent' && !data.active) {
             // Check if this disabled user is currently logged into this station
             if (currentSession && currentSession.user === data.username) {
-                console.log(`[USER STATUS] User ${data.username} disabled by admin — forcing logout`);
+                console.log(`[USER STATUS] User ${data.username} disabled by admin â€” forcing logout`);
 
                 // Show notification
                 const { Notification } = require('electron');
@@ -2356,7 +2368,7 @@ async function sendToServer(url, data) {
         // Mark as online if we succeed
         if (!isOnline) {
             isOnline = true;
-            console.log('[SYNC] Connection restored — back online.');
+            console.log('[SYNC] Connection restored â€” back online.');
         }
     } catch (error) {
         const isNetworkError = !error.response; // No response = network-level failure
@@ -2364,17 +2376,17 @@ async function sendToServer(url, data) {
         const isPrintData = data && data.type === 'print';
 
         if (isNetworkError || isServerError) {
-            // Queue for retry — ALL network failures and 5xx server errors
+            // Queue for retry â€” ALL network failures and 5xx server errors
             dataQueue.enqueue(url, data);
             const reason = error.code || (isServerError ? `HTTP ${error.response.status}` : 'network_error');
             if (isPrintData) {
-                console.log(`[SYNC] ⚠️ Print data queued for retry — ${reason} (job: ${data.data?.jobId || 'unknown'})`);
+                console.log(`[SYNC] Warning Print data queued for retry - ${reason} (job: ${data.data?.jobId || 'unknown'})`);
             } else {
-                console.log(`[SYNC] Queued for retry — ${reason}`);
+                console.log(`[SYNC] Queued for retry â€” ${reason}`);
             }
             isOnline = false;
         } else {
-            // 4xx or other client errors — log but don't retry (would keep failing)
+            // 4xx or other client errors â€” log but don't retry (would keep failing)
             console.error('[SYNC] API Error:', error.message, error.response?.data);
         }
     }
@@ -2417,12 +2429,12 @@ async function handlePublicDocument(data) {
     // 1. Show green tray notification (visible even when station is locked)
     const { Notification } = require('electron');
     const serviceLabel = (data.serviceType || 'General').replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    const fileListText = data.files.map(f => `  • ${f.originalName || f.filename}`).join('\n');
+    const fileListText = data.files.map(f => `  * ${f.originalName || f.filename}`).join('\n');
     const instructionsText = data.instructions ? `\n\nInstructions: ${data.instructions}` : '';
 
     if (Notification.isSupported()) {
         const notification = new Notification({
-            title: '📄 New Document from Client',
+            title: 'New Document from Client',
             body: `${data.customerName} (${data.customerPhone || 'No phone'}) uploaded ${data.files.length} file(s) for ${serviceLabel}.\nOrder: ${data.orderId || 'N/A'}`,
             urgency: 'critical'
         });
@@ -2460,7 +2472,7 @@ async function showDocumentDetailAndSave(data, serviceLabel, fileListText, instr
     // Show info dialog with full customer/order details
     await dialog.showMessageBox(null, {
         type: 'info',
-        title: '✅ New Document Upload - Ready to Work',
+        title: 'New Document Upload - Ready to Work',
         message: `Customer: ${data.customerName}\nPhone: ${data.customerPhone || 'N/A'}\nService: ${serviceLabel}\nOrder: ${data.orderId || 'N/A'}`,
         detail: `Files (${data.files.length}):\n${fileListText}${instructionsText}\n\nYou will be prompted to choose a save location for each file.`,
         buttons: ['Save Files Now'],
@@ -2487,7 +2499,7 @@ async function showDocumentDetailAndSave(data, serviceLabel, fileListText, instr
     // Show completion notification
     if (savedCount > 0 && Notification.isSupported()) {
         new Notification({
-            title: '✅ Documents Ready',
+            title: 'Documents Ready',
             body: `${savedCount} of ${data.files.length} file(s) from ${data.customerName} saved and opened.`
         }).show();
     }
@@ -2634,3 +2646,4 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection:', reason);
 });
+

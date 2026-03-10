@@ -7,11 +7,13 @@ const fs = require('fs');
 const path = require('path');
 
 class OfflineStore {
-    constructor(storeDir = __dirname) {
-        this.storeFile = path.join(storeDir, '.offline-store.json');
-        this.pendingActionsFile = path.join(storeDir, '.pending-actions.json');
-        this.spoolerCacheFile = path.join(storeDir, '.spooler-cache.json');
-        this.printJobsFile = path.join(storeDir, '.print-jobs-log.json');
+    constructor(storeDir = __dirname, legacyStoreDir = __dirname) {
+        this.storeDir = storeDir;
+        this.legacyStoreDir = legacyStoreDir;
+        this.storeFile = path.join(this.storeDir, '.offline-store.json');
+        this.pendingActionsFile = path.join(this.storeDir, '.pending-actions.json');
+        this.spoolerCacheFile = path.join(this.storeDir, '.spooler-cache.json');
+        this.printJobsFile = path.join(this.storeDir, '.print-jobs-log.json');
         this.data = {
             inventory: [],
             services: [],
@@ -22,7 +24,43 @@ class OfflineStore {
             lastSync: null
         };
         this.pendingActions = [];
+        this.ensureStoreDir();
+        this.migrateLegacyFiles();
         this.loadFromDisk();
+    }
+
+    ensureStoreDir() {
+        try {
+            if (!fs.existsSync(this.storeDir)) {
+                fs.mkdirSync(this.storeDir, { recursive: true });
+            }
+        } catch (e) {
+            console.error('[OfflineStore] Failed to create store directory:', e.message);
+        }
+    }
+
+    migrateLegacyFiles() {
+        if (!this.legacyStoreDir || path.resolve(this.legacyStoreDir) === path.resolve(this.storeDir)) {
+            return;
+        }
+
+        const migrations = [
+            { from: path.join(this.legacyStoreDir, '.offline-store.json'), to: this.storeFile },
+            { from: path.join(this.legacyStoreDir, '.pending-actions.json'), to: this.pendingActionsFile },
+            { from: path.join(this.legacyStoreDir, '.spooler-cache.json'), to: this.spoolerCacheFile },
+            { from: path.join(this.legacyStoreDir, '.print-jobs-log.json'), to: this.printJobsFile }
+        ];
+
+        for (const file of migrations) {
+            try {
+                if (!fs.existsSync(file.to) && fs.existsSync(file.from)) {
+                    fs.copyFileSync(file.from, file.to);
+                    console.log(`[OfflineStore] Migrated ${path.basename(file.from)} to ${this.storeDir}`);
+                }
+            } catch (e) {
+                console.warn(`[OfflineStore] Failed to migrate ${path.basename(file.from)}:`, e.message);
+            }
+        }
     }
 
     /**
@@ -314,7 +352,7 @@ class OfflineStore {
             const recent = entries.filter(([, v]) => (v.cachedAt || 0) > cutoff);
             fs.writeFileSync(this.spoolerCacheFile, JSON.stringify(recent), 'utf8');
         } catch (e) {
-            // Silent — this is best-effort persistence
+            // Silent â€” this is best-effort persistence
         }
     }
 
@@ -342,9 +380,9 @@ class OfflineStore {
 
     // ==================== PRINT JOB LOG ====================
     // Local log of all captured print jobs. Used for:
-    //   1. Offline auditing — admin can see what was printed even if server was down
-    //   2. Deduplication — on reconnect, we can check what was already sent
-    //   3. Billing recovery — if DataQueue entries are lost, this log has the data
+    //   1. Offline auditing â€” admin can see what was printed even if server was down
+    //   2. Deduplication â€” on reconnect, we can check what was already sent
+    //   3. Billing recovery â€” if DataQueue entries are lost, this log has the data
 
     /**
      * Add a print job to the local log.
@@ -406,3 +444,4 @@ class OfflineStore {
 }
 
 module.exports = OfflineStore;
+
