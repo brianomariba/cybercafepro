@@ -411,6 +411,16 @@ async function handleFormSubmit(e) {
         formData.append('instructions', instructions);
         formData.append('source', 'landing_page');
 
+        // Append user specific info if logged in
+        const userStr = localStorage.getItem('hawknine_client_user');
+        if (userStr) {
+            try {
+                const u = JSON.parse(userStr);
+                formData.append('email', u.email);
+                formData.append('userId', u.id);
+            } catch (e) { }
+        }
+
         // Submit to backend
         const response = await fetch(`${API_BASE_URL}/public/document-request`, {
             method: 'POST',
@@ -496,10 +506,309 @@ function escapeHtml(text) {
 window.scrollToSection = scrollToSection;
 window.removeFile = removeFile;
 window.closeModal = closeModal;
+window.openTrackModal = openTrackModal;
 
 function initPortalLinks() {
-    const loginBtns = document.querySelectorAll('.btn-login');
+    // Only target old a tags if any
+    const loginBtns = document.querySelectorAll('a.btn-login');
     loginBtns.forEach(btn => {
         btn.href = PORTAL_URL;
     });
+
+    // Check if logged in to update header
+    checkClientLoginState();
 }
+
+// ==================== CLIENT AUTH & DASHBOARD ====================
+
+function checkClientLoginState() {
+    const token = localStorage.getItem('hawknine_client_token');
+    const headerBtn = document.getElementById('headerLoginBtn');
+    if (token && headerBtn) {
+        headerBtn.innerText = 'My Dashboard';
+        headerBtn.onclick = openDashboardModal;
+
+        // Auto-fill form fields if user is logged in
+        try {
+            const user = JSON.parse(localStorage.getItem('hawknine_client_user'));
+            if (user) {
+                const nameInput = document.getElementById('customerName');
+                if (nameInput && !nameInput.value) nameInput.value = user.name || '';
+            }
+        } catch (e) { }
+    } else if (headerBtn) {
+        headerBtn.innerText = 'Login / Sign Up';
+        headerBtn.onclick = openAuthModal;
+    }
+}
+
+function openAuthModal() {
+    document.getElementById('authModal').classList.add('active');
+}
+function closeAuthModal() {
+    document.getElementById('authModal').classList.remove('active');
+}
+window.closeAuthModal = closeAuthModal;
+window.openAuthModal = openAuthModal;
+
+function switchAuthTab(tab) {
+    document.getElementById('tabLogin').classList.remove('active');
+    document.getElementById('tabRegister').classList.remove('active');
+    document.getElementById('tabLogin').style.color = '#64748b';
+    document.getElementById('tabRegister').style.color = '#64748b';
+    document.getElementById('tabLogin').style.borderBottom = 'none';
+    document.getElementById('tabRegister').style.borderBottom = 'none';
+
+    document.getElementById('loginFormSection').style.display = 'none';
+    document.getElementById('registerFormSection').style.display = 'none';
+
+    if (tab === 'login') {
+        document.getElementById('tabLogin').classList.add('active');
+        document.getElementById('tabLogin').style.color = '';
+        document.getElementById('tabLogin').style.borderBottom = '2px solid #00B4D8';
+        document.getElementById('loginFormSection').style.display = 'block';
+    } else {
+        document.getElementById('tabRegister').classList.add('active');
+        document.getElementById('tabRegister').style.color = '';
+        document.getElementById('tabRegister').style.borderBottom = '2px solid #00B4D8';
+        document.getElementById('registerFormSection').style.display = 'block';
+    }
+}
+window.switchAuthTab = switchAuthTab;
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Auth Forms
+    const loginForm = document.getElementById('clientLoginForm');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const originalText = btn.innerText;
+            btn.innerText = 'Loading...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/client/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: document.getElementById('loginEmail').value,
+                        password: document.getElementById('loginPassword').value
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    localStorage.setItem('hawknine_client_token', data.token);
+                    localStorage.setItem('hawknine_client_user', JSON.stringify(data.user));
+                    closeAuthModal();
+                    checkClientLoginState();
+                    openDashboardModal();
+                } else {
+                    alert(data.error || 'Login failed');
+                }
+            } catch (e) {
+                alert('An error occurred during login');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        });
+    }
+
+    const registerForm = document.getElementById('clientRegisterForm');
+    if (registerForm) {
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const originalText = btn.innerText;
+            btn.innerText = 'Loading...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/client/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: document.getElementById('regName').value,
+                        email: document.getElementById('regEmail').value,
+                        phone: document.getElementById('regPhone').value,
+                        password: document.getElementById('regPassword').value
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    localStorage.setItem('hawknine_client_token', data.token);
+                    localStorage.setItem('hawknine_client_user', JSON.stringify(data.user));
+                    closeAuthModal();
+                    checkClientLoginState();
+                    openDashboardModal();
+                } else {
+                    alert(data.error || 'Registration failed');
+                }
+            } catch (e) {
+                alert('An error occurred during registration');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        });
+    }
+});
+
+async function openDashboardModal() {
+    const token = localStorage.getItem('hawknine_client_token');
+    if (!token) return openAuthModal();
+
+    document.getElementById('dashboardModal').classList.add('active');
+
+    const list = document.getElementById('dashboardHistoryList');
+    list.innerHTML = '<div style="text-align:center; padding: 20px;">Loading history...</div>';
+
+    try {
+        const res = await fetch(`${API_BASE_URL}/client/history`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Failed to load');
+        const data = await res.json();
+
+        let completed = 0;
+        let html = '';
+        data.forEach(req => {
+            if (req.status === 'completed' || req.status === 'ready') completed++;
+
+            // Format status label
+            let statusColor = '#94a3b8'; // pending
+            if (req.status === 'processing') statusColor = '#f59e0b';
+            if (req.status === 'completed' || req.status === 'ready') statusColor = '#10b981';
+
+            // Download button
+            let downloadBtnHTML = '';
+            if ((req.status === 'completed' || req.status === 'ready') && req.resultFiles && req.resultFiles.length > 0) {
+                const links = req.resultFiles.map(f => `<a href="${f.downloadUrl}" target="_blank" style="display:inline-block; margin-right:5px; color:#00B4D8; font-size:12px; text-decoration:none;"><i data-lucide="download"></i> Download ${escapeHtml(f.originalName)}</a>`).join('<br/>');
+                downloadBtnHTML = `<div>${links}</div>`;
+            } else if (req.status === 'completed') {
+                downloadBtnHTML = `<span style="color:#10b981; font-size:12px;">Completed (Physical Pickup)</span>`;
+            }
+
+            html += `
+            <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <strong style="display:block;">${escapeHtml(req.serviceType)}</strong>
+                    <span style="font-size: 12px; color: #64748b;">${new Date(req.createdAt).toLocaleDateString()} &middot; ID: ${req.orderId}</span>
+                    <div style="margin-top: 5px;">${downloadBtnHTML}</div>
+                </div>
+                <div style="text-align:right;">
+                    <span style="display:block; font-size: 13px; font-weight:bold; color: ${statusColor}; text-transform: uppercase;">${req.status}</span>
+                </div>
+            </div>`;
+        });
+
+        document.getElementById('dashTotalOrders').innerText = data.length || 0;
+        document.getElementById('dashCompletedOrders').innerText = completed;
+
+        list.innerHTML = html || '<div style="text-align:center; padding: 20px; color: #64748b;">No documents uploaded yet.</div>';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    } catch (e) {
+        list.innerHTML = '<div style="text-align:center; padding: 20px; color: #ef4444;">Could not load history. Please try again later.</div>';
+    }
+}
+window.openDashboardModal = openDashboardModal;
+
+function closeDashboardModal() {
+    document.getElementById('dashboardModal').classList.remove('active');
+}
+window.closeDashboardModal = closeDashboardModal;
+
+function clientLogout() {
+    localStorage.removeItem('hawknine_client_token');
+    localStorage.removeItem('hawknine_client_user');
+    closeDashboardModal();
+    checkClientLoginState();
+}
+window.clientLogout = clientLogout;
+
+// ==================== TRACKING ====================
+
+function openTrackModal(e) {
+    if (e) e.preventDefault();
+    document.getElementById('trackModal').classList.add('active');
+    document.getElementById('trackOrderFormSection').style.display = 'block';
+    document.getElementById('trackResultSection').style.display = 'none';
+    if (document.getElementById('trackOrderId')) {
+        document.getElementById('trackOrderId').value = '';
+    }
+}
+
+function closeTrackModal() {
+    document.getElementById('trackModal').classList.remove('active');
+}
+window.closeTrackModal = closeTrackModal;
+
+function backToTrackSearch() {
+    document.getElementById('trackOrderFormSection').style.display = 'block';
+    document.getElementById('trackResultSection').style.display = 'none';
+}
+window.backToTrackSearch = backToTrackSearch;
+
+document.addEventListener('DOMContentLoaded', () => {
+    const trackForm = document.getElementById('trackOrderForm');
+    if (trackForm) {
+        trackForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const orderId = document.getElementById('trackOrderId').value.trim().toUpperCase();
+            if (!orderId) return alert('Please enter an order ID');
+
+            const btn = e.target.querySelector('button');
+            const originalText = btn.innerText;
+            btn.innerText = 'Tracking...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/public/track/${orderId}`);
+                const data = await res.json();
+
+                if (res.ok) {
+                    let statusColor = '#94a3b8'; // pending
+                    if (data.status === 'processing') statusColor = '#f59e0b';
+                    if (data.status === 'completed' || data.status === 'ready') statusColor = '#10b981';
+
+                    document.getElementById('trackResultStatus').innerText = data.status.toUpperCase();
+                    document.getElementById('trackResultStatus').style.color = statusColor;
+                    document.getElementById('trackResultService').innerText = data.serviceType;
+                    document.getElementById('trackResultDate').innerText = new Date(data.createdAt).toLocaleString();
+
+                    // Show files if any
+                    const filesContainer = document.getElementById('trackResultFiles');
+                    const filesList = document.getElementById('trackResultFilesList');
+                    filesList.innerHTML = '';
+
+                    if ((data.status === 'completed' || data.status === 'ready') && data.resultFiles && data.resultFiles.length > 0) {
+                        data.resultFiles.forEach(f => {
+                            const link = document.createElement('a');
+                            link.href = f.downloadUrl;
+                            link.target = '_blank';
+                            link.innerHTML = `<button class="btn btn-secondary" style="width:100%; text-align:left; padding:10px;"><i data-lucide="download" style="width:16px; height:16px; margin-right:8px; vertical-align:middle;"></i> Download ${escapeHtml(f.originalName)}</button>`;
+                            filesList.appendChild(link);
+                        });
+                        filesContainer.style.display = 'block';
+                        if (typeof lucide !== 'undefined') lucide.createIcons();
+                    } else {
+                        filesContainer.style.display = 'none';
+                    }
+
+                    document.getElementById('trackOrderFormSection').style.display = 'none';
+                    document.getElementById('trackResultSection').style.display = 'block';
+                } else {
+                    alert(data.error || 'Request not found with this Order ID');
+                }
+            } catch (err) {
+                alert('An error occurred during tracking');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        });
+    }
+});
+

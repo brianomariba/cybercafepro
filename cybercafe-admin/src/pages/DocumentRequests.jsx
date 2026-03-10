@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Row, Col, Statistic, Empty, Modal, message, Descriptions, Progress } from 'antd';
+import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Avatar, Row, Col, Statistic, Empty, Modal, message, Descriptions, Progress, Upload } from 'antd';
 import {
     FileOutlined,
     FilePdfOutlined,
@@ -19,7 +19,7 @@ import {
     DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getDocumentRequests, getDocumentRequestStats, updateDocumentRequestStatus, connectSocket } from '../services/api';
+import { getDocumentRequests, getDocumentRequestStats, updateDocumentRequestStatus, uploadDocumentRequestWork, connectSocket } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -63,6 +63,12 @@ function DocumentRequests() {
     const [filterStatus, setFilterStatus] = useState('all');
     const [selectedRequest, setSelectedRequest] = useState(null);
     const [detailsVisible, setDetailsVisible] = useState(false);
+
+    // Upload state
+    const [uploadModalVisible, setUploadModalVisible] = useState(false);
+    const [uploadingFiles, setUploadingFiles] = useState([]);
+    const [uploadOrderId, setUploadOrderId] = useState(null);
+    const [uploadingStatus, setUploadingStatus] = useState(false);
 
     // Fetch data
     const fetchData = async () => {
@@ -120,6 +126,35 @@ function DocumentRequests() {
             fetchData();
         } catch (error) {
             message.error('Failed to update status');
+        }
+    };
+
+    const handleUploadSubmit = async () => {
+        if (!uploadingFiles.length) {
+            return message.warning('Please select at least one file to upload');
+        }
+
+        setUploadingStatus(true);
+        const formData = new FormData();
+        uploadingFiles.forEach(f => {
+            formData.append('files', f.originFileObj);
+        });
+
+        try {
+            await uploadDocumentRequestWork(uploadOrderId, formData);
+            message.success('Work attached successfully');
+            setUploadModalVisible(false);
+            setUploadingFiles([]);
+            setUploadOrderId(null);
+
+            // Optionally update status to completed directly
+            handleStatusUpdate(uploadOrderId, 'completed');
+
+            fetchData();
+        } catch (error) {
+            message.error(error.response?.data?.error || 'Failed to finish work upload');
+        } finally {
+            setUploadingStatus(false);
         }
     };
 
@@ -239,14 +274,27 @@ function DocumentRequests() {
                         </Button>
                     )}
                     {record.status === 'processing' && (
-                        <Button
-                            size="small"
-                            style={{ background: '#7b2cbf', borderColor: '#7b2cbf', color: '#fff' }}
-                            icon={<CheckCircleOutlined />}
-                            onClick={() => handleStatusUpdate(record.orderId, 'ready')}
-                        >
-                            Ready
-                        </Button>
+                        <Space>
+                            <Button
+                                size="small"
+                                style={{ background: '#7b2cbf', borderColor: '#7b2cbf', color: '#fff' }}
+                                icon={<CheckCircleOutlined />}
+                                onClick={() => handleStatusUpdate(record.orderId, 'ready')}
+                            >
+                                Ready
+                            </Button>
+                            <Button
+                                size="small"
+                                type="dashed"
+                                icon={<DownloadOutlined />} // using download icon to signify "deliver work"
+                                onClick={() => {
+                                    setUploadOrderId(record.orderId);
+                                    setUploadModalVisible(true);
+                                }}
+                            >
+                                Attach Work
+                            </Button>
+                        </Space>
                     )}
                     {record.status === 'ready' && (
                         <Button
@@ -515,6 +563,32 @@ function DocumentRequests() {
                         )}
                     </div>
                 )}
+            </Modal>
+
+            {/* Upload Work Modal */}
+            <Modal
+                title={`Attach work for ${uploadOrderId}`}
+                open={uploadModalVisible}
+                onCancel={() => {
+                    setUploadModalVisible(false);
+                    setUploadingFiles([]);
+                }}
+                onOk={handleUploadSubmit}
+                confirmLoading={uploadingStatus}
+                okText="Upload & Mark Completed"
+            >
+                <div style={{ marginTop: 20 }}>
+                    <Upload
+                        multiple
+                        beforeUpload={() => false}
+                        onChange={(info) => {
+                            setUploadingFiles(info.fileList);
+                        }}
+                        fileList={uploadingFiles}
+                    >
+                        <Button icon={<InboxOutlined />}>Select files</Button>
+                    </Upload>
+                </div>
             </Modal>
         </div>
     );

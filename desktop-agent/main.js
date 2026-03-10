@@ -893,6 +893,21 @@ async function fetchAndCacheData(type = 'all') {
             }
         }
 
+        if (type === 'all' || type === 'publicDocuments') {
+            try {
+                // Fetch public document requests
+                const res = await axios.get(`${baseUrl}/api/v1/public/document-requests`, {
+                    params: { limit: 50 },
+                    timeout: 10000
+                });
+                if (offlineStore.setPublicDocuments) {
+                    offlineStore.setPublicDocuments(res.data || []);
+                }
+            } catch (e) {
+                console.log('Failed to fetch public documents:', e.message);
+            }
+        }
+
         isOnline = true;
         console.log(`[Portal] Data cached for: ${type}`);
     } catch (error) {
@@ -1093,6 +1108,7 @@ function createPortalWindow(username) {
             guides: offlineStore.getGuides(),
             settings: offlineStore.getSettings(),
             pendingActions: offlineStore.getPendingActions(),
+            publicDocuments: offlineStore.getPublicDocuments(), // Initialize documents on load
             lastSync: offlineStore.getLastSync(),
             isOnline
         });
@@ -1787,13 +1803,12 @@ async function startDataCollection() {
                 let copies = Math.max((cached && cached.copies > 1) ? cached.copies : 1, (job.copies > 1) ? job.copies : 1);
                 let dataSource = cached ? 'realtime_watcher' : 'event_log_only';
 
-                // CRITICAL: If page count is <= 1 but the spool file size suggests more pages,
-                // do an AGGRESSIVE re-query. Some EPSON drivers report TotalPages=0 during spooling
+                // CRITICAL: If page count is <= 1, do an AGGRESSIVE re-query. 
+                // Some EPSON drivers report TotalPages=0 during spooling
                 // and Param8=1 in Event 307 regardless of actual page count.
-                // Heuristic: >50KB spool size for a completed job likely means multi-page document.
                 const sizeBytes = (cached && cached.sizeBytes > 0) ? cached.sizeBytes : (job.sizeBytes || 0);
-                if (totalPages <= 1 && sizeBytes > 50000) {
-                    console.log(`[PRINT] Warning Suspicious page count (${totalPages}) for ${sizeBytes} bytes - running aggressive query...`);
+                if (totalPages <= 1) {
+                    console.log(`[PRINT] Warning Suspicious page count (${totalPages}) - running aggressive query...`);
 
                     // Step 1: Try WMI aggressive re-query (job might still be briefly in spooler)
                     try {
@@ -1808,8 +1823,7 @@ async function startDataCollection() {
                         console.error('[PRINT] Aggressive query failed:', e.message);
                     }
 
-                                console.log(`[PRINT] OK Event Log rendered page count: ${totalPages} pages`);
-                    // ALWAYS run this â€” Event 805 has the ACCURATE copies count
+                    // ALWAYS run this — Event 805 has the ACCURATE copies count
                     // which Event 307 doesn't provide. Critical for multi-copy jobs.
                     try {
                         const docName = (cached && cached.document) ? cached.document : (job.document || '');
@@ -1827,37 +1841,6 @@ async function startDataCollection() {
                         }
                     } catch (e) {
                         console.error('[PRINT] Rendered page count query failed:', e.message);
-                    }
-
-                    // Step 3: If STILL <= 1 pages, estimate from spool size.
-                    // Calibrated from REAL L3250 Event 307 data:
-                    //   Job 5: 108,932 bytes / 4 pages = 27,233 bytes/page
-                    //   Job 2: 153,160 bytes / 8 pages = 19,145 bytes/page
-                    //   Single-page jobs: 17,072 - 36,660 bytes
-                    // EPSON text: ~19KB/page. Only trigger when > 40KB (above 1-page range).
-                    if (totalPages <= 1) {
-                        const docName = (cached && cached.document) || job.document || '';
-                        const printerName = job.printer || '';
-                        const isEpson = /epson/i.test(printerName);
-                        const isImageHeavy = /\.(jpg|jpeg|png|gif|bmp|tiff|ppt|pptx)/i.test(docName);
-
-                        if (isEpson && !isImageHeavy && sizeBytes > 40000) {
-                            const estimatedPages = Math.max(2, Math.round(sizeBytes / 19000));
-                            console.log(`[PRINT] Warning EPSON ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes (19KB/page calibrated)`);
-                            totalPages = estimatedPages;
-                            dataSource = 'epson_size_estimate';
-                        } else if (isEpson && isImageHeavy && sizeBytes > 80000) {
-                            const estimatedPages = Math.max(2, Math.round(sizeBytes / 60000));
-                            console.log(`[PRINT] Warning EPSON IMG EST: ${estimatedPages} pages from ${sizeBytes} bytes`);
-                            totalPages = estimatedPages;
-                            dataSource = 'epson_size_estimate';
-                        } else if (!isEpson && sizeBytes > 100000) {
-                            const bytesPerPage = isImageHeavy ? 500000 : 50000;
-                            const estimatedPages = Math.max(2, Math.round(sizeBytes / bytesPerPage));
-                            console.log(`[PRINT] Warning SIZE ESTIMATE: ${estimatedPages} pages from ${sizeBytes} bytes`);
-                            totalPages = estimatedPages;
-                            dataSource = 'size_estimate';
-                        }
                     }
                 }
 

@@ -303,6 +303,36 @@ class OfflineStore {
     }
 
     /**
+     * Set public documents
+     */
+    setPublicDocuments(docs) {
+        // Merge downloaded status from existing docs
+        const existingDocs = this.data.publicDocuments || [];
+
+        // Ensure docs is an array
+        const newDocs = Array.isArray(docs) ? docs : [];
+
+        this.data.publicDocuments = newDocs.map(newDoc => {
+            const existingDoc = existingDocs.find(d => d.orderId === newDoc.orderId);
+            if (existingDoc && existingDoc.files) {
+                newDoc.files = newDoc.files.map(newFile => {
+                    const existingFile = existingDoc.files.find(f =>
+                        (f.originalName || f.filename) === (newFile.originalName || newFile.filename)
+                    );
+                    if (existingFile && existingFile.downloaded) {
+                        newFile.downloaded = true;
+                        newFile.downloadedAt = existingFile.downloadedAt;
+                    }
+                    return newFile;
+                });
+            }
+            return newDoc;
+        });
+
+        this.saveToDisk();
+    }
+
+    /**
      * Mark a file as downloaded (update status)
      * Do NOT remove it, as we want history.
      */

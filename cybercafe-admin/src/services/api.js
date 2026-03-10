@@ -408,6 +408,17 @@ export const updateDocumentRequestStatus = async (orderId, status, notes = '') =
     return response.data;
 };
 
+export const uploadDocumentRequestWork = async (orderId, formData) => {
+    const response = await axios.put(`${API_BASE_URL}/admin/document-requests/${orderId}/work`, formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+            'Authorization': `Bearer ${getStoredToken()}`
+        },
+        timeout: 60000
+    });
+    return response.data;
+};
+
 export const getDocumentRequestAnalytics = async () => {
     const response = await api.get('/admin/document-requests/analytics');
     return response.data;
@@ -670,6 +681,7 @@ export default {
     getDocumentRequests,
     getDocumentRequestStats,
     updateDocumentRequestStatus,
+    uploadDocumentRequestWork,
     getDocumentRequestAnalytics,
     connectSocket,
     disconnectSocket,

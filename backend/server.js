@@ -67,7 +67,7 @@ const ServiceCategory = require('./models/ServiceCategory');
 const InventoryItem = require('./models/InventoryItem');
 const UserSubmission = require('./models/UserSubmission');
 const DocumentRequest = require('./models/DocumentRequest');
-
+const Client = require('./models/Client');
 
 
 const app = express();
@@ -941,6 +941,120 @@ app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
 });
 
 
+
+/**
+ * CLIENT AUTHENTICATION AND DASHBOARD ROUTES
+ * For public users registering from the Landing Page
+ */
+
+const requireClientAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+        const token = authHeader.split(' ')[1];
+        const session = await AuthSession.findOne({ token, type: 'client' });
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+        req.client = session;
+        next();
+    } catch (err) {
+        res.status(500).json({ error: 'Authentication error' });
+    }
+};
+
+app.post('/api/v1/client/register', async (req, res) => {
+    try {
+        const { name, email, phone, password } = req.body;
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: 'Name, email, and password are required' });
+        }
+
+        const existingClient = await Client.findOne({ email });
+        if (existingClient) {
+            return res.status(400).json({ error: 'Email already registered' });
+        }
+
+        const newClient = await Client.create({
+            name,
+            email,
+            phone,
+            passwordHash: hashPassword(password)
+        });
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+        await AuthSession.create({
+            token,
+            username: newClient._id.toString(), // Using ID as username for generic session object
+            email: newClient.email,
+            type: 'client',
+            expiresAt
+        });
+
+        res.json({ success: true, token, user: { id: newClient._id, name: newClient.name, email: newClient.email } });
+    } catch (err) {
+        console.error('Client Registration Error:', err);
+        res.status(500).json({ error: 'Failed to register account' });
+    }
+});
+
+app.post('/api/v1/client/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const client = await Client.findOne({ email });
+        if (!client || !verifyPassword(password, client.passwordHash)) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+        await AuthSession.create({
+            token,
+            username: client._id.toString(),
+            email: client.email,
+            type: 'client',
+            expiresAt
+        });
+
+        res.json({ success: true, token, user: { id: client._id, name: client.name, email: client.email } });
+    } catch (err) {
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+app.get('/api/v1/client/history', requireClientAuth, async (req, res) => {
+    try {
+        const email = req.client.email;
+        // Fetch document requests tracking info
+        const requests = await DocumentRequest.find({ email }).sort({ createdAt: -1 });
+
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
+        const mappedRequests = requests.map(reqDoc => {
+            const reqObj = reqDoc.toObject();
+            if (reqObj.resultFiles && reqObj.resultFiles.length > 0) {
+                reqObj.resultFiles = reqObj.resultFiles.map(f => ({
+                    ...f,
+                    downloadUrl: `${baseUrl}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch history' });
+    }
+});
 
 /**
  * POST /api/v1/auth/user/logout
@@ -4509,11 +4623,24 @@ app.get('/api/v1/public/track/:orderId', async (req, res) => {
             return res.status(404).json({ error: 'Order not found' });
         }
 
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
         res.json({
             orderId: request.orderId,
             status: request.status,
             serviceType: request.serviceType,
-            filesCount: request.files.length,
+            filesCount: request.files ? request.files.length : 0,
+            resultFiles: (request.resultFiles || []).map(f => ({
+                filename: f.filename,
+                originalName: f.originalName,
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                type: f.mimeType
+            })),
             createdAt: request.createdAt,
             updatedAt: request.updatedAt
         });
@@ -5921,7 +6048,7 @@ const getDocType = (mime, name) => {
  */
 app.post('/api/v1/public/document-request', upload.array('files'), async (req, res) => {
     try {
-        const { serviceType, customerName, customerPhone, instructions } = req.body;
+        const { serviceType, customerName, customerPhone, instructions, email, userId } = req.body;
         const files = req.files || [];
 
         if (!files.length) {
@@ -5937,6 +6064,8 @@ app.post('/api/v1/public/document-request', upload.array('files'), async (req, r
             orderId,
             customerName,
             customerPhone,
+            email,
+            userId,
             serviceType,
             instructions,
             files: files.map(f => ({
@@ -6079,6 +6208,15 @@ app.get('/api/v1/public/document-requests', async (req, res) => {
                         type: getDocType(mime, name)
                     };
                 }),
+                resultFiles: (doc.resultFiles || []).map(f => {
+                    return {
+                        filename: f.filename,
+                        originalName: f.originalName,
+                        downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                        type: f.mimeType
+                    };
+                }),
+                status: doc.status,
                 notification: {
                     title: 'Document Request',
                     message: `${files.length} file(s) from ${doc.customerName} for ${doc.serviceType}`
@@ -6140,6 +6278,47 @@ app.put('/api/v1/admin/document-requests/:orderId/status', requireAdminAuth, asy
     } catch (error) {
         console.error('[DOCUMENT REQUESTS] Update failed:', error);
         res.status(500).json({ error: 'Update failed' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/work
+ * Attach completed result files and optionally set status to completed
+ */
+app.put('/api/v1/admin/document-requests/:orderId/work', requireAdminAuth, upload.array('files'), async (req, res) => {
+    try {
+        const files = req.files || [];
+        if (!files.length) {
+            return res.status(400).json({ error: 'No files provided for upload' });
+        }
+
+        const newResultFiles = files.map(f => ({
+            originalName: f.originalname,
+            filename: f.filename,
+            path: f.path,
+            mimeType: f.mimetype,
+            size: f.size
+        }));
+
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            {
+                $push: { resultFiles: { $each: newResultFiles } }
+            },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, hasResults: true });
+
+        // Notify client portal
+        io.emit('document-request-status-changed', { orderId: request.orderId, status: request.status, customerName: request.customerName });
+
+        res.json({ success: true, resultFiles: request.resultFiles });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Attach work failed:', error);
+        res.status(500).json({ error: 'Failed to attach work to request' });
     }
 });
 

@@ -4,6 +4,8 @@ const DocumentRequestSchema = new mongoose.Schema({
     orderId: { type: String, required: true, unique: true },
     customerName: { type: String, required: true },
     customerPhone: { type: String, required: true },
+    email: { type: String },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     serviceType: { type: String, required: true },
     instructions: { type: String },
     source: { type: String, default: 'landing_page' },
@@ -24,6 +26,13 @@ const DocumentRequestSchema = new mongoose.Schema({
         mimeType: String,
         size: Number,
         docType: String // 'pdf', 'word', 'excel', 'other'
+    }],
+    resultFiles: [{
+        originalName: String,
+        filename: String,
+        path: String,
+        mimeType: String,
+        size: Number
     }],
     totalFiles: { type: Number, default: 0 },
     totalSize: { type: Number, default: 0 },

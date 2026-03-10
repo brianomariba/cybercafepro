@@ -35,6 +35,7 @@ function BrowserHistory() {
     const [searchText, setSearchText] = useState('');
     const [filterCategory, setFilterCategory] = useState('all');
     const [filterComputer, setFilterComputer] = useState('all');
+    const [filterUser, setFilterUser] = useState('all');
     const [loading, setLoading] = useState(false);
     const [lastUpdate, setLastUpdate] = useState(null);
 
@@ -145,7 +146,8 @@ function BrowserHistory() {
             h.user.toLowerCase().includes(searchText.toLowerCase());
         const matchesCategory = filterCategory === 'all' || h.category === filterCategory;
         const matchesComputer = filterComputer === 'all' || h.computer === filterComputer;
-        return matchesSearch && matchesCategory && matchesComputer;
+        const matchesUser = filterUser === 'all' || h.user === filterUser;
+        return matchesSearch && matchesCategory && matchesComputer && matchesUser;
     });
 
     // Block site feature
@@ -409,6 +411,17 @@ function BrowserHistory() {
                                         }))
                                     ]}
                                 />
+                                <Select
+                                    value={filterUser}
+                                    onChange={setFilterUser}
+                                    style={{ width: 130 }}
+                                    options={[
+                                        { value: 'all', label: 'All Users' },
+                                        ...[...new Set(history.map(h => h.user))].filter(Boolean).map(user => ({
+                                            value: user, label: user
+                                        }))
+                                    ]}
+                                />
                                 <Tooltip title={lastUpdate ? `Last updated: ${dayjs(lastUpdate).format('HH:mm:ss')}` : 'Click to refresh'}>
                                     <Button
                                         icon={<SyncOutlined spin={loading} />}
@@ -443,13 +456,13 @@ function BrowserHistory() {
                         }
                         style={{ marginBottom: 16 }}
                     >
-                        {history.length > 0 ? (
+                        {filteredHistory.length > 0 ? (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                                 {/* Category Breakdown */}
                                 <div>
                                     <Text strong style={{ marginBottom: 8, display: 'block' }}>Category Breakdown</Text>
                                     {Object.entries(
-                                        history.reduce((acc, h) => {
+                                        filteredHistory.reduce((acc, h) => {
                                             const cat = h.category || 'other';
                                             acc[cat] = (acc[cat] || 0) + 1;
                                             return acc;
@@ -470,7 +483,8 @@ function BrowserHistory() {
                                             </Tag>
                                             <Badge
                                                 count={count}
-                                                style={{ backgroundColor: getCategoryColor(category) }}
+                                                style={{ backgroundColor: getCategoryColor(category), color: '#fff' }}
+                                                overflowCount={999}
                                             />
                                         </div>
                                     ))}
@@ -480,9 +494,9 @@ function BrowserHistory() {
                                 <div>
                                     <Text strong style={{ marginBottom: 8, display: 'block' }}>Top Sites</Text>
                                     {Object.entries(
-                                        history.reduce((acc, h) => {
+                                        filteredHistory.reduce((acc, h) => {
                                             try {
-                                                const domain = h.url && h.url.includes('://') ? new URL(h.url).hostname : 'unknown';
+                                                const domain = h.url && h.url.includes('://') ? new URL(h.url).hostname.replace('www.', '') : 'unknown';
                                                 acc[domain] = (acc[domain] || 0) + 1;
                                             } catch (e) {
                                                 acc['unknown'] = (acc['unknown'] || 0) + 1;
@@ -497,12 +511,18 @@ function BrowserHistory() {
                                             padding: '4px 0',
                                             fontSize: 12
                                         }}>
-                                            <Text type="secondary" ellipsis style={{ maxWidth: 150 }}>
-                                                {domain}
-                                            </Text>
-                                            <Text style={{ fontFamily: 'JetBrains Mono', color: '#00d4ff' }}>
-                                                {count} visits
-                                            </Text>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                                                <GlobalOutlined style={{ color: '#00d4ff', fontSize: 12 }} />
+                                                <Text type="secondary" ellipsis style={{ maxWidth: 140 }} title={domain}>
+                                                    {domain}
+                                                </Text>
+                                            </div>
+                                            <Badge
+                                                count={count}
+                                                style={{ backgroundColor: '#00d4ff', color: '#fff' }}
+                                                overflowCount={999}
+                                                title={`${count} visits`}
+                                            />
                                         </div>
                                     ))}
                                 </div>
@@ -510,7 +530,7 @@ function BrowserHistory() {
                                 {/* Active Users */}
                                 <div>
                                     <Text strong style={{ marginBottom: 8, display: 'block' }}>Active Users</Text>
-                                    {[...new Set(history.map(h => h.user))].filter(u => u !== 'Unknown').slice(0, 4).map(user => (
+                                    {[...new Set(filteredHistory.map(h => h.user))].filter(u => u !== 'Unknown').slice(0, 4).map(user => (
                                         <div key={user} style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -520,9 +540,9 @@ function BrowserHistory() {
                                             <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#7b2cbf' }} />
                                             <Text>{user}</Text>
                                             <Badge
-                                                count={history.filter(h => h.user === user).length}
-                                                size="small"
-                                                style={{ backgroundColor: '#6b6b80' }}
+                                                count={filteredHistory.filter(h => h.user === user).length}
+                                                style={{ backgroundColor: '#7b2cbf', color: '#fff' }}
+                                                overflowCount={999}
                                             />
                                         </div>
                                     ))}
@@ -542,8 +562,7 @@ function BrowserHistory() {
                             <div style={{ textAlign: 'center', padding: '20px 0' }}>
                                 <GlobalOutlined style={{ fontSize: 48, color: '#6b6b80', marginBottom: 12 }} />
                                 <Text type="secondary" style={{ display: 'block' }}>
-                                    No browsing data yet. Browser history will appear here once agents start tracking
-                                    user activity.
+                                    {history.length > 0 ? "No data matches the current filters." : "No browsing data yet. Browser history will appear here once agents start tracking user activity."}
                                 </Text>
                             </div>
                         )}

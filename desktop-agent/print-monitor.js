@@ -1644,8 +1644,9 @@ $bestCopies = 1
 
 # SOURCE 1: COUNT EMF PAGES IN SPOOL FILE (bypasses driver entirely)
 try {
-    $spoolDir = "$env:SystemRoot\\System32\\spool\\PRINTERS"
-    $splFiles = Get-ChildItem "$spoolDir\\*.SPL" -ErrorAction SilentlyContinue
+    $spoolDir = "$env:SystemRoot\System32\spool\PRINTERS"
+    $jobIdStr = "{0:D5}" -f [int]${jobId}
+    $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
     foreach ($spl in $splFiles) {
         $fs = $null; $br = $null
         try {
@@ -1671,9 +1672,8 @@ try {
 } catch {}
 
 # SOURCE 2: EVENT 805 GdiJobSize calibration
-if ($bestPages -le 1) {
+if ($bestPages -le 1 -or $bestCopies -eq 1) {
     try {
-        $currentGdi = 0
         $evts805 = Get-WinEvent -FilterHashtable @{
             LogName = 'Microsoft-Windows-PrintService/Operational'
             ID = 805
@@ -1685,7 +1685,6 @@ if ($bestPages -le 1) {
                 $xml = [xml]$e.ToXml()
                 $rd = $xml.Event.UserData.RenderJobDiag
                 if ($rd -and [int]$rd.JobId -eq ${jobId}) {
-                    $currentGdi = [long]$rd.GdiJobSize
                     # CRITICAL: Event 805 has the ACCURATE copies count!
                     if ($rd.Copies -and [int]$rd.Copies -gt $bestCopies) {
                         $bestCopies = [int]$rd.Copies
@@ -1693,49 +1692,6 @@ if ($bestPages -le 1) {
                     break
                 }
             } catch {}
-        }
-
-        if ($currentGdi -gt 50000) {
-            # Calibrate from recent jobs where Param8 > 1
-            $calibrations = @()
-            try {
-                $ref307 = Get-WinEvent -FilterHashtable @{
-                    LogName = 'Microsoft-Windows-PrintService/Operational'
-                    ID = 307
-                    StartTime = (Get-Date).AddDays(-7)
-                } -MaxEvents 100 -ErrorAction Stop
-
-                foreach ($e7 in $ref307) {
-                    try {
-                        $xml7 = [xml]$e7.ToXml()
-                        $ud7 = $xml7.Event.UserData.DocumentPrinted
-                        $refPages = [int]$ud7.Param8
-                        $refJobId = [int]$ud7.Param1
-                        if ($refPages -gt 1) {
-                            foreach ($e8 in $evts805) {
-                                try {
-                                    $xml8 = [xml]$e8.ToXml()
-                                    $rd8 = $xml8.Event.UserData.RenderJobDiag
-                                    if ($rd8 -and [int]$rd8.JobId -eq $refJobId) {
-                                        $gdi = [long]$rd8.GdiJobSize
-                                        if ($gdi -gt 0) { $calibrations += ($gdi / $refPages) }
-                                        break
-                                    }
-                                } catch {}
-                            }
-                        }
-                    } catch {}
-                }
-            } catch {}
-
-            if ($calibrations.Count -gt 0) {
-                $avgBpp = ($calibrations | Measure-Object -Average).Average
-                $calPages = [Math]::Max(1, [Math]::Round($currentGdi / $avgBpp))
-                if ($calPages -gt $bestPages) { $bestPages = $calPages }
-            } else {
-                $estPages = [Math]::Max(2, [Math]::Round($currentGdi / 35000))
-                if ($estPages -gt $bestPages) { $bestPages = $estPages }
-            }
         }
     } catch {}
 }
@@ -1947,12 +1903,17 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     (!existing.colorMode && job.colorMode)
                 )) {
                     // Found a higher page count â€” update the cache
-                    existing.totalPages = job.totalPages;
+                    existing.totalPages = Math.max(job.totalPages || 0, existing.totalPages || 0);
                     if (job.pagesPrinted > (existing.pagesPrinted || 0)) {
                         existing.pagesPrinted = job.pagesPrinted;
                     }
                     if (job.copies > (existing.copies || 1)) {
                         existing.copies = job.copies;
+                    }
+                    if (!existing.document && job.document) existing.document = job.document;
+                    if (!existing.printer && job.printer) existing.printer = job.printer;
+                    if ((job.sizeBytes || 0) > (existing.sizeBytes || 0)) {
+                        existing.sizeBytes = job.sizeBytes;
                     }
                     // Also update other fields if they were empty
                     if (!existing.paperSize && job.paperSize) existing.paperSize = job.paperSize;
@@ -1963,7 +1924,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     existing.cachedAt = Date.now();
                     spoolerCache.set(job.jobKey, existing);
 
-                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} â€” now ${job.totalPages} pages`);
+                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} â€” now ${existing.totalPages} pages`);
 
                     if (typeof onUpdate === 'function') {
                         onUpdate(job.jobKey, existing);
@@ -2417,9 +2378,9 @@ try {
             # Retry if we're missing critical data (pages, color, media type)
             # IMPORTANT: Multi-page documents take 2-5 seconds to fully spool.
             # CRITICAL FIX: EPSON L3250 reports TotalPages=1 from the start even for
-            # multi-page documents. We MUST also retry when totalPages<=1 AND the spool
-            # file is large enough to suggest multiple pages (>50KB).
-            $needsPageRetry = ($totalPages -le 0) -or ($totalPages -le 1 -and $sizeBytes -gt 50000)
+            # multi-page documents. We MUST also retry when totalPages<=1. Small text files
+            # can be multi-page, so don't restrict this to just sizeBytes > 50000.
+            $needsPageRetry = ($totalPages -le 1)
             if ($needsPageRetry -or $colorMode -eq '' -or $mediaType -eq '') {
                 for ($retry = 0; $retry -lt 15; $retry++) {
                     Start-Sleep -Milliseconds 500
@@ -2474,7 +2435,8 @@ try {
                             if ($totalPages -le 1) {
                                 try {
                                     $spoolDir = "$env:SystemRoot\System32\spool\PRINTERS"
-                                    $splFiles = Get-ChildItem "$spoolDir\*.SPL" -ErrorAction SilentlyContinue
+                                    $jobIdStr = "{0:D5}" -f [int]${jobId}
+                                    $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
                                     foreach ($spl in $splFiles) {
                                         try {
                                             $fs = [System.IO.File]::Open($spl.FullName, 'Open', 'Read', 'ReadWrite')
@@ -2761,13 +2723,14 @@ try {
         });
 
         psProcess.on('close', (code) => {
+            const stoppedManually = psProcess?._stopped === true;
             running = false;
             console.log(`[SpoolerWatcher] Process exited with code ${code} `);
             // Cleanup temp file
             try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
 
             // Auto-restart after 5 seconds unless explicitly stopped
-            if (!psProcess._stopped) {
+            if (!stoppedManually) {
                 console.log('[SpoolerWatcher] Auto-restarting in 5 seconds...');
                 restartTimer = setTimeout(() => start(), 5000);
             }
