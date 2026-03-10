@@ -206,6 +206,11 @@ export const deleteAllBrowserData = async () => {
     return response.data;
 };
 
+export const deleteAllLandingDocumentData = async () => {
+    const response = await api.delete('/admin/landing-document-data');
+    return response.data;
+};
+
 // ==================== FILE ACTIVITY ====================
 
 export const getFileActivity = async (params = {}) => {
@@ -652,6 +657,7 @@ export default {
     getPrinters,
     deleteAllPrinterData,
     deleteAllBrowserData,
+    deleteAllLandingDocumentData,
     getBrowserHistory,
     getFileActivity,
     getUsbEvents,

@@ -31,7 +31,7 @@ import {
     BarChartOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, clearAllFinanceData, clearAllReportsData } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -354,6 +354,23 @@ function Settings() {
             message.error(err.response?.data?.error || 'Failed to delete reports data');
         } finally {
             setCleaningReportsData(false);
+        }
+    };
+
+    // Delete all landing page and document data
+    const [cleaningLandingData, setCleaningLandingData] = useState(false);
+    const handleDeleteAllLandingDocumentData = async () => {
+        setCleaningLandingData(true);
+        try {
+            const result = await deleteAllLandingDocumentData();
+            const d = result.deleted || {};
+            message.success(
+                `Landing & Document data cleared: ${d.requests || 0} requests, ${d.documents || 0} documents deleted`
+            );
+        } catch (err) {
+            message.error(err.response?.data?.error || 'Failed to delete landing and document data');
+        } finally {
+            setCleaningLandingData(false);
         }
     };
 
@@ -1186,6 +1203,62 @@ function Settings() {
                                             block
                                         >
                                             Delete All Reports Data
+                                        </Button>
+                                    </Popconfirm>
+                                </Space>
+                            </div>
+                        </Card>
+                    </Col>
+
+                    <Col xs={24} lg={12}>
+                        <Card
+                            title={
+                                <Space>
+                                    <FileTextOutlined style={{ color: '#ff3b5c' }} />
+                                    <span>Landing & Document Data Cleanup</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: 24,
+                                background: 'rgba(255, 59, 92, 0.06)',
+                                border: '1px solid rgba(255, 59, 92, 0.15)',
+                                borderRadius: 12,
+                                marginBottom: 16
+                            }}>
+                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
+                                        <Text strong>Delete Landing & Document Data</Text>
+                                    </div>
+                                    <Text type="secondary" style={{ fontSize: 13 }}>
+                                        This will permanently remove all document requests from the landing page and all shared document data.
+                                    </Text>
+                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
+                                        <li>Remote printing and task document requests via landing page</li>
+                                        <li>Shared documents in the admin dashboard</li>
+                                    </ul>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                        ⚠️ This action cannot be undone.
+                                    </Text>
+                                    <Divider style={{ margin: '8px 0' }} />
+                                    <Popconfirm
+                                        title="Delete landing & document data?"
+                                        description="This will permanently remove ALL landing page document requests and shared documents. This cannot be undone."
+                                        onConfirm={handleDeleteAllLandingDocumentData}
+                                        okText="Yes, Delete All"
+                                        cancelText="Cancel"
+                                        okButtonProps={{ danger: true }}
+                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
+                                    >
+                                        <Button
+                                            danger
+                                            type="primary"
+                                            icon={<DeleteOutlined />}
+                                            loading={cleaningLandingData}
+                                            block
+                                        >
+                                            Delete Landing & Document Data
                                         </Button>
                                     </Popconfirm>
                                 </Space>

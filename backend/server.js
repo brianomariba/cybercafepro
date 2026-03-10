@@ -2912,19 +2912,48 @@ app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
 
 /**
  * DELETE /api/v1/admin/browser-data
- * Deletes all browser history data
+ * Deletes all browser history data and online services data
  */
 app.delete('/api/v1/admin/browser-data', async (req, res) => {
     try {
         const result = await Log.deleteMany({ type: 'browser' });
-        console.log(`[CLEANUP] Admin deleted browser data: ${result.deletedCount} records`);
+        const serviceResult = await OnlineService.deleteMany({});
+        
+        console.log(`[CLEANUP] Admin deleted browser data: ${result.deletedCount} records, Online services: ${serviceResult.deletedCount}`);
         res.json({
             success: true,
-            deleted: { browserLogs: result.deletedCount || 0 }
+            deleted: { 
+                browserLogs: result.deletedCount || 0,
+                onlineServices: serviceResult.deletedCount || 0 
+            }
         });
     } catch (error) {
         console.error('Delete Browser Data Error:', error);
         res.status(500).json({ error: 'Failed to delete browser data' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/landing-document-data
+ * Deletes all landing page document requests and document data
+ */
+app.delete('/api/v1/admin/landing-document-data', async (req, res) => {
+    try {
+        const docRequestsResult = await DocumentRequest.deleteMany({});
+        const sharedDocResult = await SharedDocument.deleteMany({});
+        
+        console.log(`[CLEANUP] Admin deleted landing and document data: reqs=${docRequestsResult.deletedCount}, docs=${sharedDocResult.deletedCount}`);
+        
+        res.json({
+            success: true,
+            deleted: {
+                requests: docRequestsResult.deletedCount || 0,
+                documents: sharedDocResult.deletedCount || 0
+            }
+        });
+    } catch (error) {
+        console.error('Delete Landing/Document Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete landing and document data' });
     }
 });
 
