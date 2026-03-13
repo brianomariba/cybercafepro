@@ -1,4 +1,4 @@
-/**
+﻿/**
  * HawkNine Landing Page - JavaScript
  * Handles document uploads, service loading, and form submission
  */
@@ -693,6 +693,9 @@ async function openDashboardModal() {
 
     document.getElementById('dashboardModal').classList.add('active');
 
+    // Initialize the dashboard upload zone
+    initDashUpload();
+
     const list = document.getElementById('dashboardHistoryList');
     list.innerHTML = '<div style="text-align:center; padding: 20px;">Loading history...</div>';
 
@@ -704,41 +707,68 @@ async function openDashboardModal() {
         const data = await res.json();
 
         let completed = 0;
+        let readyCount = 0;
         let html = '';
         data.forEach(req => {
-            if (req.status === 'completed' || req.status === 'ready') completed++;
+            if (req.status === 'completed') completed++;
+            if (req.status === 'ready' || (req.status === 'completed' && req.resultFiles && req.resultFiles.length > 0)) readyCount++;
 
-            // Format status label
-            let statusColor = '#94a3b8'; // pending
-            if (req.status === 'processing') statusColor = '#f59e0b';
-            if (req.status === 'completed' || req.status === 'ready') statusColor = '#10b981';
+            let statusColor = '#94a3b8';
+            let statusBg = 'rgba(148,163,184,0.1)';
+            if (req.status === 'processing') { statusColor = '#f59e0b'; statusBg = 'rgba(245,158,11,0.1)'; }
+            if (req.status === 'completed' || req.status === 'ready') { statusColor = '#10b981'; statusBg = 'rgba(16,185,129,0.1)'; }
+            if (req.status === 'cancelled') { statusColor = '#ef4444'; statusBg = 'rgba(239,68,68,0.1)'; }
 
-            // Download button
-            let downloadBtnHTML = '';
-            if ((req.status === 'completed' || req.status === 'ready') && req.resultFiles && req.resultFiles.length > 0) {
-                const links = req.resultFiles.map(f => `<a href="${f.downloadUrl}" target="_blank" style="display:inline-block; margin-right:5px; color:#00B4D8; font-size:12px; text-decoration:none;"><i data-lucide="download"></i> Download ${escapeHtml(f.originalName)}</a>`).join('<br/>');
-                downloadBtnHTML = `<div>${links}</div>`;
+            // Download section for completed work
+            let downloadHTML = '';
+            if (req.resultFiles && req.resultFiles.length > 0) {
+                const fileLinks = req.resultFiles.map(f => {
+                    return `<a href="${f.downloadUrl}" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; gap:4px; padding:5px 10px; background:#00B4D8; color:white; border-radius:6px; font-size:12px; text-decoration:none; margin:3px 3px 3px 0; font-weight:500;">
+                        <i data-lucide="download" style="width:14px; height:14px;"></i> ${escapeHtml(f.originalName)}
+                    </a>`;
+                }).join('');
+                downloadHTML = `<div style="margin-top:8px;">${fileLinks}</div>`;
             } else if (req.status === 'completed') {
-                downloadBtnHTML = `<span style="color:#10b981; font-size:12px;">Completed (Physical Pickup)</span>`;
+                downloadHTML = '<div style="margin-top:6px;"><span style="color:#10b981; font-size:12px; font-style:italic;">&#10003; Completed (Physical Pickup)</span></div>';
+            }
+
+            // Public share link
+            let shareLinkHTML = '';
+            if (req.resultFiles && req.resultFiles.length > 0) {
+                shareLinkHTML = `<button onclick="copyShareLink('${req.orderId}')" style="margin-top:6px; display:inline-flex; align-items:center; gap:4px; padding:4px 8px; background:transparent; border:1px solid #CBD5E1; border-radius:6px; font-size:11px; cursor:pointer; color:#64748b; font-family:inherit;">
+                    <i data-lucide="link" style="width:12px; height:12px;"></i> Copy Share Link
+                </button>`;
             }
 
             html += `
-            <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center;">
-                <div>
-                    <strong style="display:block;">${escapeHtml(req.serviceType)}</strong>
-                    <span style="font-size: 12px; color: #64748b;">${new Date(req.createdAt).toLocaleDateString()} &middot; ID: ${req.orderId}</span>
-                    <div style="margin-top: 5px;">${downloadBtnHTML}</div>
-                </div>
-                <div style="text-align:right;">
-                    <span style="display:block; font-size: 13px; font-weight:bold; color: ${statusColor}; text-transform: uppercase;">${req.status}</span>
+            <div style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 12px; background:white;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div style="flex:1;">
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                            <strong style="font-size:15px;">${escapeHtml((req.serviceType || 'Document').replace(/-/g, ' '))}</strong>
+                            <span style="display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; color:${statusColor}; background:${statusBg}; text-transform:uppercase;">${req.status}</span>
+                        </div>
+                        <span style="font-size: 12px; color: #64748b;">
+                            ${new Date(req.createdAt).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})} &middot;
+                            <span style="font-family: monospace; color:#00B4D8;">ID: ${req.orderId}</span>
+                        </span>
+                        ${req.instructions ? `<div style="margin-top:4px; font-size:12px; color:#94a3b8; font-style:italic;">"${escapeHtml(req.instructions)}"</div>` : ''}
+                        ${downloadHTML}
+                        ${shareLinkHTML}
+                    </div>
+                    <div style="text-align:right; min-width:60px;">
+                        <span style="font-size:12px; color:#94a3b8;">${req.files?.length || req.totalFiles || 0} file(s)</span>
+                    </div>
                 </div>
             </div>`;
         });
 
         document.getElementById('dashTotalOrders').innerText = data.length || 0;
         document.getElementById('dashCompletedOrders').innerText = completed;
+        const readyEl = document.getElementById('dashReadyOrders');
+        if (readyEl) readyEl.innerText = readyCount;
 
-        list.innerHTML = html || '<div style="text-align:center; padding: 20px; color: #64748b;">No documents uploaded yet.</div>';
+        list.innerHTML = html || '<div style="text-align:center; padding: 30px; color: #64748b;"><i data-lucide="inbox" style="width:40px; height:40px; margin-bottom:8px; opacity:0.4;"></i><br/>No documents uploaded yet.<br/><span style="font-size:13px;">Use the upload button above to submit your first document.</span></div>';
         if (typeof lucide !== 'undefined') lucide.createIcons();
 
     } catch (e) {
@@ -749,6 +779,8 @@ window.openDashboardModal = openDashboardModal;
 
 function closeDashboardModal() {
     document.getElementById('dashboardModal').classList.remove('active');
+    const section = document.getElementById('dashUploadSection');
+    if (section) section.style.display = 'none';
 }
 window.closeDashboardModal = closeDashboardModal;
 
@@ -760,10 +792,240 @@ function clientLogout() {
 }
 window.clientLogout = clientLogout;
 
-// ==================== TRACKING ====================
+// ==================== DASHBOARD UPLOAD ====================
 
-function openTrackModal(e) {
-    if (e) e.preventDefault();
+let dashUploadedFiles = [];
+
+function toggleDashUpload() {
+    const section = document.getElementById('dashUploadSection');
+    const btn = document.getElementById('dashUploadToggleBtn');
+    if (section.style.display === 'none') {
+        section.style.display = 'block';
+        btn.style.borderColor = '#00B4D8';
+        btn.style.color = '#00B4D8';
+        btn.innerHTML = '<i data-lucide="x" style="width:18px; height:18px;"></i> Cancel Upload';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    } else {
+        section.style.display = 'none';
+        btn.style.borderColor = '#CBD5E1';
+        btn.style.color = '#64748b';
+        btn.innerHTML = '<i data-lucide="upload-cloud" style="width:20px; height:20px;"></i> Upload New Document';
+        dashUploadedFiles = [];
+        renderDashSelectedFiles();
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+}
+window.toggleDashUpload = toggleDashUpload;
+
+function initDashUpload() {
+    const dashDropZone = document.getElementById('dashDropZone');
+    const dashFileInput = document.getElementById('dashFileInput');
+    const dashForm = document.getElementById('dashUploadForm');
+
+    if (!dashDropZone || !dashFileInput || dashDropZone._initialized) return;
+    dashDropZone._initialized = true;
+
+    dashDropZone.addEventListener('click', () => dashFileInput.click());
+
+    dashDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dashDropZone.classList.add('dragover');
+    });
+    dashDropZone.addEventListener('dragleave', () => {
+        dashDropZone.classList.remove('dragover');
+    });
+    dashDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dashDropZone.classList.remove('dragover');
+        handleDashFiles(e.dataTransfer.files);
+    });
+    dashFileInput.addEventListener('change', () => {
+        handleDashFiles(dashFileInput.files);
+    });
+
+    dashForm.addEventListener('submit', handleDashUploadSubmit);
+}
+
+function handleDashFiles(files) {
+    for (const file of files) {
+        const extension = file.name.split('.').pop().toLowerCase();
+        const isAllowedType = ALLOWED_EXTENSIONS.includes(extension) || ALLOWED_MIMETYPES.includes(file.type);
+        if (!isAllowedType) {
+            showToast('"' + file.name + '" is not supported. Use PDF, Word, or Excel files.', 'error');
+            continue;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+            showToast('"' + file.name + '" is too large. Max 50MB.', 'error');
+            continue;
+        }
+        if (dashUploadedFiles.some(f => f.name === file.name && f.size === file.size)) continue;
+        dashUploadedFiles.push(file);
+    }
+    renderDashSelectedFiles();
+}
+
+function renderDashSelectedFiles() {
+    const container = document.getElementById('dashSelectedFiles');
+    if (!container) return;
+    if (dashUploadedFiles.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    container.innerHTML = dashUploadedFiles.map((file, index) => `
+        <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:white; border:1px solid #e2e8f0; border-radius:8px;">
+            <i data-lucide="${getFileIcon(file.name)}" style="width:16px; height:16px; color:#00B4D8;"></i>
+            <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(file.name)}</span>
+            <span style="font-size:11px; color:#94a3b8;">${formatFileSize(file.size)}</span>
+            <button type="button" onclick="removeDashFile(${index})"
+                style="background:none; border:none; cursor:pointer; color:#ef4444; padding:2px;">
+                <i data-lucide="x" style="width:14px; height:14px;"></i>
+            </button>
+        </div>
+    `).join('');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function removeDashFile(index) {
+    dashUploadedFiles.splice(index, 1);
+    renderDashSelectedFiles();
+}
+window.removeDashFile = removeDashFile;
+
+async function handleDashUploadSubmit(e) {
+    e.preventDefault();
+
+    if (dashUploadedFiles.length === 0) {
+        showToast('Please select at least one file to upload.', 'error');
+        return;
+    }
+
+    const serviceType = document.getElementById('dashServiceType').value;
+    if (!serviceType) {
+        showToast('Please select a service type.', 'error');
+        return;
+    }
+
+    const instructions = document.getElementById('dashInstructions').value.trim();
+    const btn = document.getElementById('dashSubmitBtn');
+    const originalText = btn.innerHTML;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px;margin-right:6px;"></span> Uploading...';
+
+    try {
+        const userStr = localStorage.getItem('hawknine_client_user');
+        const user = userStr ? JSON.parse(userStr) : {};
+
+        const formData = new FormData();
+        for (const file of dashUploadedFiles) {
+            formData.append('files', file);
+        }
+        formData.append('serviceType', serviceType);
+        formData.append('customerName', user.name || 'Unknown');
+        formData.append('customerPhone', user.phone || '0000000000');
+        formData.append('instructions', instructions);
+        formData.append('source', 'client_dashboard');
+        if (user.email) formData.append('email', user.email);
+        if (user.id) formData.append('userId', user.id);
+
+        const res = await fetch(`${API_BASE_URL}/public/document-request`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!res.ok) throw new Error('Upload failed');
+
+        const result = await res.json();
+
+        showToast('Document submitted! Order ID: ' + result.orderId, 'success');
+        dashUploadedFiles = [];
+        renderDashSelectedFiles();
+        document.getElementById('dashUploadForm').reset();
+        toggleDashUpload();
+
+        // Refresh history list
+        openDashboardModal();
+
+    } catch (err) {
+        console.error('Dashboard upload error:', err);
+        showToast('Failed to submit. Please try again.', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+}
+
+// ==================== SHARE LINK UTILITY ====================
+
+function copyShareLink(orderId) {
+    const baseUrl = isProduction ? 'https://hawkninegroup.com' : window.location.origin;
+    const shareText = 'Download your completed work from HawkNine:\n1. Visit: ' + baseUrl + '/landing/\n2. Click "Track Order"\n3. Enter Order ID: ' + orderId;
+
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(shareText).then(() => {
+            showToast('Share link copied to clipboard!', 'success');
+        }).catch(() => {
+            fallbackCopy(shareText);
+        });
+    } else {
+        fallbackCopy(shareText);
+    }
+}
+window.copyShareLink = copyShareLink;
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        document.execCommand('copy');
+        showToast('Share link copied!', 'success');
+    } catch (e) {
+        showToast('Could not copy. Please copy manually.', 'error');
+    }
+    document.body.removeChild(ta);
+}
+
+// ==================== TOAST NOTIFICATIONS ====================
+
+function showToast(message, type) {
+    type = type || 'info';
+    let container = document.getElementById('toastContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toastContainer';
+        container.style.cssText = 'position:fixed; top:20px; right:20px; z-index:100000; display:flex; flex-direction:column; gap:8px;';
+        document.body.appendChild(container);
+    }
+
+    const colors = {
+        success: { bg: '#10b981', icon: '\u2713' },
+        error: { bg: '#ef4444', icon: '\u2717' },
+        info: { bg: '#3b82f6', icon: '\u2139' }
+    };
+    const c = colors[type] || colors.info;
+
+    const toast = document.createElement('div');
+    toast.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 20px; background:' + c.bg + '; color:white; border-radius:10px; font-size:14px; font-weight:500; box-shadow:0 4px 15px rgba(0,0,0,0.2); font-family:inherit; max-width:380px;';
+    toast.innerHTML = '<span style="font-size:16px;">' + c.icon + '</span> ' + escapeHtml(message);
+    container.appendChild(toast);
+
+    setTimeout(function () {
+        toast.style.transition = 'opacity 0.3s, transform 0.3s';
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(20px)';
+        setTimeout(function () { toast.remove(); }, 300);
+    }, 4000);
+}
+window.showToast = showToast;
+
+// ==================== ORDER TRACKING ====================
+
+function openTrackModal() {
     document.getElementById('trackModal').classList.add('active');
     document.getElementById('trackOrderFormSection').style.display = 'block';
     document.getElementById('trackResultSection').style.display = 'none';
@@ -783,25 +1045,25 @@ function backToTrackSearch() {
 }
 window.backToTrackSearch = backToTrackSearch;
 
-document.addEventListener('DOMContentLoaded', () => {
-    const trackForm = document.getElementById('trackOrderForm');
+document.addEventListener('DOMContentLoaded', function () {
+    var trackForm = document.getElementById('trackOrderForm');
     if (trackForm) {
-        trackForm.addEventListener('submit', async (e) => {
+        trackForm.addEventListener('submit', async function (e) {
             e.preventDefault();
-            const orderId = document.getElementById('trackOrderId').value.trim().toUpperCase();
+            var orderId = document.getElementById('trackOrderId').value.trim().toUpperCase();
             if (!orderId) return alert('Please enter an order ID');
 
-            const btn = e.target.querySelector('button');
-            const originalText = btn.innerText;
+            var btn = e.target.querySelector('button');
+            var originalText = btn.innerText;
             btn.innerText = 'Tracking...';
             btn.disabled = true;
 
             try {
-                const res = await fetch(`${API_BASE_URL}/public/track/${orderId}`);
-                const data = await res.json();
+                var res = await fetch(API_BASE_URL + '/public/track/' + orderId);
+                var data = await res.json();
 
                 if (res.ok) {
-                    let statusColor = '#94a3b8'; // pending
+                    var statusColor = '#94a3b8';
                     if (data.status === 'processing') statusColor = '#f59e0b';
                     if (data.status === 'completed' || data.status === 'ready') statusColor = '#10b981';
 
@@ -810,17 +1072,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     document.getElementById('trackResultService').innerText = data.serviceType;
                     document.getElementById('trackResultDate').innerText = new Date(data.createdAt).toLocaleString();
 
-                    // Show files if any
-                    const filesContainer = document.getElementById('trackResultFiles');
-                    const filesList = document.getElementById('trackResultFilesList');
+                    var filesContainer = document.getElementById('trackResultFiles');
+                    var filesList = document.getElementById('trackResultFilesList');
                     filesList.innerHTML = '';
 
                     if ((data.status === 'completed' || data.status === 'ready') && data.resultFiles && data.resultFiles.length > 0) {
-                        data.resultFiles.forEach(f => {
-                            const link = document.createElement('a');
+                        data.resultFiles.forEach(function (f) {
+                            var link = document.createElement('a');
                             link.href = f.downloadUrl;
                             link.target = '_blank';
-                            link.innerHTML = `<button class="btn btn-secondary" style="width:100%; text-align:left; padding:10px;"><i data-lucide="download" style="width:16px; height:16px; margin-right:8px; vertical-align:middle;"></i> Download ${escapeHtml(f.originalName)}</button>`;
+                            link.innerHTML = '<button class="btn btn-secondary" style="width:100%; text-align:left; padding:10px;"><i data-lucide="download" style="width:16px; height:16px; margin-right:8px; vertical-align:middle;"></i> Download ' + escapeHtml(f.originalName) + '</button>';
                             filesList.appendChild(link);
                         });
                         filesContainer.style.display = 'block';

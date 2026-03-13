@@ -17,6 +17,8 @@ import {
     PlayCircleOutlined,
     InboxOutlined,
     DownloadOutlined,
+    LinkOutlined,
+    CopyOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getDocumentRequests, getDocumentRequestStats, updateDocumentRequestStatus, uploadDocumentRequestWork, connectSocket } from '../services/api';
@@ -127,6 +129,20 @@ function DocumentRequests() {
         } catch (error) {
             message.error('Failed to update status');
         }
+    };
+
+    // Copy public download link for sharing with customers
+    const copyDownloadLink = (orderId) => {
+        const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+            ? 'http://localhost:5000'
+            : 'https://hawkninegroup.com';
+        const shareText = `Download your completed work from HawkNine:\n1. Visit: ${baseUrl}/landing/\n2. Click "Track Order"\n3. Enter Order ID: ${orderId}`;
+
+        navigator.clipboard.writeText(shareText).then(() => {
+            message.success('Download link copied to clipboard!');
+        }).catch(() => {
+            message.error('Failed to copy link');
+        });
     };
 
     const handleUploadSubmit = async () => {
@@ -250,9 +266,9 @@ function DocumentRequests() {
         {
             title: 'Actions',
             key: 'actions',
-            width: 180,
+            width: 240,
             render: (_, record) => (
-                <Space>
+                <Space wrap>
                     <Tooltip title="View Details">
                         <Button
                             type="text"
@@ -286,7 +302,7 @@ function DocumentRequests() {
                             <Button
                                 size="small"
                                 type="dashed"
-                                icon={<DownloadOutlined />} // using download icon to signify "deliver work"
+                                icon={<DownloadOutlined />}
                                 onClick={() => {
                                     setUploadOrderId(record.orderId);
                                     setUploadModalVisible(true);
@@ -297,15 +313,39 @@ function DocumentRequests() {
                         </Space>
                     )}
                     {record.status === 'ready' && (
-                        <Button
-                            type="primary"
-                            size="small"
-                            style={{ background: '#00C853' }}
-                            icon={<CheckCircleOutlined />}
-                            onClick={() => handleStatusUpdate(record.orderId, 'completed')}
-                        >
-                            Complete
-                        </Button>
+                        <Space>
+                            <Button
+                                type="primary"
+                                size="small"
+                                style={{ background: '#00C853' }}
+                                icon={<CheckCircleOutlined />}
+                                onClick={() => handleStatusUpdate(record.orderId, 'completed')}
+                            >
+                                Complete
+                            </Button>
+                            <Button
+                                size="small"
+                                type="dashed"
+                                icon={<DownloadOutlined />}
+                                onClick={() => {
+                                    setUploadOrderId(record.orderId);
+                                    setUploadModalVisible(true);
+                                }}
+                            >
+                                Attach Work
+                            </Button>
+                        </Space>
+                    )}
+                    {record.resultFiles && record.resultFiles.length > 0 && (
+                        <Tooltip title="Copy shareable download link">
+                            <Button
+                                size="small"
+                                icon={<LinkOutlined />}
+                                onClick={() => copyDownloadLink(record.orderId)}
+                            >
+                                Copy Link
+                            </Button>
+                        </Tooltip>
                     )}
                 </Space>
             ),
@@ -559,6 +599,55 @@ function DocumentRequests() {
                         {selectedRequest.instructions && (
                             <Card title="Customer Instructions" size="small">
                                 <Text>{selectedRequest.instructions}</Text>
+                            </Card>
+                        )}
+
+                        {/* Result / Completed Work Files */}
+                        {selectedRequest.resultFiles && selectedRequest.resultFiles.length > 0 && (
+                            <Card
+                                title={
+                                    <Space>
+                                        <CheckCircleOutlined style={{ color: '#10b981' }} />
+                                        <span>Completed Work ({selectedRequest.resultFiles.length} file{selectedRequest.resultFiles.length > 1 ? 's' : ''})</span>
+                                    </Space>
+                                }
+                                size="small"
+                                extra={
+                                    <Button
+                                        size="small"
+                                        icon={<LinkOutlined />}
+                                        onClick={() => copyDownloadLink(selectedRequest.orderId)}
+                                    >
+                                        Copy Shareable Link
+                                    </Button>
+                                }
+                            >
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                    {selectedRequest.resultFiles.map((file, idx) => (
+                                        <div key={idx} style={{
+                                            display: 'flex', alignItems: 'center', gap: 12, padding: 12,
+                                            background: 'rgba(16, 185, 129, 0.08)', borderRadius: 8
+                                        }}>
+                                            <CheckCircleOutlined style={{ color: '#10b981', fontSize: 20 }} />
+                                            <div style={{ flex: 1 }}>
+                                                <Text strong>{file.originalName}</Text>
+                                                <br />
+                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                    {formatBytes(file.size)}
+                                                </Text>
+                                            </div>
+                                            <a
+                                                href={file.downloadUrl || `/uploads/${file.filename}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                            >
+                                                <Button size="small" type="primary" icon={<DownloadOutlined />}>
+                                                    Download
+                                                </Button>
+                                            </a>
+                                        </div>
+                                    ))}
+                                </div>
                             </Card>
                         )}
                     </div>
