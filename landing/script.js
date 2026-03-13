@@ -4,17 +4,9 @@
  */
 
 // API Configuration - Auto-detect production vs development
-// FORCING PRODUCTION FOR TESTING: User is checking prod portal but running landing page locally.
-const isProduction = true; // window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-const API_BASE_URL = 'https://api.hawkninegroup.com/api/v1';
-// isProduction
-// ? 'https://api.hawkninegroup.com/api/v1'
-// : 'http://localhost:5000/api/v1';
-
-const PORTAL_URL = 'https://portal.hawkninegroup.com';
-// isProduction
-// ? 'https://portal.hawkninegroup.com'
-// : 'http://localhost:5173';
+const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+const API_BASE_URL = isProduction ? 'https://api.hawkninegroup.com/api/v1' : 'http://localhost:5000/api/v1';
+const PORTAL_URL = isProduction ? 'https://portal.hawkninegroup.com' : 'http://localhost:5173';
 
 // Expose globally
 window.goToPortal = function (path) {
@@ -487,10 +479,10 @@ function closeModal() {
     }
 }
 
-// Close modal on overlay click
+// Close any modal on overlay click
 document.addEventListener('click', function (e) {
     if (e.target.classList.contains('modal')) {
-        closeModal();
+        e.target.classList.remove('active');
     }
 });
 
@@ -544,6 +536,8 @@ function checkClientLoginState() {
 
 function openAuthModal() {
     document.getElementById('authModal').classList.add('active');
+    // Reset to login tab and clear messages
+    switchAuthTab('login');
 }
 function closeAuthModal() {
     document.getElementById('authModal').classList.remove('active');
@@ -552,62 +546,82 @@ window.closeAuthModal = closeAuthModal;
 window.openAuthModal = openAuthModal;
 
 function switchAuthTab(tab) {
-    document.getElementById('tabLogin').classList.remove('active');
-    document.getElementById('tabRegister').classList.remove('active');
-    document.getElementById('tabLogin').style.color = '#64748b';
-    document.getElementById('tabRegister').style.color = '#64748b';
-    document.getElementById('tabLogin').style.borderBottom = 'none';
-    document.getElementById('tabRegister').style.borderBottom = 'none';
+    // Clear messages
+    hideAuthMessages();
 
-    document.getElementById('loginFormSection').style.display = 'none';
-    document.getElementById('registerFormSection').style.display = 'none';
+    // Toggle tab active state
+    document.getElementById('tabLogin').classList.toggle('active', tab === 'login');
+    document.getElementById('tabRegister').classList.toggle('active', tab === 'register');
 
-    if (tab === 'login') {
-        document.getElementById('tabLogin').classList.add('active');
-        document.getElementById('tabLogin').style.color = '';
-        document.getElementById('tabLogin').style.borderBottom = '2px solid #00B4D8';
-        document.getElementById('loginFormSection').style.display = 'block';
-    } else {
-        document.getElementById('tabRegister').classList.add('active');
-        document.getElementById('tabRegister').style.color = '';
-        document.getElementById('tabRegister').style.borderBottom = '2px solid #00B4D8';
-        document.getElementById('registerFormSection').style.display = 'block';
-    }
+    // Toggle form visibility
+    document.getElementById('loginFormSection').style.display = tab === 'login' ? 'block' : 'none';
+    document.getElementById('registerFormSection').style.display = tab === 'register' ? 'block' : 'none';
 }
 window.switchAuthTab = switchAuthTab;
 
+function showAuthError(msg) {
+    const el = document.getElementById('authError');
+    if (el) { el.textContent = msg; el.classList.add('show'); }
+    const suc = document.getElementById('authSuccess');
+    if (suc) suc.classList.remove('show');
+}
+
+function showAuthSuccess(msg) {
+    const el = document.getElementById('authSuccess');
+    if (el) { el.textContent = msg; el.classList.add('show'); }
+    const err = document.getElementById('authError');
+    if (err) err.classList.remove('show');
+}
+
+function hideAuthMessages() {
+    const err = document.getElementById('authError');
+    const suc = document.getElementById('authSuccess');
+    if (err) err.classList.remove('show');
+    if (suc) suc.classList.remove('show');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    // Auth Forms
+    // Auth Forms - Login
     const loginForm = document.getElementById('clientLoginForm');
     if (loginForm) {
         loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            hideAuthMessages();
             const btn = e.target.querySelector('button');
             const originalText = btn.innerText;
-            btn.innerText = 'Loading...';
+            btn.innerText = 'Logging in...';
             btn.disabled = true;
+
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+
+            if (!email || !password) {
+                showAuthError('Please fill in all fields');
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
 
             try {
                 const res = await fetch(`${API_BASE_URL}/client/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        email: document.getElementById('loginEmail').value,
-                        password: document.getElementById('loginPassword').value
-                    })
+                    body: JSON.stringify({ email, password })
                 });
                 const data = await res.json();
                 if (res.ok && data.success) {
                     localStorage.setItem('hawknine_client_token', data.token);
                     localStorage.setItem('hawknine_client_user', JSON.stringify(data.user));
+                    hideAuthMessages();
                     closeAuthModal();
                     checkClientLoginState();
                     openDashboardModal();
                 } else {
-                    alert(data.error || 'Login failed');
+                    showAuthError(data.error || 'Invalid email or password');
                 }
-            } catch (e) {
-                alert('An error occurred during login');
+            } catch (err) {
+                console.error('Login error:', err);
+                showAuthError('Connection error. Please check your internet and try again.');
             } finally {
                 btn.innerText = originalText;
                 btn.disabled = false;
@@ -615,38 +629,56 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Auth Forms - Register
     const registerForm = document.getElementById('clientRegisterForm');
     if (registerForm) {
         registerForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            hideAuthMessages();
             const btn = e.target.querySelector('button');
             const originalText = btn.innerText;
-            btn.innerText = 'Loading...';
+            btn.innerText = 'Creating account...';
             btn.disabled = true;
+
+            const name = document.getElementById('regName').value.trim();
+            const email = document.getElementById('regEmail').value.trim();
+            const phone = document.getElementById('regPhone').value.trim();
+            const password = document.getElementById('regPassword').value;
+
+            if (!name || !email || !password) {
+                showAuthError('Please fill in all required fields');
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
+
+            if (password.length < 6) {
+                showAuthError('Password must be at least 6 characters');
+                btn.innerText = originalText;
+                btn.disabled = false;
+                return;
+            }
 
             try {
                 const res = await fetch(`${API_BASE_URL}/client/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: document.getElementById('regName').value,
-                        email: document.getElementById('regEmail').value,
-                        phone: document.getElementById('regPhone').value,
-                        password: document.getElementById('regPassword').value
-                    })
+                    body: JSON.stringify({ name, email, phone, password })
                 });
                 const data = await res.json();
                 if (res.ok && data.success) {
                     localStorage.setItem('hawknine_client_token', data.token);
                     localStorage.setItem('hawknine_client_user', JSON.stringify(data.user));
+                    hideAuthMessages();
                     closeAuthModal();
                     checkClientLoginState();
                     openDashboardModal();
                 } else {
-                    alert(data.error || 'Registration failed');
+                    showAuthError(data.error || 'Registration failed. Please try again.');
                 }
-            } catch (e) {
-                alert('An error occurred during registration');
+            } catch (err) {
+                console.error('Registration error:', err);
+                showAuthError('Connection error. Please check your internet and try again.');
             } finally {
                 btn.innerText = originalText;
                 btn.disabled = false;

@@ -4,7 +4,7 @@ const AuthSessionSchema = new mongoose.Schema({
     token: { type: String, required: true, unique: true },
     username: { type: String, required: true },
     email: { type: String },
-    type: { type: String, enum: ['admin', 'portal'], required: true },
+    type: { type: String, enum: ['admin', 'portal', 'client'], required: true },
     name: { type: String },
     role: { type: String },
     expiresAt: { type: Date, required: true },
