@@ -1648,21 +1648,14 @@ try {
     $jobIdStr = "{0:D5}" -f [int]${jobId}
     $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
     foreach ($spl in $splFiles) {
-        $fs = $null; $br = $null
-        try {
-            $fs = [System.IO.File]::Open($spl.FullName, 'Open', 'Read', 'ReadWrite')
-            $br = New-Object System.IO.BinaryReader($fs)
+            $bytes = [System.IO.File]::ReadAllBytes($spl.FullName)
             $emfPageCount = 0
-            while ($fs.Position -lt ($fs.Length - 8)) {
-                $recType = $br.ReadInt32()
-                $recSize = $br.ReadInt32()
-                if ($recType -eq 1) { $emfPageCount++ }
-                if ($recSize -le 0 -or $recSize -gt ($fs.Length - $fs.Position)) { break }
-                $fs.Position += $recSize
-                $align = $fs.Position % 4
-                if ($align -ne 0) { $fs.Position += (4 - $align) }
+            for ($i = 0; $i -lt ($bytes.Length - 3); $i++) {
+                # Look for the " EMF" (0x20 0x45 0x4D 0x46) signature indicating a page header
+                if ($bytes[$i] -eq 0x20 -and $bytes[$i+1] -eq 0x45 -and $bytes[$i+2] -eq 0x4D -and $bytes[$i+3] -eq 0x46) {
+                    $emfPageCount++
+                }
             }
-            $br.Close(); $fs.Close()
             if ($emfPageCount -gt $bestPages) { $bestPages = $emfPageCount }
             
             # Also extract copies from PrintTicket XML embedded in SPL file (used by Word)
@@ -1671,7 +1664,7 @@ try {
             $bytesRead = $fs3.Read($buffer, 0, $buffer.Length)
             $fs3.Close()
             $splText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
-            if ($splText -match '(?i)JobCopiesAllDocuments.*?Value\>(\d+)\<') {
+            if ($splText -match '(?is)JobCopiesAllDocuments.*?Value[^>]*>(\d+)<') {
                 $parsedCopies = [int]$matches[1]
                 if ($parsedCopies -gt $bestCopies) { $bestCopies = $parsedCopies }
             }
@@ -2404,8 +2397,8 @@ try {
                             
                             $splText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
                             
-                            # Word uses "JobCopiesAllDocuments" in PrintTicket
-                            if ($splText -match '(?i)JobCopiesAllDocuments.*?Value\>(\d+)\<') {
+                            # Word uses "JobCopiesAllDocuments" in PrintTicket (spans newlines)
+                            if ($splText -match '(?is)JobCopiesAllDocuments.*?Value[^>]*>(\d+)<') {
                                 $parsedCopies = [int]$matches[1]
                                 if ($parsedCopies -gt $copies) {
                                     $copies = $parsedCopies
@@ -2482,28 +2475,17 @@ try {
                                     $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
                                     foreach ($spl in $splFiles) {
                                         try {
-                                            $fs = [System.IO.File]::Open($spl.FullName, 'Open', 'Read', 'ReadWrite')
-                                            $br = New-Object System.IO.BinaryReader($fs)
+                                            $bytes = [System.IO.File]::ReadAllBytes($spl.FullName)
                                             $emfPageCount = 0
-                                            while ($fs.Position -lt ($fs.Length - 8)) {
-                                                $recType = $br.ReadInt32()
-                                                $recSize = $br.ReadInt32()
-                                                # EMRI_METAFILE_DATA = type 1 = one page of EMF data
-                                                if ($recType -eq 1) { $emfPageCount++ }
-                                                if ($recSize -le 0 -or $recSize -gt ($fs.Length - $fs.Position)) { break }
-                                                $fs.Position += $recSize
-                                                $align = $fs.Position % 4
-                                                if ($align -ne 0) { $fs.Position += (4 - $align) }
+                                            for ($i = 0; $i -lt ($bytes.Length - 3); $i++) {
+                                                if ($bytes[$i] -eq 0x20 -and $bytes[$i+1] -eq 0x45 -and $bytes[$i+2] -eq 0x4D -and $bytes[$i+3] -eq 0x46) {
+                                                    $emfPageCount++
+                                                }
                                             }
-                                            $br.Close()
-                                            $fs.Close()
                                             if ($emfPageCount -gt $totalPages) {
                                                 $totalPages = $emfPageCount
                                             }
-                                        } catch {
-                                            try { $br.Close() } catch {}
-                                            try { $fs.Close() } catch {}
-                                        }
+                                        } catch {}
                                     }
                                 } catch {}
                             }
