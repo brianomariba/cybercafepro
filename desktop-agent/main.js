@@ -1855,19 +1855,30 @@ async function startDataCollection() {
         startPrintDialogMonitor((data) => {
             // Cache by printer name (lowercase) for matching with Event 307 jobs
             const key = (data.printer || 'unknown').toLowerCase().trim();
+            const existing = printDialogCache.get(key);
+            
+            // Always update with LATEST values while dialog is open
+            // This ensures if user changes copies 4->2, we use 2
             printDialogCache.set(key, {
                 copies: data.copies,
                 document: data.document || '',
                 color: data.color || '',
                 pages: data.pages || '',
                 paperSize: data.paperSize || '',
+                mediaType: data.mediaType || '',
                 orientation: data.orientation || '',
                 duplex: data.duplex || '',
                 totalSheets: data.totalSheets || 0,
+                finalized: data.finalized || false,
                 timestamp: Date.now(),
                 source: data.source
             });
-            console.log(`[PRINT-DIALOG] Cached: copies=${data.copies} color="${data.color}" paper="${data.paperSize}" printer="${data.printer}" [${data.source}]`);
+
+            // Only log state changes to reduce noise
+            if (data.finalized) {
+                console.log(`[PRINT-DIALOG] FINALIZED: copies=${data.copies} color="${data.color}" media="${data.mediaType}" paper="${data.paperSize}" printer="${data.printer}" [${data.source}]`);
+                console.log('[PRINT-DIALOG] NOTE: Waiting for Event 307 to confirm actual printing before using this data');
+            }
         });
     } catch (e) {
         console.error('[PRINT-DIALOG] Monitor failed to start:', e.message);
@@ -2019,15 +2030,17 @@ async function startDataCollection() {
         // CRITICAL: Check the print dialog UI cache for the real settings.
         // EPSON drivers report dmCopies=1 even when user set 4 copies in Word.
         // Chrome's dialog also provides color, pages, paper size, and total sheets.
+        // SAFETY: Only use data from FINALIZED dialogs (dialog closed = user clicked Print/Cancel).
+        // Data is NEVER uploaded from the monitor itself - only when Event 307 confirms a print.
         const printerKey = (job.printer || '').toLowerCase().trim();
         const dialogData = printDialogCache.get(printerKey);
         let dialogColorOverride = '';
-        if (dialogData) {
+        if (dialogData && dialogData.finalized) {
             const age = Date.now() - dialogData.timestamp;
-            // Use dialog-captured data if captured within last 2 minutes
+            // Use dialog-captured data if finalized within last 2 minutes
             if (age < 120000) {
                 if (dialogData.copies > copies) {
-                    console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (captured ' + Math.round(age/1000) + 's ago)');
+                    console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (finalized ' + Math.round(age/1000) + 's ago)');
                     copies = dialogData.copies;
                     dataSource += '+ui_dialog';
                 }
@@ -2041,9 +2054,16 @@ async function startDataCollection() {
                 if (dialogData.color) {
                     dialogColorOverride = dialogData.color;
                 }
-                // Clear the cache entry after use to prevent re-use
+                // Clear the cache entry after use to prevent re-use on next job
+                printDialogCache.delete(printerKey);
+            } else {
+                // Stale finalized data - expired, discard it
                 printDialogCache.delete(printerKey);
             }
+        } else if (dialogData && !dialogData.finalized) {
+            // Dialog is still open or data not finalized - don't use yet
+            // The user might still be changing settings
+            console.log('[PRINT] Dialog data exists but not yet finalized (dialog may still be open) - skipping');
         }
 
         // Aggressive re-query for suspicious page counts
@@ -2094,21 +2114,51 @@ async function startDataCollection() {
 
         // Media type normalization
         let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
+        
+        // Override with UI-captured media type (from Windows system dialog "Paper type" dropdown)
+        if (dialogData && dialogData.finalized && dialogData.mediaType) {
+            console.log('[PRINT] UI Dialog media type override: "' + mediaType + '" -> "' + dialogData.mediaType + '"');
+            mediaType = dialogData.mediaType;
+            dataSource += '+ui_media';
+        }
+        
         if (mediaType && typeof mediaType === 'string') {
-            const mt = mediaType.toLowerCase();
+            const mt = mediaType.toLowerCase().replace(/\s+/g, ' ').trim();
             const mediaMap = {
-                'plain': 'Plain Paper', 'stationery': 'Plain Paper',
-                'autoselect': 'Plain Paper', 'default': 'Plain Paper', '0': 'Plain Paper', '': 'Plain Paper',
+                // Standard types
+                'plain': 'Plain Paper', 'plain paper': 'Plain Paper',
+                'stationery': 'Plain Paper',
+                'autoselect': 'Plain Paper', 'default': 'Plain Paper', 
+                '0': 'Plain Paper', '': 'Plain Paper',
+                // Standard photo types (PrintTicket values)
                 'photographicglossy': 'Glossy Photo', 'photographic': 'Photo Paper',
                 'photographicmatte': 'Matte Photo', 'photographichighgloss': 'High Gloss Photo',
                 'photographicsatin': 'Satin Photo', 'photographicsemigloss': 'Semi-Gloss Photo',
+                // EPSON-specific types (from printer driver dropdown)
+                'epson photo quality ink jet': 'Epson Photo Quality Ink Jet',
+                'epson matte': 'Epson Matte',
+                'epson ultra glossy': 'Epson Ultra Glossy',
+                'epson premium glossy': 'Epson Premium Glossy',
+                'epson premium semigloss': 'Epson Premium Semigloss',
+                'photo paper glossy': 'Photo Paper Glossy',
+                'epson bright white ink jet paper': 'Epson Bright White',
+                'epson photo paper glossy': 'Epson Photo Glossy',
+                'epson matte paper - heavyweight': 'Epson Matte Heavyweight',
+                'epson premium photo paper glossy': 'Epson Premium Glossy',
+                'epson premium photo paper semi-gloss': 'Epson Premium Semigloss',
+                'epson ultra premium photo paper glossy': 'Epson Ultra Glossy',
+                'epson premium presentation paper matte': 'Epson Premium Matte',
+                'epson photo quality ink jet paper': 'Epson Photo Quality Ink Jet',
+                // Other common types
                 'transparency': 'Transparency', 'tshirttransfer': 'T-Shirt Transfer',
                 'envelope': 'Envelope', 'cardstock': 'Cardstock',
                 'labels': 'Labels', 'backlitfilm': 'Film',
                 'bond': 'Bond', 'recycled': 'Recycled',
                 'heavyweight': 'Heavyweight', 'lightweight': 'Lightweight',
+                'colored paper': 'Colored Paper', 'cotton': 'Cotton Paper',
+                'vellum': 'Vellum',
             };
-            mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mediaType);
+            mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy Photo' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mt.includes('satin') ? 'Satin Photo' : mt.includes('premium') ? 'Premium Paper' : mediaType);
         }
 
         // Color mode

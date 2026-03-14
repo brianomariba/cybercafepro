@@ -2801,18 +2801,20 @@ try {
 }
 
 /**
- * CRITICAL FIX: Print Dialog UI Monitor (Enhanced)
+ * CRITICAL FIX: Print Dialog UI Monitor (Enhanced v2)
  * 
  * EPSON L3250 (and similar) drivers completely hide the copies count from ALL
- * Windows APIs (DEVMODE, Event Log, WMI, PrintTicket). The driver absorbs copies
- * internally and reports dmCopies=1 to the spooler.
+ * Windows APIs (DEVMODE, Event Log, WMI, PrintTicket).
  * 
- * The ONLY reliable source is reading settings directly from the print dialog UI
- * using Windows UI Automation. Supports:
- * - Microsoft Office backstage (Word, Excel, PowerPoint)
- * - Chrome/Edge built-in print dialog (Ctrl+P)
- * - Standard Windows print dialog (#32770)
- * - Adobe Reader/Acrobat print dialog
+ * This monitor reads settings directly from print dialog UIs using Windows
+ * UI Automation. Supports: Office backstage, Chrome/Edge, Adobe, Win32 dialogs.
+ * 
+ * IMPORTANT: Data flow ensures accuracy:
+ * 1. While dialog is OPEN: cache is continuously updated with LATEST values
+ *    (so changing copies 4->2 uses 2, not 4)
+ * 2. When dialog CLOSES: final values are marked as "finalized"
+ * 3. Data is NEVER uploaded from here - only when Event 307 confirms a real print
+ * 4. If user cancels: no Event 307 fires, cache expires in 2 minutes
  * 
  * Captures: copies, printer, color/BW, pages, paper size, orientation, total sheets
  */
@@ -2845,6 +2847,8 @@ public class DlgReader {
 
 \$root = [System.Windows.Automation.AutomationElement]::RootElement
 \$lastJson = ""
+\$dialogWasOpen = \$false
+\$lastResult = \$null
 
 function Find-UIValue(\$parent, \$name) {
     try {
@@ -2853,22 +2857,11 @@ function Find-UIValue(\$parent, \$name) {
         \$els = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$cond)
         foreach (\$el in \$els) {
             \$ct = \$el.Current.ControlType.ProgrammaticName
-            # Skip label-only Text elements, prefer editable controls
             if (\$ct -eq 'ControlType.Text') { continue }
             try {
                 \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
                 return \$vp.Current.Value
             } catch {}
-            try {
-                \$sp = \$el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                return "Selected:" + \$sp.Current.IsSelected
-            } catch {}
-        }
-        # Fallback: try Text elements
-        foreach (\$el in \$els) {
-            if (\$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Text') {
-                return \$el.Current.Name
-            }
         }
     } catch {}
     return \$null
@@ -2901,7 +2894,6 @@ while (\$true) {
             \$appWin = \$root.FindFirst([System.Windows.Automation.TreeScope]::Children, \$pidCond)
             if (-not \$appWin) { continue }
 
-            # Check for Copies edit control (indicates backstage is open)
             \$nameCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::NameProperty, "Copies:")
             \$typeCond = New-Object System.Windows.Automation.PropertyCondition(
@@ -2916,7 +2908,6 @@ while (\$true) {
                     [System.Windows.Automation.ValuePattern]::Pattern)
                 \$copies = [int]\$valP.Current.Value
 
-                # Printer
                 \$printer = ""
                 try {
                     \$pc = New-Object System.Windows.Automation.PropertyCondition(
@@ -2930,7 +2921,6 @@ while (\$true) {
                     }
                 } catch {}
 
-                # Two-Sided Printing
                 \$duplex = ""
                 try {
                     \$dc = New-Object System.Windows.Automation.PropertyCondition(
@@ -2945,17 +2935,10 @@ while (\$true) {
                 } catch {}
 
                 \$result = @{
-                    c = \$copies
-                    p = \$printer
-                    d = \$appWin.Current.Name
-                    s = "office"
-                    color = ""
-                    pages = ""
-                    paper = ""
-                    orient = ""
-                    duplex = \$duplex
-                    sheets = 0
-                    t = (Get-Date -Format o)
+                    c = \$copies; p = \$printer; d = \$appWin.Current.Name
+                    s = "office"; color = ""; pages = ""; paper = ""
+                    media = ""; orient = ""; duplex = \$duplex; sheets = 0
+                    final = 0; t = (Get-Date -Format o)
                 }
             }
         } catch {}
@@ -2972,7 +2955,6 @@ while (\$true) {
                 foreach (\$win in \$wins) {
                     if (-not \$win.Current.Name -or \$win.Current.Name.Length -lt 2) { continue }
 
-                    # Quick check: look for the Copies spinner (Chrome-specific)
                     \$copiesCond = New-Object System.Windows.Automation.PropertyCondition(
                         [System.Windows.Automation.AutomationElement]::NameProperty, "Copies")
                     \$spinnerCond = New-Object System.Windows.Automation.PropertyCondition(
@@ -2990,19 +2972,15 @@ while (\$true) {
                             \$copies = [int]\$vp.Current.Value
                         } catch {}
 
-                        # Destination (printer)
                         \$printer = Find-UIValue \$win "Destination"
-                        # Color
                         \$color = Find-UIValue \$win "Color"
-                        # Pages
                         \$pages = Find-UIValue \$win "Pages"
-                        # Layout
                         \$layout = Find-UIValue \$win "Layout"
-                        # Paper size (under More settings)
                         \$paper = Find-UIValue \$win "Paper size"
-                        # Scale
-                        \$scale = Find-UIValue \$win "Scale"
-                        # Total sheets text
+                        # Media/paper type (e.g. Epson Ultra Glossy, Plain paper)
+                        \$media = Find-UIValue \$win "Media type"
+                        if (-not \$media) { \$media = Find-UIValue \$win "Paper type" }
+                        if (-not \$media) { \$media = Find-UIValue \$win "Media" }
                         \$sheetsText = Find-UIText \$win 'sheet.*paper'
                         \$sheets = 0
                         if (\$sheetsText -match '(\d+)\s+sheet') { \$sheets = [int]\$Matches[1] }
@@ -3015,10 +2993,10 @@ while (\$true) {
                             color = if (\$color) { \$color } else { "" }
                             pages = if (\$pages) { \$pages } else { "" }
                             paper = if (\$paper) { \$paper } else { "" }
+                            media = if (\$media) { \$media } else { "" }
                             orient = if (\$layout) { \$layout } else { "" }
-                            duplex = ""
-                            sheets = \$sheets
-                            t = (Get-Date -Format o)
+                            duplex = ""; sheets = \$sheets
+                            final = 0; t = (Get-Date -Format o)
                         }
                         break
                     }
@@ -3044,19 +3022,19 @@ while (\$true) {
                             \$color = Find-UIValue \$win "Color"
                             \$paper = Find-UIValue \$win "Paper Size"
                             \$pages = Find-UIValue \$win "Pages"
+                            \$media = Find-UIValue \$win "Media type"
+                            if (-not \$media) { \$media = Find-UIValue \$win "Paper type" }
 
                             \$result = @{
                                 c = [int]\$copies
                                 p = if (\$printer) { \$printer } else { "" }
                                 d = \$win.Current.Name
-                                s = "adobe"
-                                color = if (\$color) { \$color } else { "" }
+                                s = "adobe"; color = if (\$color) { \$color } else { "" }
                                 pages = if (\$pages) { \$pages } else { "" }
                                 paper = if (\$paper) { \$paper } else { "" }
-                                orient = ""
-                                duplex = ""
-                                sheets = 0
-                                t = (Get-Date -Format o)
+                                media = if (\$media) { \$media } else { "" }
+                                orient = ""; duplex = ""; sheets = 0
+                                final = 0; t = (Get-Date -Format o)
                             }
                         }
                     }
@@ -3080,17 +3058,10 @@ while (\$true) {
                         [DlgReader]::GetWindowText(\$dlg, \$titleSb, 256) | Out-Null
 
                         \$result = @{
-                            c = \$copies
-                            p = ""
-                            d = \$titleSb.ToString()
-                            s = "win32_dialog"
-                            color = ""
-                            pages = ""
-                            paper = ""
-                            orient = ""
-                            duplex = ""
-                            sheets = 0
-                            t = (Get-Date -Format o)
+                            c = \$copies; p = ""; d = \$titleSb.ToString()
+                            s = "win32_dialog"; color = ""; pages = ""
+                            paper = ""; media = ""; orient = ""; duplex = ""; sheets = 0
+                            final = 0; t = (Get-Date -Format o)
                         }
                     }
                 }
@@ -3098,12 +3069,34 @@ while (\$true) {
         } catch {}
     }
 
+    # === DIALOG STATE TRACKING ===
+    # Track open/close transitions to detect when user clicks Print or Cancel
     if (\$result) {
+        # Dialog IS open - continuously update with latest values
+        \$dialogWasOpen = \$true
+        \$lastResult = \$result
+
+        # Output update (only if values changed to reduce noise)
         \$json = \$result | ConvertTo-Json -Compress
         if (\$json -ne \$lastJson) {
             Write-Output \$json
             [Console]::Out.Flush()
             \$lastJson = \$json
+        }
+    } else {
+        # Dialog is NOT open (or not found)
+        if (\$dialogWasOpen -and \$lastResult) {
+            # Dialog JUST CLOSED - user clicked Print or Cancel
+            # Output final values with final=1 flag
+            \$lastResult.final = 1
+            \$lastResult.t = (Get-Date -Format o)
+            \$finalJson = \$lastResult | ConvertTo-Json -Compress
+            Write-Output \$finalJson
+            [Console]::Out.Flush()
+
+            \$dialogWasOpen = \$false
+            \$lastResult = \$null
+            \$lastJson = ""
         }
     }
 }
@@ -3127,6 +3120,7 @@ while (\$true) {
                 try {
                     const parsed = JSON.parse(trimmed);
                     if (parsed.c && parsed.c > 0) {
+                        const isFinal = parsed.final === 1;
                         const result = {
                             copies: parsed.c,
                             printer: parsed.p || '',
@@ -3135,28 +3129,32 @@ while (\$true) {
                             color: parsed.color || '',
                             pages: parsed.pages || '',
                             paperSize: parsed.paper || '',
+                            mediaType: parsed.media || '',
                             orientation: parsed.orient || '',
                             duplex: parsed.duplex || '',
                             totalSheets: parsed.sheets || 0,
+                            finalized: isFinal,
                             timestamp: parsed.t || new Date().toISOString()
                         };
-                        console.log('[PRINT-DIALOG] Captured: copies=' + result.copies
-                            + ' printer="' + result.printer + '"'
-                            + ' color="' + result.color + '"'
-                            + ' pages="' + result.pages + '"'
-                            + ' paper="' + result.paperSize + '"'
-                            + ' [' + result.source + ']');
+                        if (isFinal) {
+                            console.log('[PRINT-DIALOG] FINALIZED (dialog closed): copies=' + result.copies
+                                + ' printer="' + result.printer + '"'
+                                + ' color="' + result.color + '"'
+                                + ' paper="' + result.paperSize + '"'
+                                + ' [' + result.source + ']');
+                        } else {
+                            console.log('[PRINT-DIALOG] Watching: copies=' + result.copies
+                                + ' printer="' + result.printer + '"'
+                                + ' color="' + result.color + '"'
+                                + ' [' + result.source + ']');
+                        }
                         if (onDataCaptured) onDataCaptured(result);
                     }
-                } catch (e) {
-                    // Ignore parse errors
-                }
+                } catch (e) {}
             }
         });
 
-        proc.stderr.on('data', (data) => {
-            // Suppress stderr noise from UI Automation
-        });
+        proc.stderr.on('data', () => {});
 
         proc.on('exit', (code) => {
             if (running) {
@@ -3168,15 +3166,14 @@ while (\$true) {
         });
 
         console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 700ms)');
+        console.log('[PRINT-DIALOG] NOTE: Data is only USED when Event 307 confirms actual printing');
     } catch (e) {
         console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
     }
 
     function stop() {
         running = false;
-        if (proc) {
-            try { proc.kill(); } catch (e) {}
-        }
+        if (proc) { try { proc.kill(); } catch (e) {} }
     }
 
     return { stop, isRunning: () => running };
