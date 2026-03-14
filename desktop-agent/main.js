@@ -1856,7 +1856,7 @@ async function startDataCollection() {
         console.error('[PRINT] Background page count updater failed:', e.message);
     }
 
-    // Cache cleanup â€” remove entries older than 10 minutes + persist to disk
+    // Cache cleanup - remove entries older than 10 minutes + persist to disk
     setInterval(() => {
         const expiry = Date.now() - 600000;
         let removed = 0;
@@ -1872,9 +1872,267 @@ async function startDataCollection() {
         }
     }, 60000);
 
-    // EVENT LOG 307 â€” completion signal only
+    // EVENT LOG 307 - completion signal only
     // When a job completes, look up its data from the real-time cache and send to server.
+    //
+    // CRITICAL FIX: EPSON + Word copies grouping
+    // When Microsoft Word prints N copies on an EPSON printer, it submits N SEPARATE
+    // spooler jobs, each reporting Pages=1, Copies=1. Neither Event 307, Event 805,
+    // WMI, nor DEVMODE contain the real copy count. The ONLY way to detect this is
+    // to GROUP near-simultaneous identical jobs (same printer, same document, same size)
+    // into a single logical print job with copies = group count.
     let printPollRunning = false;
+    // Buffer to hold jobs briefly for grouping before sending
+    let pendingJobBuffer = [];  // { job, cached, receivedAt }
+    let lastJobBufferAddTime = 0;
+    const JOB_GROUP_WINDOW_MS = 90000;  // 90s - group identical jobs within this window
+    const JOB_GROUP_FLUSH_DELAY_MS = 10000; // Wait 10s after last job before flushing group
+
+    /**
+     * Group buffered jobs by (printer + document + size) within JOB_GROUP_WINDOW_MS.
+     * Returns array of grouped logical jobs, each with a groupedCopies count.
+     */
+    function flushJobGroups() {
+        if (pendingJobBuffer.length === 0) return [];
+
+        // Sort by timestamp
+        pendingJobBuffer.sort((a, b) => new Date(a.job.timestamp) - new Date(b.job.timestamp));
+
+        const groups = [];
+        const used = new Set();
+
+        for (let i = 0; i < pendingJobBuffer.length; i++) {
+            if (used.has(i)) continue;
+
+            const entry = pendingJobBuffer[i];
+            const group = [entry];
+            used.add(i);
+
+            const entryTime = new Date(entry.job.timestamp).getTime();
+            const entrySize = entry.job.sizeBytes || entry.cached?.sizeBytes || 0;
+            const entryDoc = (entry.job.document || entry.cached?.document || '').toLowerCase().trim();
+            const entryPrinter = (entry.job.printer || '').toLowerCase().trim();
+            const entryPages = Math.max(
+                (entry.cached && entry.cached.totalPages > 0) ? entry.cached.totalPages : 1,
+                (entry.job.totalPages > 0) ? entry.job.totalPages : 1
+            );
+
+            for (let j = i + 1; j < pendingJobBuffer.length; j++) {
+                if (used.has(j)) continue;
+
+                const other = pendingJobBuffer[j];
+                const otherTime = new Date(other.job.timestamp).getTime();
+                const otherSize = other.job.sizeBytes || other.cached?.sizeBytes || 0;
+                const otherDoc = (other.job.document || other.cached?.document || '').toLowerCase().trim();
+                const otherPrinter = (other.job.printer || '').toLowerCase().trim();
+                const otherPages = Math.max(
+                    (other.cached && other.cached.totalPages > 0) ? other.cached.totalPages : 1,
+                    (other.job.totalPages > 0) ? other.job.totalPages : 1
+                );
+
+                const timeDiff = Math.abs(otherTime - entryTime);
+                const sizeDiff = entrySize > 0 && otherSize > 0
+                    ? Math.abs(entrySize - otherSize) / Math.max(entrySize, otherSize)
+                    : 0;
+
+                // Match: same printer, same page count, same/similar doc name, similar size, within window
+                if (timeDiff <= JOB_GROUP_WINDOW_MS &&
+                    entryPrinter === otherPrinter &&
+                    entryPages === otherPages &&
+                    (entryDoc === otherDoc || sizeDiff < 0.05) &&
+                    sizeDiff <= 0.20) {
+                    group.push(other);
+                    used.add(j);
+                }
+            }
+
+            groups.push(group);
+        }
+
+        // Clear the buffer
+        pendingJobBuffer = [];
+
+        return groups.map(group => {
+            const primary = group[0];
+            const detectedCopies = group.length;
+            const allJobIds = group.map(g => g.job.jobId).filter(Boolean);
+
+            return {
+                job: primary.job,
+                cached: primary.cached,
+                groupedCopies: detectedCopies,
+                groupedJobIds: allJobIds,
+                isGrouped: detectedCopies > 1
+            };
+        });
+    }
+
+    /**
+     * Process a single grouped job - normalize, compute billing, send to server.
+     */
+    async function processGroupedJob(grouped) {
+        const { job, cached, groupedCopies, groupedJobIds, isGrouped } = grouped;
+
+        let totalPages = Math.max(
+            (cached && cached.totalPages > 0) ? cached.totalPages : 1,
+            (job.totalPages > 0) ? job.totalPages : 1
+        );
+        // Use the GREATER of: driver-reported copies OR grouped copies (EPSON fix)
+        let copies = Math.max(
+            (cached && cached.copies > 1) ? cached.copies : 1,
+            (job.copies > 1) ? job.copies : 1,
+            groupedCopies || 1
+        );
+        let dataSource = cached ? 'realtime_watcher' : 'event_log_only';
+        if (isGrouped) dataSource += '+grouped_' + groupedCopies;
+
+        // Aggressive re-query for suspicious page counts
+        if (totalPages <= 1) {
+            console.log('[PRINT] Warning Suspicious page count (' + totalPages + ') - running aggressive query...');
+
+            try {
+                const aggressive = await queryJobPageCountAggressive(job.printer, job.id);
+                if (aggressive && aggressive.totalPages > totalPages) {
+                    totalPages = aggressive.totalPages;
+                    if (aggressive.copies > copies) copies = aggressive.copies;
+                    dataSource = 'aggressive_requery';
+                    console.log('[PRINT] OK Aggressive WMI query found: ' + totalPages + ' pages');
+                }
+            } catch (e) {
+                console.error('[PRINT] Aggressive query failed:', e.message);
+            }
+
+            try {
+                const docName = (cached && cached.document) ? cached.document : (job.document || '');
+                const rendered = await getRenderedPageCount(job.printer, job.id, docName);
+                if (rendered) {
+                    if (rendered.totalPages > totalPages) {
+                        totalPages = rendered.totalPages;
+                        dataSource = 'event_log_rendered';
+                        console.log('[PRINT] OK Event Log rendered page count: ' + totalPages + ' pages');
+                    }
+                    if (rendered.copies && rendered.copies > copies) {
+                        copies = rendered.copies;
+                        console.log('[PRINT] OK Event 805 copies count: ' + copies + ' copies');
+                    }
+                }
+            } catch (e) {
+                console.error('[PRINT] Rendered page count query failed:', e.message);
+            }
+        }
+
+        const paperSize = (cached && cached.paperSize) ? cached.paperSize : (job.paperSize || '');
+        const duplexMode = (cached && cached.duplexMode) ? cached.duplexMode : (job.duplexMode || '');
+        const colorMode = (cached && cached.colorMode) ? cached.colorMode : '';
+
+        // Document name
+        const genericDocNames = ['print document', 'untitled', 'unknown', 'document', 'local print'];
+        let documentName = job.document || 'Document';
+        if (cached && cached.document && !genericDocNames.includes(cached.document.toLowerCase().trim())) {
+            documentName = cached.document;
+        }
+
+        // Media type normalization
+        let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
+        if (mediaType && typeof mediaType === 'string') {
+            const mt = mediaType.toLowerCase();
+            const mediaMap = {
+                'plain': 'Plain Paper', 'stationery': 'Plain Paper',
+                'autoselect': 'Plain Paper', 'default': 'Plain Paper', '0': 'Plain Paper', '': 'Plain Paper',
+                'photographicglossy': 'Glossy Photo', 'photographic': 'Photo Paper',
+                'photographicmatte': 'Matte Photo', 'photographichighgloss': 'High Gloss Photo',
+                'photographicsatin': 'Satin Photo', 'photographicsemigloss': 'Semi-Gloss Photo',
+                'transparency': 'Transparency', 'tshirttransfer': 'T-Shirt Transfer',
+                'envelope': 'Envelope', 'cardstock': 'Cardstock',
+                'labels': 'Labels', 'backlitfilm': 'Film',
+                'bond': 'Bond', 'recycled': 'Recycled',
+                'heavyweight': 'Heavyweight', 'lightweight': 'Lightweight',
+            };
+            mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mediaType);
+        }
+
+        // Color mode
+        let printType = job.printType || 'bw';
+        if (colorMode) {
+            const cm = colorMode.toLowerCase();
+            if (cm === 'color') printType = 'color';
+            else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
+        }
+
+        // Paper size normalization
+        let normalizedPaperSize = paperSize;
+        if (normalizedPaperSize) {
+            const sizeMap = {
+                'isoa4': 'A4', 'isoa3': 'A3', 'isoa5': 'A5',
+                'northamericaletter': 'Letter', 'northamericalegal': 'Legal',
+                'northamericatabloid': 'Tabloid', 'northamericaexecutive': 'Executive',
+                'isob5': 'B5', 'isob4': 'B4', 'japanpostcard': 'Postcard',
+                'isodlenvelopeinvited': 'DL Envelope',
+            };
+            normalizedPaperSize = sizeMap[normalizedPaperSize.toLowerCase()] || normalizedPaperSize;
+        }
+
+        // Duplex normalization
+        let normalizedDuplex = duplexMode;
+        if (normalizedDuplex) {
+            const duplexMap = {
+                'onesided': 'Single-sided', 'twosidedlongedge': 'Duplex (Long Edge)',
+                'twosidedshortedge': 'Duplex (Short Edge)',
+            };
+            normalizedDuplex = duplexMap[normalizedDuplex.toLowerCase()] || normalizedDuplex;
+        }
+
+        const totalSheets = computeTotalSheets(totalPages, copies, normalizedDuplex);
+
+        if (isGrouped) {
+            console.log('[PRINT] GROUPED ' + groupedCopies + ' jobs -> "' + documentName + '" - ' + totalPages + 'pg x ' + copies + 'cp = ' + totalSheets + ' sheets | ' + printType + ' | ' + job.printer + ' [' + dataSource + ']');
+        } else {
+            console.log('[PRINT] "' + documentName + '" - ' + totalPages + 'pg x ' + copies + 'cp = ' + totalSheets + ' sheets | ' + printType + ' | ' + mediaType + ' | ' + (paperSize || 'default') + ' | ' + job.printer + ' [' + dataSource + ']');
+        }
+
+        const printPayload = {
+            type: 'print',
+            clientId: CLIENT_ID,
+            hostname: os.hostname(),
+            sessionId: currentSession?.id || null,
+            sessionUser: currentSession?.user || null,
+            data: {
+                id: job.id,
+                jobId: job.jobId,
+                printer: job.printer,
+                printerDriver: job.printerDriver,
+                document: documentName,
+                totalPages: totalPages,
+                pagesPrinted: totalPages,
+                copies: copies,
+                totalSheets: totalSheets,
+                printType: printType,
+                paperSize: normalizedPaperSize,
+                mediaType: mediaType,
+                isColorPrint: printType === 'color',
+                duplexMode: normalizedDuplex,
+                printQuality: job.printQuality || 'Normal',
+                sizeKB: job.sizeKB,
+                status: 'Printed',
+                timestamp: job.timestamp,
+                source: dataSource,
+                groupedJobIds: isGrouped ? groupedJobIds : undefined
+            }
+        };
+        sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
+
+        // Log to local offline store
+        offlineStore.addPrintJob(printPayload.data);
+
+        // Add to session for billing
+        const finalJob = { ...job, totalPages, copies, totalSheets, printType, mediaType, paperSize: normalizedPaperSize, duplexMode: normalizedDuplex };
+        if (currentSession) {
+            const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
+            if (!exists) currentSession.printJobs.push(finalJob);
+        }
+    }
+
+    // Main print poll interval - collects completed jobs, buffers them, groups, sends
     setInterval(async () => {
         if (isLocked || !currentSession) return;
         if (printPollRunning) return;
@@ -1883,175 +2141,27 @@ async function startDataCollection() {
         try {
             const completedJobs = await getRecentCompletedJobs(60);
 
+            // Add new completed jobs to the buffer
             for (const job of completedJobs) {
                 if (!job.jobId) continue;
                 if (sentPrintJobIds.has(job.jobId)) continue;
 
                 sentPrintJobIds.add(job.jobId);
 
-                // Look up real-time captured data from watcher cache
                 const cached = spoolerPageCache.get(job.jobId);
+                pendingJobBuffer.push({ job, cached, receivedAt: Date.now() });
+                lastJobBufferAddTime = Date.now();
+            }
 
-                // Use cached data if available (accurate per-job DEVMODE),
-                // otherwise fall back to Event Log 307 data as-is
-                let totalPages = Math.max((cached && cached.totalPages > 0) ? cached.totalPages : 1, (job.totalPages > 0) ? job.totalPages : 1);
-                let copies = Math.max((cached && cached.copies > 1) ? cached.copies : 1, (job.copies > 1) ? job.copies : 1);
-                let dataSource = cached ? 'realtime_watcher' : 'event_log_only';
+            // Flush the buffer if enough time has passed since the last job was added.
+            // This delay allows all copies (separate spooler jobs) to arrive before grouping.
+            const timeSinceLastAdd = Date.now() - lastJobBufferAddTime;
+            if (pendingJobBuffer.length > 0 && (timeSinceLastAdd >= JOB_GROUP_FLUSH_DELAY_MS || lastJobBufferAddTime === 0)) {
+                const groupedJobs = flushJobGroups();
+                console.log('[PRINT] Flushing buffer: ' + groupedJobs.length + ' logical job(s) from ' + groupedJobs.reduce((s, g) => s + (g.groupedCopies || 1), 0) + ' spooler job(s)');
 
-                // CRITICAL: If page count is <= 1, do an AGGRESSIVE re-query. 
-                // Some EPSON drivers report TotalPages=0 during spooling
-                // and Param8=1 in Event 307 regardless of actual page count.
-                const sizeBytes = (cached && cached.sizeBytes > 0) ? cached.sizeBytes : (job.sizeBytes || 0);
-                if (totalPages <= 1) {
-                    console.log(`[PRINT] Warning Suspicious page count (${totalPages}) - running aggressive query...`);
-
-                    // Step 1: Try WMI aggressive re-query (job might still be briefly in spooler)
-                    try {
-                        const aggressive = await queryJobPageCountAggressive(job.printer, job.id);
-                        if (aggressive && aggressive.totalPages > totalPages) {
-                            totalPages = aggressive.totalPages;
-                            if (aggressive.copies > copies) copies = aggressive.copies;
-                            dataSource = 'aggressive_requery';
-                            console.log(`[PRINT] OK Aggressive WMI query found: ${totalPages} pages`);
-                        }
-                    } catch (e) {
-                        console.error('[PRINT] Aggressive query failed:', e.message);
-                    }
-
-                    // ALWAYS run this — Event 805 has the ACCURATE copies count
-                    // which Event 307 doesn't provide. Critical for multi-copy jobs.
-                    try {
-                        const docName = (cached && cached.document) ? cached.document : (job.document || '');
-                        const rendered = await getRenderedPageCount(job.printer, job.id, docName);
-                        if (rendered) {
-                            if (rendered.totalPages > totalPages) {
-                                totalPages = rendered.totalPages;
-                                dataSource = 'event_log_rendered';
-                                console.log(`[PRINT] OK Event Log rendered page count: ${totalPages} pages`);
-                            }
-                            if (rendered.copies && rendered.copies > copies) {
-                                copies = rendered.copies;
-                                console.log(`[PRINT] OK Event 805 copies count: ${copies} copies`);
-                            }
-                        }
-                    } catch (e) {
-                        console.error('[PRINT] Rendered page count query failed:', e.message);
-                    }
-                }
-
-                const paperSize = (cached && cached.paperSize) ? cached.paperSize : (job.paperSize || '');
-                const duplexMode = (cached && cached.duplexMode) ? cached.duplexMode : (job.duplexMode || '');
-                const colorMode = (cached && cached.colorMode) ? cached.colorMode : '';
-
-
-                // Document name: prefer the cached name (resolved from window title)
-                // over the event log name which is often generic "Print Document"
-                const genericDocNames = ['print document', 'untitled', 'unknown', 'document', 'local print'];
-                let documentName = job.document || 'Document';
-                if (cached && cached.document && !genericDocNames.includes(cached.document.toLowerCase().trim())) {
-                    documentName = cached.document;
-                }
-
-
-                // Media type: normalize PrintTicket values to human-readable names
-                // PrintTicket gives us: Plain, Stationery, PhotographicGlossy, PhotographicMatte, etc.
-                let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
-                if (mediaType && typeof mediaType === 'string') {
-                    const mt = mediaType.toLowerCase();
-                    // Map PrintTicket psk: values to friendly names
-                    const mediaMap = {
-                        'plain': 'Plain Paper', 'stationery': 'Plain Paper',
-                        'autoselect': 'Plain Paper', 'default': 'Plain Paper', '0': 'Plain Paper', '': 'Plain Paper',
-                        'photographicglossy': 'Glossy Photo', 'photographic': 'Photo Paper',
-                        'photographicmatte': 'Matte Photo', 'photographichighgloss': 'High Gloss Photo',
-                        'photographicsatin': 'Satin Photo', 'photographicsemigloss': 'Semi-Gloss Photo',
-                        'transparency': 'Transparency', 'tshirttransfer': 'T-Shirt Transfer',
-                        'envelope': 'Envelope', 'cardstock': 'Cardstock',
-                        'labels': 'Labels', 'backlitfilm': 'Film',
-                        'bond': 'Bond', 'recycled': 'Recycled',
-                        'heavyweight': 'Heavyweight', 'lightweight': 'Lightweight',
-                    };
-                    mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mediaType);
-                }
-
-                // Color mode: PrintTicket gives us Color/Monochrome/Grayscale
-                // IMPORTANT: Only trust explicit PrintTicket values, NOT printer config values.
-                // PrintTicket values are: 'Color', 'Monochrome', 'Grayscale'
-                // Printer config values are: 'True'/'False' (capability, NOT per-job)
-                let printType = job.printType || 'bw';
-                if (colorMode) {
-                    const cm = colorMode.toLowerCase();
-                    if (cm === 'color') printType = 'color';
-                    else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
-                    // NOTE: 'true'/'false' are printer config values, not PrintTicket values.
-                    // Do NOT treat 'true' as color â€” it just means the printer CAN do color.
-                }
-
-                // Paper size: normalize PrintTicket values (ISOA4 â†’ A4, NorthAmericaLetter â†’ Letter)
-                let normalizedPaperSize = paperSize;
-                if (normalizedPaperSize) {
-                    const sizeMap = {
-                        'isoa4': 'A4', 'isoa3': 'A3', 'isoa5': 'A5',
-                        'northamericaletter': 'Letter', 'northamericalegal': 'Legal',
-                        'northamericatabloid': 'Tabloid', 'northamericaexecutive': 'Executive',
-                        'isob5': 'B5', 'isob4': 'B4', 'japanpostcard': 'Postcard',
-                        'isodlenvelopeinvited': 'DL Envelope',
-                    };
-                    normalizedPaperSize = sizeMap[normalizedPaperSize.toLowerCase()] || normalizedPaperSize;
-                }
-
-                // Duplex: normalize (OneSided â†’ Single-sided, TwoSidedLongEdge â†’ Duplex Long Edge)
-                let normalizedDuplex = duplexMode;
-                if (normalizedDuplex) {
-                    const duplexMap = {
-                        'onesided': 'Single-sided', 'twosidedlongedge': 'Duplex (Long Edge)',
-                        'twosidedshortedge': 'Duplex (Short Edge)',
-                    };
-                    normalizedDuplex = duplexMap[normalizedDuplex.toLowerCase()] || normalizedDuplex;
-                }
-
-                const totalSheets = computeTotalSheets(totalPages, copies, normalizedDuplex);
-
-                console.log(`[PRINT] "${documentName}" - ${totalPages}pg x ${copies}cp = ${totalSheets} sheets | ${printType} | ${mediaType} | ${paperSize || 'default'} | ${job.printer} [${dataSource}]`);
-
-                const printPayload = {
-                    type: 'print',
-                    clientId: CLIENT_ID,
-                    hostname: os.hostname(),
-                    sessionId: currentSession?.id || null,
-                    sessionUser: currentSession?.user || null,
-                    data: {
-                        id: job.id,
-                        jobId: job.jobId,
-                        printer: job.printer,
-                        printerDriver: job.printerDriver,
-                        document: documentName,
-                        totalPages: totalPages,
-                        pagesPrinted: totalPages,
-                        copies: copies,
-                        totalSheets: totalSheets,
-                        printType: printType,
-                        paperSize: normalizedPaperSize,
-                        mediaType: mediaType,
-                        isColorPrint: printType === 'color',
-                        duplexMode: normalizedDuplex,
-                        printQuality: job.printQuality || 'Normal',
-                        sizeKB: job.sizeKB,
-                        status: 'Printed',
-                        timestamp: job.timestamp,
-                        source: dataSource
-                    }
-                };
-                sendToServer(LOG_API_URL, printPayload).catch(e => console.error('Print Log Failed:', e.message));
-
-                // Log to local offline store â€” durable audit trail for billing recovery
-                offlineStore.addPrintJob(printPayload.data);
-
-                // Add to session for billing
-                const finalJob = { ...job, totalPages, copies, totalSheets, printType, mediaType, paperSize: normalizedPaperSize, duplexMode: normalizedDuplex };
-                if (currentSession) {
-                    const exists = currentSession.printJobs.find(j => j.id === job.id || j.jobId === job.jobId);
-                    if (!exists) currentSession.printJobs.push(finalJob);
+                for (const grouped of groupedJobs) {
+                    await processGroupedJob(grouped);
                 }
             }
 
@@ -2061,7 +2171,7 @@ async function startDataCollection() {
                 sentPrintJobIds = new Set(entries.slice(-250));
             }
         } catch (e) {
-            // Silently fail â€” event log might not be enabled yet
+            // Silently fail - event log might not be enabled yet
         }
         printPollRunning = false;
     }, 5000);
