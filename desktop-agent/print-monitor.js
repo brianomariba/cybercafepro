@@ -1649,11 +1649,18 @@ try {
     $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
     foreach ($spl in $splFiles) {
             $bytes = [System.IO.File]::ReadAllBytes($spl.FullName)
+            $str = [System.Text.Encoding]::ASCII.GetString($bytes)
             $emfPageCount = 0
-            for ($i = 0; $i -lt ($bytes.Length - 3); $i++) {
-                # Look for the " EMF" (0x20 0x45 0x4D 0x46) signature indicating a page header
-                if ($bytes[$i] -eq 0x20 -and $bytes[$i+1] -eq 0x45 -and $bytes[$i+2] -eq 0x4D -and $bytes[$i+3] -eq 0x46) {
-                    $emfPageCount++
+            # A genuine EMF page boundary always has an EMR_HEADER.
+            # EMR_HEADER structure: 
+            # Offset 0: Type = 1 (0x01 00 00 00)
+            # Offset 40: Signature = " EMF" (0x20 0x45 0x4D 0x46)
+            for ($i = 0; $i -lt ($bytes.Length - 44); $i++) {
+                if ($bytes[$i] -eq 1 -and $bytes[$i+1] -eq 0 -and $bytes[$i+2] -eq 0 -and $bytes[$i+3] -eq 0) {
+                    if ($bytes[$i+40] -eq 0x20 -and $bytes[$i+41] -eq 0x45 -and $bytes[$i+42] -eq 0x4D -and $bytes[$i+43] -eq 0x46) {
+                        $emfPageCount++
+                        $i += 80 # Skip past the header to avoid rescanning
+                    }
                 }
             }
             if ($emfPageCount -gt $bestPages) { $bestPages = $emfPageCount }
@@ -2476,10 +2483,14 @@ try {
                                     foreach ($spl in $splFiles) {
                                         try {
                                             $bytes = [System.IO.File]::ReadAllBytes($spl.FullName)
+                                            $str = [System.Text.Encoding]::ASCII.GetString($bytes)
                                             $emfPageCount = 0
-                                            for ($i = 0; $i -lt ($bytes.Length - 3); $i++) {
-                                                if ($bytes[$i] -eq 0x20 -and $bytes[$i+1] -eq 0x45 -and $bytes[$i+2] -eq 0x4D -and $bytes[$i+3] -eq 0x46) {
-                                                    $emfPageCount++
+                                            for ($i = 0; $i -lt ($bytes.Length - 44); $i++) {
+                                                if ($bytes[$i] -eq 1 -and $bytes[$i+1] -eq 0 -and $bytes[$i+2] -eq 0 -and $bytes[$i+3] -eq 0) {
+                                                    if ($bytes[$i+40] -eq 0x20 -and $bytes[$i+41] -eq 0x45 -and $bytes[$i+42] -eq 0x4D -and $bytes[$i+43] -eq 0x46) {
+                                                        $emfPageCount++
+                                                        $i += 80
+                                                    }
                                                 }
                                             }
                                             if ($emfPageCount -gt $totalPages) {
@@ -2789,6 +2800,208 @@ try {
     return { stop, isRunning: () => running };
 }
 
+/**
+ * CRITICAL FIX: Print Dialog UI Monitor
+ * 
+ * EPSON L3250 (and similar) drivers completely hide the copies count from ALL
+ * Windows APIs (DEVMODE, Event Log, WMI, PrintTicket). The driver absorbs copies
+ * internally and reports dmCopies=1 to the spooler.
+ * 
+ * The ONLY reliable source is reading the copies count directly from the print
+ * dialog UI using Windows UI Automation:
+ * - Microsoft Office backstage (Word, Excel, PowerPoint): NetUITextbox "Copies:"
+ * - Standard Windows print dialog (#32770): EditBox control ID 0x0482
+ * 
+ * This monitor polls every 700ms for open print dialogs and captures copies,
+ * printer name, and timestamp. The data is cached and matched to print jobs
+ * when they complete via Event 307.
+ */
+function startPrintDialogMonitor(onDataCaptured) {
+    const { spawn } = require('child_process');
+    let running = true;
+    let proc = null;
+
+    const psScript = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class DlgReader {
+    [DllImport("user32.dll")]
+    public static extern IntPtr FindWindow(string className, string windowName);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SendMessage(IntPtr hWnd, int msg, int wParam, StringBuilder lParam);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+}
+"@
+
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$lastJson = ""
+
+while ($true) {
+    Start-Sleep -Milliseconds 700
+    $result = $null
+
+    # --- Method 1: Office Backstage (Word, Excel, PowerPoint) ---
+    $officeProcs = Get-Process WINWORD,EXCEL,POWERPNT -ErrorAction SilentlyContinue
+    foreach ($proc in $officeProcs) {
+        try {
+            $pidCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
+            $appWin = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCond)
+            if (-not $appWin) { continue }
+
+            # Targeted search: Copies edit control (fast, not full tree scan)
+            $nameCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, "Copies:")
+            $typeCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Edit)
+            $andCond = New-Object System.Windows.Automation.AndCondition($nameCond, $typeCond)
+            $copiesEdit = $appWin.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants, $andCond)
+
+            if ($copiesEdit) {
+                $valP = $copiesEdit.GetCurrentPattern(
+                    [System.Windows.Automation.ValuePattern]::Pattern)
+                $copiesVal = $valP.Current.Value
+
+                # Get printer name from "Which Printer" combo
+                $printerName = ""
+                try {
+                    $pCond = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, "Which Printer")
+                    $pCombo = $appWin.FindFirst(
+                        [System.Windows.Automation.TreeScope]::Descendants, $pCond)
+                    if ($pCombo) {
+                        $pVal = $pCombo.GetCurrentPattern(
+                            [System.Windows.Automation.ValuePattern]::Pattern)
+                        $printerName = $pVal.Current.Value
+                    }
+                } catch {}
+
+                # Get document name from window title
+                $docName = $appWin.Current.Name
+
+                $result = @{
+                    c = [int]$copiesVal
+                    p = $printerName
+                    d = $docName
+                    s = "office"
+                    t = (Get-Date -Format o)
+                }
+            }
+        } catch {}
+    }
+
+    # --- Method 2: Standard Windows Print Dialog ---
+    if (-not $result) {
+        try {
+            $dlg = [DlgReader]::FindWindow("#32770", $null)
+            if ($dlg -ne [IntPtr]::Zero -and [DlgReader]::IsWindowVisible($dlg)) {
+                $copiesCtrl = [DlgReader]::GetDlgItem($dlg, 1154)
+                if ($copiesCtrl -ne [IntPtr]::Zero) {
+                    $sb = New-Object System.Text.StringBuilder 20
+                    [DlgReader]::SendMessage($copiesCtrl, 0x000D, 20, $sb) | Out-Null
+                    $copies = 0
+                    if ([int]::TryParse($sb.ToString(), [ref]$copies) -and $copies -gt 0) {
+                        $titleSb = New-Object System.Text.StringBuilder 256
+                        [DlgReader]::GetWindowText($dlg, $titleSb, 256) | Out-Null
+
+                        $result = @{
+                            c = $copies
+                            p = ""
+                            d = $titleSb.ToString()
+                            s = "dialog"
+                            t = (Get-Date -Format o)
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    if ($result) {
+        $json = $result | ConvertTo-Json -Compress
+        if ($json -ne $lastJson) {
+            Write-Output $json
+            [Console]::Out.Flush()
+            $lastJson = $json
+        }
+    }
+}
+`;
+
+    try {
+        proc = spawn('powershell.exe', [
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-Command', psScript
+        ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+
+        let buffer = '';
+        proc.stdout.on('data', (data) => {
+            buffer += data.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // keep incomplete line
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('{')) continue;
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    if (parsed.c && parsed.c > 0) {
+                        const result = {
+                            copies: parsed.c,
+                            printer: parsed.p || '',
+                            document: parsed.d || '',
+                            source: parsed.s || 'unknown',
+                            timestamp: parsed.t || new Date().toISOString()
+                        };
+                        console.log(`[PRINT-DIALOG] Captured copies=${result.copies} printer="${result.printer}" doc="${result.document}" [${result.source}]`);
+                        if (onDataCaptured) onDataCaptured(result);
+                    }
+                } catch (e) {
+                    // Ignore parse errors
+                }
+            }
+        });
+
+        proc.stderr.on('data', (data) => {
+            // Suppress stderr noise from UI Automation
+        });
+
+        proc.on('exit', (code) => {
+            if (running) {
+                console.log('[PRINT-DIALOG] Monitor exited, restarting in 5s...');
+                setTimeout(() => {
+                    if (running) startPrintDialogMonitor(onDataCaptured);
+                }, 5000);
+            }
+        });
+
+        console.log('[PRINT-DIALOG] UI Automation monitor started (polling every 700ms)');
+    } catch (e) {
+        console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
+    }
+
+    function stop() {
+        running = false;
+        if (proc) {
+            try { proc.kill(); } catch (e) {}
+        }
+    }
+
+    return { stop, isRunning: () => running };
+}
+
 module.exports = {
     getRecentPrintJobs,
     getRecentCompletedJobs,
@@ -2807,5 +3020,6 @@ module.exports = {
     queryJobPageCountAggressive,
     startPageCountUpdater,
     startSpoolerWatcher,
-    getRenderedPageCount
+    getRenderedPageCount,
+    startPrintDialogMonitor
 };

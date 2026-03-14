@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
 
@@ -211,6 +211,12 @@ let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
 let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
+
+// Cache for copies captured from print dialog UI (Word backstage, standard dialog)
+// Key: printer name (lowercase), Value: { copies, document, timestamp, source }
+// EPSON drivers completely hide copies from all Windows APIs, so UI Automation
+// reading the print dialog is the ONLY reliable source for the true copies count.
+let printDialogCache = new Map();
 
 // Cache spooler page counts for merging with Event Log 307
 // Some drivers (e.g. EPSON) report Pages=1 in Event Log 307 regardless of actual pages.
@@ -1843,6 +1849,24 @@ async function startDataCollection() {
         console.error('[PRINT] Real-time watcher failed to start:', e.message);
     }
 
+    // Start Print Dialog UI Monitor — reads copies from Word backstage / standard dialog
+    // This is the ONLY reliable source for EPSON printers that hide copies from all APIs
+    try {
+        startPrintDialogMonitor((data) => {
+            // Cache by printer name (lowercase) for matching with Event 307 jobs
+            const key = (data.printer || 'unknown').toLowerCase().trim();
+            printDialogCache.set(key, {
+                copies: data.copies,
+                document: data.document || '',
+                timestamp: Date.now(),
+                source: data.source
+            });
+            console.log(`[PRINT-DIALOG] Cached: copies=${data.copies} for printer="${data.printer}"`);
+        });
+    } catch (e) {
+        console.error('[PRINT-DIALOG] Monitor failed to start:', e.message);
+    }
+
     // Start background page count updater â€” polls spooler every 2s to
     // update cached page counts. This is the SAFETY NET that catches
     // page counts that were 0 when the watcher first captured the job.
@@ -1977,7 +2001,7 @@ async function startDataCollection() {
             (cached && cached.totalPages > 0) ? cached.totalPages : 1,
             (job.totalPages > 0) ? job.totalPages : 1
         );
-        // Use the GREATER of: driver-reported copies OR grouped copies (EPSON fix)
+        // Use the GREATER of: driver-reported copies, grouped copies, OR UI-captured copies
         let copies = Math.max(
             (cached && cached.copies > 1) ? cached.copies : 1,
             (job.copies > 1) ? job.copies : 1,
@@ -1985,6 +2009,23 @@ async function startDataCollection() {
         );
         let dataSource = cached ? 'realtime_watcher' : 'event_log_only';
         if (isGrouped) dataSource += '+grouped_' + groupedCopies;
+
+        // CRITICAL: Check the print dialog UI cache for the real copies count.
+        // EPSON drivers report dmCopies=1 even when user set 4 copies in Word.
+        // The UI Automation monitor captures the actual value from the dialog.
+        const printerKey = (job.printer || '').toLowerCase().trim();
+        const dialogData = printDialogCache.get(printerKey);
+        if (dialogData && dialogData.copies > copies) {
+            const age = Date.now() - dialogData.timestamp;
+            // Use dialog-captured copies if captured within last 2 minutes
+            if (age < 120000) {
+                console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (captured ' + Math.round(age/1000) + 's ago)');
+                copies = dialogData.copies;
+                dataSource += '+ui_dialog';
+                // Clear the cache entry after use to prevent re-use
+                printDialogCache.delete(printerKey);
+            }
+        }
 
         // Aggressive re-query for suspicious page counts
         if (totalPages <= 1) {
