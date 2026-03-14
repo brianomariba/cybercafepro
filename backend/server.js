@@ -69,6 +69,7 @@ const UserSubmission = require('./models/UserSubmission');
 const DocumentRequest = require('./models/DocumentRequest');
 const Client = require('./models/Client');
 const OnlineService = require('./models/OnlineService');
+const PageCounterReading = require('./models/PageCounterReading');
 
 const app = express();
 const server = http.createServer(app);
@@ -2907,6 +2908,192 @@ app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
     } catch (error) {
         console.error('Delete Printer Data Error:', error);
         res.status(500).json({ error: 'Failed to delete printer data' });
+    }
+});
+
+// ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
+
+/**
+ * POST /api/v1/admin/page-counter-readings
+ * Record a new page counter reading from the printer's physical counter
+ */
+app.post('/api/v1/admin/page-counter-readings', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName, counterValue, notes } = req.body;
+
+        if (!printerName || counterValue === undefined || counterValue === null) {
+            return res.status(400).json({ error: 'printerName and counterValue are required' });
+        }
+
+        if (typeof counterValue !== 'number' || counterValue < 0) {
+            return res.status(400).json({ error: 'counterValue must be a non-negative number' });
+        }
+
+        // Validate that the new reading is >= the last reading for this printer
+        const lastReading = await PageCounterReading.findOne({ printerName })
+            .sort({ recordedAt: -1 });
+
+        if (lastReading && counterValue < lastReading.counterValue) {
+            return res.status(400).json({
+                error: `New counter value (${counterValue}) cannot be less than the last reading (${lastReading.counterValue})`,
+                lastReading: lastReading.counterValue
+            });
+        }
+
+        const reading = await PageCounterReading.create({
+            printerName,
+            counterValue: Math.round(counterValue),
+            notes: notes || '',
+            recordedBy: req.admin?.username || 'admin',
+            recordedAt: new Date()
+        });
+
+        console.log(`[PAGE COUNTER] New reading for "${printerName}": ${counterValue} by ${req.admin?.username}`);
+
+        res.json({ success: true, reading });
+    } catch (error) {
+        console.error('Page Counter Reading Error:', error);
+        res.status(500).json({ error: 'Failed to save page counter reading' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/page-counter-readings
+ * Get page counter readings, optionally filtered by printer
+ */
+app.get('/api/v1/admin/page-counter-readings', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName, limit = 50 } = req.query;
+        const query = {};
+        if (printerName) query.printerName = printerName;
+
+        const readings = await PageCounterReading.find(query)
+            .sort({ recordedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json({ readings });
+    } catch (error) {
+        console.error('Get Page Counter Readings Error:', error);
+        res.status(500).json({ error: 'Failed to fetch page counter readings' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/page-counter-readings/:id
+ * Delete a single page counter reading
+ */
+app.delete('/api/v1/admin/page-counter-readings/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await PageCounterReading.findByIdAndDelete(req.params.id);
+        if (!result) {
+            return res.status(404).json({ error: 'Reading not found' });
+        }
+        console.log(`[PAGE COUNTER] Deleted reading ${req.params.id}`);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete Page Counter Reading Error:', error);
+        res.status(500).json({ error: 'Failed to delete page counter reading' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/photocopy-data
+ * Calculate photocopies between two readings by subtracting tracked print jobs
+ * Query params: printerName (required)
+ * Returns: readings, print jobs in each interval, and calculated photocopy counts
+ */
+app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName } = req.query;
+        if (!printerName) {
+            return res.status(400).json({ error: 'printerName is required' });
+        }
+
+        // Get all readings for this printer, ordered oldest first
+        const readings = await PageCounterReading.find({ printerName })
+            .sort({ recordedAt: 1 });
+
+        if (readings.length < 2) {
+            return res.json({
+                printerName,
+                readings,
+                intervals: [],
+                summary: { totalPhotocopies: 0, totalCounterDiff: 0, totalPrintJobs: 0 },
+                message: readings.length === 0
+                    ? 'No page counter readings found. Record at least 2 readings to calculate photocopies.'
+                    : 'Need at least 2 readings to calculate photocopies.'
+            });
+        }
+
+        const currentPricing = await getPricing();
+        const intervals = [];
+        let totalPhotocopies = 0;
+        let totalCounterDiff = 0;
+        let totalPrintPages = 0;
+
+        // For each pair of consecutive readings, calculate the photocopy count
+        for (let i = 0; i < readings.length - 1; i++) {
+            const startReading = readings[i];
+            const endReading = readings[i + 1];
+            const counterDiff = endReading.counterValue - startReading.counterValue;
+
+            // Count print job pages between these two readings for this printer
+            // Use case-insensitive + trimmed match so "EPSON L3250 Series" matches "Epson L3250 Series"
+            const printLogs = await Log.find({
+                type: 'print',
+                receivedAt: { $gte: startReading.recordedAt, $lte: endReading.recordedAt },
+                $or: [
+                    { 'data.printer': printerName },
+                    { 'data.printer': { $regex: new RegExp('^' + printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') } }
+                ]
+            });
+
+            const printPages = printLogs.reduce((sum, log) => {
+                const d = log.data || {};
+                return sum + (d.totalSheets || ((d.totalPages || d.pages || 1) * (d.copies || 1)));
+            }, 0);
+
+            const photocopies = Math.max(0, counterDiff - printPages);
+
+            totalCounterDiff += counterDiff;
+            totalPrintPages += printPages;
+            totalPhotocopies += photocopies;
+
+            intervals.push({
+                startReading: {
+                    id: startReading._id,
+                    counterValue: startReading.counterValue,
+                    recordedAt: startReading.recordedAt,
+                    notes: startReading.notes
+                },
+                endReading: {
+                    id: endReading._id,
+                    counterValue: endReading.counterValue,
+                    recordedAt: endReading.recordedAt,
+                    notes: endReading.notes
+                },
+                counterDiff,
+                printPages,
+                photocopies,
+                photocopyRevenue: photocopies * (currentPricing.photocopyBW || 8)
+            });
+        }
+
+        res.json({
+            printerName,
+            readings,
+            intervals,
+            summary: {
+                totalPhotocopies,
+                totalCounterDiff,
+                totalPrintJobs: totalPrintPages,
+                photocopyRate: currentPricing.photocopyBW || 8,
+                estimatedRevenue: totalPhotocopies * (currentPricing.photocopyBW || 8)
+            }
+        });
+    } catch (error) {
+        console.error('Photocopy Data Error:', error);
+        res.status(500).json({ error: 'Failed to calculate photocopy data' });
     }
 });
 

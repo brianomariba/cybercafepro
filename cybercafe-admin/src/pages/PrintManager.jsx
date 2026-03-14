@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData, createPageCounterReading, getPageCounterReadings, deletePageCounterReading, getPhotocopyData } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -32,8 +32,373 @@ const { Text, Title } = Typography;
 const { Search } = Input;
 const { RangePicker } = DatePicker;
 
-// Format KSH
+// Format number with KSH currency
 const formatKSH = (amount) => `KSH ${Number(amount || 0).toLocaleString()}`;
+
+// ==================== PHOTOCOPY TAB COMPONENT ====================
+function PhotocopyTracker({ printers }) {
+    const [readings, setReadings] = useState([]);
+    const [photocopyData, setPhotocopyData] = useState(null);
+    const [selectedPrinter, setSelectedPrinter] = useState(null);
+    const [counterValue, setCounterValue] = useState('');
+    const [notes, setNotes] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+
+    // Build a flat list of unique printer names from all connected clients
+    const allPrinterNames = useMemo(() => {
+        const names = new Set();
+        (printers || []).forEach(client => {
+            (client.printers || []).forEach(p => {
+                if (p.name) names.add(p.name);
+            });
+        });
+        return [...names].sort();
+    }, [printers]);
+
+    // Auto-select first printer if none selected
+    useEffect(() => {
+        if (!selectedPrinter && allPrinterNames.length > 0) {
+            setSelectedPrinter(allPrinterNames[0]);
+        }
+    }, [allPrinterNames, selectedPrinter]);
+
+    // Fetch readings and photocopy data when printer changes
+    const fetchPhotocopyInfo = async () => {
+        if (!selectedPrinter) return;
+        setLoading(true);
+        try {
+            const [readingsRes, photoRes] = await Promise.all([
+                getPageCounterReadings({ printerName: selectedPrinter }),
+                getPhotocopyData({ printerName: selectedPrinter })
+            ]);
+            setReadings(readingsRes.readings || []);
+            setPhotocopyData(photoRes);
+        } catch (e) {
+            console.error('Photocopy data fetch error', e);
+            message.error('Failed to load photocopy data');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchPhotocopyInfo();
+    }, [selectedPrinter]);
+
+    const handleAddReading = async () => {
+        if (!selectedPrinter || !counterValue) {
+            message.warning('Select a printer and enter a counter value');
+            return;
+        }
+        const val = parseInt(counterValue, 10);
+        if (isNaN(val) || val < 0) {
+            message.error('Counter value must be a non-negative number');
+            return;
+        }
+        setSubmitting(true);
+        try {
+            await createPageCounterReading({
+                printerName: selectedPrinter,
+                counterValue: val,
+                notes
+            });
+            message.success('Page counter reading saved!');
+            setCounterValue('');
+            setNotes('');
+            fetchPhotocopyInfo();
+        } catch (e) {
+            const msg = e.response?.data?.error || 'Failed to save reading';
+            message.error(msg);
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    const handleDeleteReading = async (id) => {
+        try {
+            await deletePageCounterReading(id);
+            message.success('Reading deleted');
+            fetchPhotocopyInfo();
+        } catch {
+            message.error('Failed to delete reading');
+        }
+    };
+
+    const summary = photocopyData?.summary || {};
+
+    return (
+        <div>
+            {/* Printer Selector + Counter Input */}
+            <Card
+                title={
+                    <Space>
+                        <PrinterOutlined style={{ color: '#7b2cbf' }} />
+                        <span>Record Page Counter Reading</span>
+                    </Space>
+                }
+                style={{ marginBottom: 24 }}
+            >
+                <Row gutter={[16, 16]} align="middle">
+                    <Col xs={24} md={6}>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Printer</Text>
+                        <Select
+                            value={selectedPrinter}
+                            onChange={setSelectedPrinter}
+                            style={{ width: '100%' }}
+                            placeholder="Select printer"
+                            showSearch
+                            filterOption={(input, option) => option.label.toLowerCase().includes(input.toLowerCase())}
+                            options={allPrinterNames.map(n => ({ value: n, label: n }))}
+                        />
+                    </Col>
+                    <Col xs={24} md={5}>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Counter Value</Text>
+                        <Input
+                            placeholder="e.g. 12345"
+                            value={counterValue}
+                            onChange={e => setCounterValue(e.target.value)}
+                            type="number"
+                            min={0}
+                            onPressEnter={handleAddReading}
+                        />
+                    </Col>
+                    <Col xs={24} md={8}>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Notes (optional)</Text>
+                        <Input
+                            placeholder="e.g. Morning reading, End of day"
+                            value={notes}
+                            onChange={e => setNotes(e.target.value)}
+                            onPressEnter={handleAddReading}
+                        />
+                    </Col>
+                    <Col xs={24} md={5}>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>&nbsp;</Text>
+                        <Button
+                            type="primary"
+                            icon={<CheckCircleOutlined />}
+                            onClick={handleAddReading}
+                            loading={submitting}
+                            block
+                            style={{ background: '#7b2cbf', borderColor: '#7b2cbf' }}
+                        >
+                            Save Reading
+                        </Button>
+                    </Col>
+                </Row>
+            </Card>
+
+            {/* Summary Stats */}
+            {photocopyData && photocopyData.intervals && photocopyData.intervals.length > 0 && (
+                <div className="stats-row" style={{ marginBottom: 24 }}>
+                    <div className="stat-card" style={{ borderLeft: '3px solid #7b2cbf' }}>
+                        <div className="stat-header">
+                            <div className="stat-icon" style={{ background: 'rgba(123,44,191,0.15)', color: '#7b2cbf' }}><PrinterOutlined /></div>
+                            <div className="stat-value">{(summary.totalPhotocopies || 0).toLocaleString()}</div>
+                        </div>
+                        <div className="stat-label">Total Photocopies</div>
+                    </div>
+                    <div className="stat-card" style={{ borderLeft: '3px solid #00d4ff' }}>
+                        <div className="stat-header">
+                            <div className="stat-icon blue"><BarChartOutlined /></div>
+                            <div className="stat-value">{(summary.totalCounterDiff || 0).toLocaleString()}</div>
+                        </div>
+                        <div className="stat-label">Counter Difference</div>
+                    </div>
+                    <div className="stat-card" style={{ borderLeft: '3px solid #b0b0c0' }}>
+                        <div className="stat-header">
+                            <div className="stat-icon" style={{ background: 'rgba(176,176,192,0.15)', color: '#b0b0c0' }}><FileTextOutlined /></div>
+                            <div className="stat-value">{(summary.totalPrintJobs || 0).toLocaleString()}</div>
+                        </div>
+                        <div className="stat-label">Tracked Print Pages</div>
+                    </div>
+                    <div className="stat-card green">
+                        <div className="stat-header">
+                            <div className="stat-icon green"><DollarOutlined /></div>
+                            <div className="stat-value">{formatKSH(summary.estimatedRevenue || 0)}</div>
+                        </div>
+                        <div className="stat-label">Photocopy Revenue (est.)</div>
+                    </div>
+                </div>
+            )}
+
+            <Row gutter={[24, 24]}>
+                {/* Interval Breakdown */}
+                <Col xs={24} lg={14}>
+                    <Card
+                        title={
+                            <Space>
+                                <BarChartOutlined style={{ color: '#7b2cbf' }} />
+                                <span>Photocopy Intervals</span>
+                            </Space>
+                        }
+                        extra={<Button icon={<ReloadOutlined />} onClick={fetchPhotocopyInfo} loading={loading} size="small">Refresh</Button>}
+                    >
+                        {(!photocopyData || !photocopyData.intervals || photocopyData.intervals.length === 0) ? (
+                            <Empty
+                                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                description={
+                                    <span style={{ color: '#b0b0c0' }}>
+                                        {photocopyData?.message || 'Record at least 2 page counter readings to see photocopy calculations.'}
+                                    </span>
+                                }
+                            />
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                {photocopyData.intervals.map((interval, idx) => {
+                                    const total = interval.counterDiff || 1;
+                                    const printPct = Math.round((interval.printPages / total) * 100);
+                                    const copyPct = 100 - printPct;
+                                    return (
+                                        <div key={idx} style={{
+                                            padding: 16, borderRadius: 12,
+                                            background: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)'
+                                        }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+                                                <Text style={{ fontSize: 12, color: '#b0b0c0' }}>
+                                                    {dayjs(interval.startReading.recordedAt).format('MMM D, HH:mm')} → {dayjs(interval.endReading.recordedAt).format('MMM D, HH:mm')}
+                                                </Text>
+                                                <Tag color="purple">
+                                                    {interval.startReading.counterValue} → {interval.endReading.counterValue}
+                                                </Tag>
+                                            </div>
+                                            <Row gutter={16}>
+                                                <Col span={6}>
+                                                    <Statistic
+                                                        title={<Text style={{ fontSize: 11, color: '#b0b0c0' }}>Counter Diff</Text>}
+                                                        value={interval.counterDiff}
+                                                        valueStyle={{ fontSize: 18, color: '#fff' }}
+                                                    />
+                                                </Col>
+                                                <Col span={6}>
+                                                    <Statistic
+                                                        title={<Text style={{ fontSize: 11, color: '#00d4ff' }}>Print Pages</Text>}
+                                                        value={interval.printPages}
+                                                        valueStyle={{ fontSize: 18, color: '#00d4ff' }}
+                                                    />
+                                                </Col>
+                                                <Col span={6}>
+                                                    <Statistic
+                                                        title={<Text style={{ fontSize: 11, color: '#7b2cbf' }}>Photocopies</Text>}
+                                                        value={interval.photocopies}
+                                                        valueStyle={{ fontSize: 18, color: '#7b2cbf' }}
+                                                    />
+                                                </Col>
+                                                <Col span={6}>
+                                                    <Statistic
+                                                        title={<Text style={{ fontSize: 11, color: '#00ff88' }}>Revenue</Text>}
+                                                        value={formatKSH(interval.photocopyRevenue)}
+                                                        valueStyle={{ fontSize: 14, color: '#00ff88', fontFamily: 'JetBrains Mono' }}
+                                                    />
+                                                </Col>
+                                            </Row>
+                                            {/* Visual bar */}
+                                            <div style={{ marginTop: 8 }}>
+                                                <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                                                    <Text style={{ fontSize: 11, color: '#00d4ff' }}>🖨️ Prints {printPct}%</Text>
+                                                    <Text style={{ fontSize: 11, color: '#7b2cbf' }}>📋 Copies {copyPct}%</Text>
+                                                </div>
+                                                <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
+                                                    {interval.printPages > 0 && <div style={{ width: `${printPct}%`, background: '#00d4ff' }} />}
+                                                    {interval.photocopies > 0 && <div style={{ width: `${copyPct}%`, background: '#7b2cbf' }} />}
+                                                </div>
+                                            </div>
+                                            {interval.startReading.notes && (
+                                                <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>📝 {interval.startReading.notes}</Text>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </Card>
+                </Col>
+
+                {/* Readings History */}
+                <Col xs={24} lg={10}>
+                    <Card
+                        title={
+                            <Space>
+                                <ClockCircleOutlined style={{ color: '#00d4ff' }} />
+                                <span>Counter Readings History</span>
+                            </Space>
+                        }
+                    >
+                        {readings.length === 0 ? (
+                            <Empty
+                                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                description="No readings yet"
+                            />
+                        ) : (
+                            <List
+                                dataSource={readings}
+                                renderItem={(reading) => (
+                                    <List.Item
+                                        actions={[
+                                            <Popconfirm
+                                                key="del"
+                                                title="Delete this reading?"
+                                                description="This may affect photocopy calculations."
+                                                onConfirm={() => handleDeleteReading(reading._id)}
+                                                okText="Delete"
+                                                okButtonProps={{ danger: true }}
+                                            >
+                                                <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+                                            </Popconfirm>
+                                        ]}
+                                    >
+                                        <List.Item.Meta
+                                            avatar={
+                                                <div style={{
+                                                    width: 40, height: 40, borderRadius: 8,
+                                                    background: 'rgba(123,44,191,0.1)',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    fontSize: 16, fontWeight: 700, color: '#7b2cbf'
+                                                }}>
+                                                    {(reading.counterValue || 0).toLocaleString()}
+                                                </div>
+                                            }
+                                            title={
+                                                <Space>
+                                                    <Text strong>{reading.counterValue?.toLocaleString()} pages</Text>
+                                                </Space>
+                                            }
+                                            description={
+                                                <Space direction="vertical" size={0}>
+                                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                                        {dayjs(reading.recordedAt).format('MMM D, YYYY • hh:mm A')}
+                                                    </Text>
+                                                    {reading.notes && <Text type="secondary" style={{ fontSize: 11 }}>📝 {reading.notes}</Text>}
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>By: {reading.recordedBy}</Text>
+                                                </Space>
+                                            }
+                                        />
+                                    </List.Item>
+                                )}
+                            />
+                        )}
+                    </Card>
+                </Col>
+            </Row>
+
+            {/* How it works */}
+            <Card style={{ marginTop: 24, background: 'rgba(123,44,191,0.05)', border: '1px solid rgba(123,44,191,0.15)' }}>
+                <Title level={5} style={{ color: '#7b2cbf', margin: '0 0 8px' }}>
+                    <ExclamationCircleOutlined style={{ marginRight: 8 }} />
+                    How Photocopy Tracking Works
+                </Title>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                    1. Record the printer's physical page counter at regular intervals (start of day, end of day, etc.).<br />
+                    2. The system tracks all print jobs sent through computers automatically.<br />
+                    3. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
+                    4. This gives you an accurate count of pages used for photocopying (manual copier usage).
+                </Text>
+            </Card>
+        </div>
+    );
+}
+// ==================== END PHOTOCOPY TRACKER ====================
 
 function PrintManager() {
     const [printJobs, setPrintJobs] = useState([]);
@@ -682,6 +1047,11 @@ function PrintManager() {
                                 </Row>
                             </div>
                         )
+                    },
+                    {
+                        key: 'photocopies',
+                        label: <span><PieChartOutlined style={{ marginRight: 6 }} /> Photocopy Tracking</span>,
+                        children: <PhotocopyTracker printers={printers} />
                     }
                 ]}
             />

@@ -1,7 +1,23 @@
 const fs = require('fs');
 const path = require('path');
-const pdfParse = require('pdf-parse');
 
+// Provide DOMMatrix polyfill for pdf.js running inside Node.js (Electron Main Process)
+if (typeof DOMMatrix === 'undefined') {
+    global.DOMMatrix = class DOMMatrix {
+        constructor() {
+            this.a = 1; this.b = 0; this.c = 0; this.d = 1; this.e = 0; this.f = 0;
+        }
+    };
+}
+// Provide secondary polyfills if needed by modern pdf.js
+if (typeof Path2D === 'undefined') {
+    global.Path2D = class Path2D {
+        constructor() {}
+        moveTo() {} lineTo() {} closePath() {} bezierCurveTo() {} quadraticCurveTo() {}
+    };
+}
+
+const pdfParse = require('pdf-parse');
 const SERVICES = {
     'KRA': ['kenya revenue authority', 'kra pin', 'kra receipt', 'kra compliance', 'kra ack', 'kra.go.ke'],
     'NTSA': ['national transport and safety authority', 'ntsa', 'driving license', 'logbook search'],

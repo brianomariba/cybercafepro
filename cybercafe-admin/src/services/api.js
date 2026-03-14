@@ -601,6 +601,12 @@ export const removeSinglePrinter = async (clientId, printerName) => (await api.d
 export const clearAllFinanceData = async () => (await api.delete('/admin/finance-data')).data;
 export const clearAllReportsData = async () => (await api.delete('/admin/reports-data')).data;
 
+// ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
+export const createPageCounterReading = async (data) => (await api.post('/admin/page-counter-readings', data)).data;
+export const getPageCounterReadings = async (params = {}) => (await api.get('/admin/page-counter-readings', { params })).data;
+export const deletePageCounterReading = async (id) => (await api.delete(`/admin/page-counter-readings/${id}`)).data;
+export const getPhotocopyData = async (params = {}) => (await api.get('/admin/photocopy-data', { params })).data;
+
 // ==================== USER SUBMISSIONS ====================
 export const getSubmissions = async (status, targetType) => {
     const params = new URLSearchParams();
@@ -710,6 +716,12 @@ export default {
     removeSinglePrinter,
     clearAllFinanceData,
     clearAllReportsData,
+
+    // Page Counter / Photocopy
+    createPageCounterReading,
+    getPageCounterReadings,
+    deletePageCounterReading,
+    getPhotocopyData,
 
     // Settings & Security
     getSettings,
