@@ -2801,20 +2801,20 @@ try {
 }
 
 /**
- * CRITICAL FIX: Print Dialog UI Monitor
+ * CRITICAL FIX: Print Dialog UI Monitor (Enhanced)
  * 
  * EPSON L3250 (and similar) drivers completely hide the copies count from ALL
  * Windows APIs (DEVMODE, Event Log, WMI, PrintTicket). The driver absorbs copies
  * internally and reports dmCopies=1 to the spooler.
  * 
- * The ONLY reliable source is reading the copies count directly from the print
- * dialog UI using Windows UI Automation:
- * - Microsoft Office backstage (Word, Excel, PowerPoint): NetUITextbox "Copies:"
- * - Standard Windows print dialog (#32770): EditBox control ID 0x0482
+ * The ONLY reliable source is reading settings directly from the print dialog UI
+ * using Windows UI Automation. Supports:
+ * - Microsoft Office backstage (Word, Excel, PowerPoint)
+ * - Chrome/Edge built-in print dialog (Ctrl+P)
+ * - Standard Windows print dialog (#32770)
+ * - Adobe Reader/Acrobat print dialog
  * 
- * This monitor polls every 700ms for open print dialogs and captures copies,
- * printer name, and timestamp. The data is cached and matched to print jobs
- * when they complete via Event 307.
+ * Captures: copies, printer, color/BW, pages, paper size, orientation, total sheets
  */
 function startPrintDialogMonitor(onDataCaptured) {
     const { spawn } = require('child_process');
@@ -2843,84 +2843,253 @@ public class DlgReader {
 }
 "@
 
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$lastJson = ""
+\$root = [System.Windows.Automation.AutomationElement]::RootElement
+\$lastJson = ""
 
-while ($true) {
+function Find-UIValue(\$parent, \$name) {
+    try {
+        \$cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, \$name)
+        \$els = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$cond)
+        foreach (\$el in \$els) {
+            \$ct = \$el.Current.ControlType.ProgrammaticName
+            # Skip label-only Text elements, prefer editable controls
+            if (\$ct -eq 'ControlType.Text') { continue }
+            try {
+                \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                return \$vp.Current.Value
+            } catch {}
+            try {
+                \$sp = \$el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                return "Selected:" + \$sp.Current.IsSelected
+            } catch {}
+        }
+        # Fallback: try Text elements
+        foreach (\$el in \$els) {
+            if (\$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Text') {
+                return \$el.Current.Name
+            }
+        }
+    } catch {}
+    return \$null
+}
+
+function Find-UIText(\$parent, \$pattern) {
+    try {
+        \$all = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        foreach (\$el in \$all) {
+            try {
+                \$n = \$el.Current.Name
+                if (\$n -match \$pattern) { return \$n }
+            } catch {}
+        }
+    } catch {}
+    return \$null
+}
+
+while (\$true) {
     Start-Sleep -Milliseconds 700
-    $result = $null
+    \$result = \$null
 
-    # --- Method 1: Office Backstage (Word, Excel, PowerPoint) ---
-    $officeProcs = Get-Process WINWORD,EXCEL,POWERPNT -ErrorAction SilentlyContinue
-    foreach ($proc in $officeProcs) {
+    # === METHOD 1: Office Backstage (Word, Excel, PowerPoint) ===
+    \$officeProcs = Get-Process WINWORD,EXCEL,POWERPNT -ErrorAction SilentlyContinue
+    foreach (\$p in \$officeProcs) {
         try {
-            $pidCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
-            $appWin = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $pidCond)
-            if (-not $appWin) { continue }
+            \$pidCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, \$p.Id)
+            \$appWin = \$root.FindFirst([System.Windows.Automation.TreeScope]::Children, \$pidCond)
+            if (-not \$appWin) { continue }
 
-            # Targeted search: Copies edit control (fast, not full tree scan)
-            $nameCond = New-Object System.Windows.Automation.PropertyCondition(
+            # Check for Copies edit control (indicates backstage is open)
+            \$nameCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::NameProperty, "Copies:")
-            $typeCond = New-Object System.Windows.Automation.PropertyCondition(
+            \$typeCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
                 [System.Windows.Automation.ControlType]::Edit)
-            $andCond = New-Object System.Windows.Automation.AndCondition($nameCond, $typeCond)
-            $copiesEdit = $appWin.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants, $andCond)
+            \$andCond = New-Object System.Windows.Automation.AndCondition(\$nameCond, \$typeCond)
+            \$copiesEdit = \$appWin.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants, \$andCond)
 
-            if ($copiesEdit) {
-                $valP = $copiesEdit.GetCurrentPattern(
+            if (\$copiesEdit) {
+                \$valP = \$copiesEdit.GetCurrentPattern(
                     [System.Windows.Automation.ValuePattern]::Pattern)
-                $copiesVal = $valP.Current.Value
+                \$copies = [int]\$valP.Current.Value
 
-                # Get printer name from "Which Printer" combo
-                $printerName = ""
+                # Printer
+                \$printer = ""
                 try {
-                    $pCond = New-Object System.Windows.Automation.PropertyCondition(
+                    \$pc = New-Object System.Windows.Automation.PropertyCondition(
                         [System.Windows.Automation.AutomationElement]::NameProperty, "Which Printer")
-                    $pCombo = $appWin.FindFirst(
-                        [System.Windows.Automation.TreeScope]::Descendants, $pCond)
-                    if ($pCombo) {
-                        $pVal = $pCombo.GetCurrentPattern(
+                    \$pCombo = \$appWin.FindFirst(
+                        [System.Windows.Automation.TreeScope]::Descendants, \$pc)
+                    if (\$pCombo) {
+                        \$pv = \$pCombo.GetCurrentPattern(
                             [System.Windows.Automation.ValuePattern]::Pattern)
-                        $printerName = $pVal.Current.Value
+                        \$printer = \$pv.Current.Value
                     }
                 } catch {}
 
-                # Get document name from window title
-                $docName = $appWin.Current.Name
+                # Two-Sided Printing
+                \$duplex = ""
+                try {
+                    \$dc = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, "Two-Sided Printing")
+                    \$dCombo = \$appWin.FindFirst(
+                        [System.Windows.Automation.TreeScope]::Descendants, \$dc)
+                    if (\$dCombo) {
+                        \$dv = \$dCombo.GetCurrentPattern(
+                            [System.Windows.Automation.ValuePattern]::Pattern)
+                        \$duplex = \$dv.Current.Value
+                    }
+                } catch {}
 
-                $result = @{
-                    c = [int]$copiesVal
-                    p = $printerName
-                    d = $docName
+                \$result = @{
+                    c = \$copies
+                    p = \$printer
+                    d = \$appWin.Current.Name
                     s = "office"
+                    color = ""
+                    pages = ""
+                    paper = ""
+                    orient = ""
+                    duplex = \$duplex
+                    sheets = 0
                     t = (Get-Date -Format o)
                 }
             }
         } catch {}
     }
 
-    # --- Method 2: Standard Windows Print Dialog ---
-    if (-not $result) {
-        try {
-            $dlg = [DlgReader]::FindWindow("#32770", $null)
-            if ($dlg -ne [IntPtr]::Zero -and [DlgReader]::IsWindowVisible($dlg)) {
-                $copiesCtrl = [DlgReader]::GetDlgItem($dlg, 1154)
-                if ($copiesCtrl -ne [IntPtr]::Zero) {
-                    $sb = New-Object System.Text.StringBuilder 20
-                    [DlgReader]::SendMessage($copiesCtrl, 0x000D, 20, $sb) | Out-Null
-                    $copies = 0
-                    if ([int]::TryParse($sb.ToString(), [ref]$copies) -and $copies -gt 0) {
-                        $titleSb = New-Object System.Text.StringBuilder 256
-                        [DlgReader]::GetWindowText($dlg, $titleSb, 256) | Out-Null
+    # === METHOD 2: Chrome/Edge Print Dialog (Ctrl+P) ===
+    if (-not \$result) {
+        \$browserProcs = Get-Process chrome,msedge -ErrorAction SilentlyContinue
+        foreach (\$p in (\$browserProcs | Select-Object -Unique Id)) {
+            try {
+                \$pidCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, \$p.Id)
+                \$wins = \$root.FindAll([System.Windows.Automation.TreeScope]::Children, \$pidCond)
+                foreach (\$win in \$wins) {
+                    if (-not \$win.Current.Name -or \$win.Current.Name.Length -lt 2) { continue }
 
-                        $result = @{
-                            c = $copies
+                    # Quick check: look for the Copies spinner (Chrome-specific)
+                    \$copiesCond = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, "Copies")
+                    \$spinnerCond = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                        [System.Windows.Automation.ControlType]::Spinner)
+                    \$andCond = New-Object System.Windows.Automation.AndCondition(\$copiesCond, \$spinnerCond)
+                    \$copiesSpinner = \$win.FindFirst(
+                        [System.Windows.Automation.TreeScope]::Descendants, \$andCond)
+
+                    if (\$copiesSpinner) {
+                        \$copies = 1
+                        try {
+                            \$vp = \$copiesSpinner.GetCurrentPattern(
+                                [System.Windows.Automation.ValuePattern]::Pattern)
+                            \$copies = [int]\$vp.Current.Value
+                        } catch {}
+
+                        # Destination (printer)
+                        \$printer = Find-UIValue \$win "Destination"
+                        # Color
+                        \$color = Find-UIValue \$win "Color"
+                        # Pages
+                        \$pages = Find-UIValue \$win "Pages"
+                        # Layout
+                        \$layout = Find-UIValue \$win "Layout"
+                        # Paper size (under More settings)
+                        \$paper = Find-UIValue \$win "Paper size"
+                        # Scale
+                        \$scale = Find-UIValue \$win "Scale"
+                        # Total sheets text
+                        \$sheetsText = Find-UIText \$win 'sheet.*paper'
+                        \$sheets = 0
+                        if (\$sheetsText -match '(\d+)\s+sheet') { \$sheets = [int]\$Matches[1] }
+
+                        \$result = @{
+                            c = \$copies
+                            p = if (\$printer) { \$printer } else { "" }
+                            d = \$win.Current.Name
+                            s = "browser"
+                            color = if (\$color) { \$color } else { "" }
+                            pages = if (\$pages) { \$pages } else { "" }
+                            paper = if (\$paper) { \$paper } else { "" }
+                            orient = if (\$layout) { \$layout } else { "" }
+                            duplex = ""
+                            sheets = \$sheets
+                            t = (Get-Date -Format o)
+                        }
+                        break
+                    }
+                }
+                if (\$result) { break }
+            } catch {}
+        }
+    }
+
+    # === METHOD 3: Adobe Reader/Acrobat ===
+    if (-not \$result) {
+        \$adobeProcs = Get-Process AcroRd32,Acrobat -ErrorAction SilentlyContinue
+        foreach (\$p in \$adobeProcs) {
+            try {
+                \$pidCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, \$p.Id)
+                \$wins = \$root.FindAll([System.Windows.Automation.TreeScope]::Children, \$pidCond)
+                foreach (\$win in \$wins) {
+                    if (\$win.Current.Name -match '[Pp]rint') {
+                        \$copies = Find-UIValue \$win "Copies"
+                        if (\$copies) {
+                            \$printer = Find-UIValue \$win "Printer"
+                            \$color = Find-UIValue \$win "Color"
+                            \$paper = Find-UIValue \$win "Paper Size"
+                            \$pages = Find-UIValue \$win "Pages"
+
+                            \$result = @{
+                                c = [int]\$copies
+                                p = if (\$printer) { \$printer } else { "" }
+                                d = \$win.Current.Name
+                                s = "adobe"
+                                color = if (\$color) { \$color } else { "" }
+                                pages = if (\$pages) { \$pages } else { "" }
+                                paper = if (\$paper) { \$paper } else { "" }
+                                orient = ""
+                                duplex = ""
+                                sheets = 0
+                                t = (Get-Date -Format o)
+                            }
+                        }
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    # === METHOD 4: Standard Windows Print Dialog (#32770) ===
+    if (-not \$result) {
+        try {
+            \$dlg = [DlgReader]::FindWindow("#32770", \$null)
+            if (\$dlg -ne [IntPtr]::Zero -and [DlgReader]::IsWindowVisible(\$dlg)) {
+                \$copiesCtrl = [DlgReader]::GetDlgItem(\$dlg, 1154)
+                if (\$copiesCtrl -ne [IntPtr]::Zero) {
+                    \$sb = New-Object System.Text.StringBuilder 20
+                    [DlgReader]::SendMessage(\$copiesCtrl, 0x000D, 20, \$sb) | Out-Null
+                    \$copies = 0
+                    if ([int]::TryParse(\$sb.ToString(), [ref]\$copies) -and \$copies -gt 0) {
+                        \$titleSb = New-Object System.Text.StringBuilder 256
+                        [DlgReader]::GetWindowText(\$dlg, \$titleSb, 256) | Out-Null
+
+                        \$result = @{
+                            c = \$copies
                             p = ""
-                            d = $titleSb.ToString()
-                            s = "dialog"
+                            d = \$titleSb.ToString()
+                            s = "win32_dialog"
+                            color = ""
+                            pages = ""
+                            paper = ""
+                            orient = ""
+                            duplex = ""
+                            sheets = 0
                             t = (Get-Date -Format o)
                         }
                     }
@@ -2929,12 +3098,12 @@ while ($true) {
         } catch {}
     }
 
-    if ($result) {
-        $json = $result | ConvertTo-Json -Compress
-        if ($json -ne $lastJson) {
-            Write-Output $json
+    if (\$result) {
+        \$json = \$result | ConvertTo-Json -Compress
+        if (\$json -ne \$lastJson) {
+            Write-Output \$json
             [Console]::Out.Flush()
-            $lastJson = $json
+            \$lastJson = \$json
         }
     }
 }
@@ -2950,7 +3119,7 @@ while ($true) {
         proc.stdout.on('data', (data) => {
             buffer += data.toString();
             const lines = buffer.split('\n');
-            buffer = lines.pop(); // keep incomplete line
+            buffer = lines.pop();
 
             for (const line of lines) {
                 const trimmed = line.trim();
@@ -2963,9 +3132,20 @@ while ($true) {
                             printer: parsed.p || '',
                             document: parsed.d || '',
                             source: parsed.s || 'unknown',
+                            color: parsed.color || '',
+                            pages: parsed.pages || '',
+                            paperSize: parsed.paper || '',
+                            orientation: parsed.orient || '',
+                            duplex: parsed.duplex || '',
+                            totalSheets: parsed.sheets || 0,
                             timestamp: parsed.t || new Date().toISOString()
                         };
-                        console.log(`[PRINT-DIALOG] Captured copies=${result.copies} printer="${result.printer}" doc="${result.document}" [${result.source}]`);
+                        console.log('[PRINT-DIALOG] Captured: copies=' + result.copies
+                            + ' printer="' + result.printer + '"'
+                            + ' color="' + result.color + '"'
+                            + ' pages="' + result.pages + '"'
+                            + ' paper="' + result.paperSize + '"'
+                            + ' [' + result.source + ']');
                         if (onDataCaptured) onDataCaptured(result);
                     }
                 } catch (e) {
@@ -2987,7 +3167,7 @@ while ($true) {
             }
         });
 
-        console.log('[PRINT-DIALOG] UI Automation monitor started (polling every 700ms)');
+        console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 700ms)');
     } catch (e) {
         console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
     }
@@ -3001,6 +3181,7 @@ while ($true) {
 
     return { stop, isRunning: () => running };
 }
+
 
 module.exports = {
     getRecentPrintJobs,

@@ -1858,10 +1858,16 @@ async function startDataCollection() {
             printDialogCache.set(key, {
                 copies: data.copies,
                 document: data.document || '',
+                color: data.color || '',
+                pages: data.pages || '',
+                paperSize: data.paperSize || '',
+                orientation: data.orientation || '',
+                duplex: data.duplex || '',
+                totalSheets: data.totalSheets || 0,
                 timestamp: Date.now(),
                 source: data.source
             });
-            console.log(`[PRINT-DIALOG] Cached: copies=${data.copies} for printer="${data.printer}"`);
+            console.log(`[PRINT-DIALOG] Cached: copies=${data.copies} color="${data.color}" paper="${data.paperSize}" printer="${data.printer}" [${data.source}]`);
         });
     } catch (e) {
         console.error('[PRINT-DIALOG] Monitor failed to start:', e.message);
@@ -2010,18 +2016,31 @@ async function startDataCollection() {
         let dataSource = cached ? 'realtime_watcher' : 'event_log_only';
         if (isGrouped) dataSource += '+grouped_' + groupedCopies;
 
-        // CRITICAL: Check the print dialog UI cache for the real copies count.
+        // CRITICAL: Check the print dialog UI cache for the real settings.
         // EPSON drivers report dmCopies=1 even when user set 4 copies in Word.
-        // The UI Automation monitor captures the actual value from the dialog.
+        // Chrome's dialog also provides color, pages, paper size, and total sheets.
         const printerKey = (job.printer || '').toLowerCase().trim();
         const dialogData = printDialogCache.get(printerKey);
-        if (dialogData && dialogData.copies > copies) {
+        let dialogColorOverride = '';
+        if (dialogData) {
             const age = Date.now() - dialogData.timestamp;
-            // Use dialog-captured copies if captured within last 2 minutes
+            // Use dialog-captured data if captured within last 2 minutes
             if (age < 120000) {
-                console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (captured ' + Math.round(age/1000) + 's ago)');
-                copies = dialogData.copies;
-                dataSource += '+ui_dialog';
+                if (dialogData.copies > copies) {
+                    console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (captured ' + Math.round(age/1000) + 's ago)');
+                    copies = dialogData.copies;
+                    dataSource += '+ui_dialog';
+                }
+                // Use total sheets from browser dialog (e.g. "5 sheets of paper")
+                if (dialogData.totalSheets > 0 && dialogData.totalSheets > totalPages) {
+                    console.log('[PRINT] UI Dialog override: totalPages ' + totalPages + ' -> ' + dialogData.totalSheets + ' (from browser sheets count)');
+                    totalPages = dialogData.totalSheets;
+                    dataSource += '+ui_sheets';
+                }
+                // Capture color setting from dialog (Color / Black and white)
+                if (dialogData.color) {
+                    dialogColorOverride = dialogData.color;
+                }
                 // Clear the cache entry after use to prevent re-use
                 printDialogCache.delete(printerKey);
             }
@@ -2098,6 +2117,17 @@ async function startDataCollection() {
             const cm = colorMode.toLowerCase();
             if (cm === 'color') printType = 'color';
             else if (cm === 'monochrome' || cm === 'grayscale') printType = 'bw';
+        }
+        // Override with UI dialog color if available (e.g. Chrome "Black and white" / "Color")
+        if (dialogColorOverride) {
+            const dc = dialogColorOverride.toLowerCase();
+            if (dc === 'color') {
+                printType = 'color';
+                dataSource += '+ui_color';
+            } else if (dc.includes('black') || dc.includes('mono') || dc.includes('gray') || dc.includes('grey')) {
+                printType = 'bw';
+                dataSource += '+ui_bw';
+            }
         }
 
         // Paper size normalization
