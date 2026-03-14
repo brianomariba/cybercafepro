@@ -1,4 +1,4 @@
-﻿const { execFile } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1664,6 +1664,17 @@ try {
             }
             $br.Close(); $fs.Close()
             if ($emfPageCount -gt $bestPages) { $bestPages = $emfPageCount }
+            
+            # Also extract copies from PrintTicket XML embedded in SPL file (used by Word)
+            $fs3 = [System.IO.File]::Open($spl.FullName, 'Open', 'Read', 'ReadWrite')
+            $buffer = New-Object byte[] 81920
+            $bytesRead = $fs3.Read($buffer, 0, $buffer.Length)
+            $fs3.Close()
+            $splText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
+            if ($splText -match '(?i)JobCopiesAllDocuments.*?Value\>(\d+)\<') {
+                $parsedCopies = [int]$matches[1]
+                if ($parsedCopies -gt $bestCopies) { $bestCopies = $parsedCopies }
+            }
         } catch {
             try { if ($br) { $br.Close() } } catch {}
             try { if ($fs) { $fs.Close() } } catch {}
@@ -2374,6 +2385,38 @@ try {
                     }
                 }
             } catch {}
+
+            # ===== SECONDARY: Extract MS Word Copies from Job Ticket XML in Spool file =====
+            # Microsoft Word often bypasses standard DEVMODE copies and embeds a JobTicket
+            # inside the spool directory. We must parse this.
+            if ($copies -le 1) {
+                try {
+                    $spoolDir = "$env:SystemRoot\System32\spool\PRINTERS"
+                    $jobIdStr = "{0:D5}" -f [int]$jobId
+                    $splFiles = Get-ChildItem "$spoolDir\*$jobIdStr.SPL" -ErrorAction SilentlyContinue
+                    foreach ($spl in $splFiles) {
+                        try {
+                            # Read the first 80KB where XML JobTicket is usually located
+                            $fs = [System.IO.File]::Open($spl.FullName, 'Open', 'Read', 'ReadWrite')
+                            $buffer = New-Object byte[] 81920
+                            $bytesRead = $fs.Read($buffer, 0, $buffer.Length)
+                            $fs.Close()
+                            
+                            $splText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
+                            
+                            # Word uses "JobCopiesAllDocuments" in PrintTicket
+                            if ($splText -match '(?i)JobCopiesAllDocuments.*?Value\>(\d+)\<') {
+                                $parsedCopies = [int]$matches[1]
+                                if ($parsedCopies -gt $copies) {
+                                    $copies = $parsedCopies
+                                }
+                            }
+                        } catch {
+                            try { if ($fs) { $fs.Close() } } catch {}
+                        }
+                    }
+                } catch {}
+            }
 
             # Retry if we're missing critical data (pages, color, media type)
             # IMPORTANT: Multi-page documents take 2-5 seconds to fully spool.
