@@ -3069,6 +3069,110 @@ while (\$true) {
         } catch {}
     }
 
+    # === METHOD 5: Printer Driver Properties/Preferences Dialog ===
+    # (e.g. "EPSON L3150 Series Properties" opened from Word or system dialog)
+    # This dialog has Paper Type, Color, Copies, Quality, Document Size, etc.
+    if (-not \$result) {
+        try {
+            \$allWins = \$root.FindAll([System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            foreach (\$win in \$allWins) {
+                \$wName = \$win.Current.Name
+                if (\$wName -match '(Properties|Preferences)' -and \$wName -match '(Printer|EPSON|Canon|HP|Brother|Xerox|Ricoh|Samsung|Lexmark|Series)') {
+                    # Found a printer properties dialog
+                    \$media = Find-UIValue \$win "Paper Type"
+                    if (-not \$media) { \$media = Find-UIValue \$win "Media Type" }
+                    \$color = ""
+                    \$copies = ""
+                    \$paper = ""
+                    \$quality = ""
+                    \$duplex = ""
+                    \$orient = ""
+
+                    # Color: check radio buttons
+                    try {
+                        \$colorCond = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, "Color")
+                        \$colorEls = \$win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$colorCond)
+                        foreach (\$ce in \$colorEls) {
+                            if (\$ce.Current.ControlType.ProgrammaticName -eq 'ControlType.RadioButton') {
+                                try {
+                                    \$si = \$ce.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                                    if (\$si.Current.IsSelected) { \$color = "Color" }
+                                } catch {}
+                            }
+                        }
+                        \$gsCond = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, "Grayscale")
+                        \$gsEls = \$win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$gsCond)
+                        foreach (\$ge in \$gsEls) {
+                            if (\$ge.Current.ControlType.ProgrammaticName -eq 'ControlType.RadioButton') {
+                                try {
+                                    \$si = \$ge.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                                    if (\$si.Current.IsSelected) { \$color = "Grayscale" }
+                                } catch {}
+                            }
+                        }
+                    } catch {}
+
+                    \$copies = Find-UIValue \$win "Copies"
+                    \$paper = Find-UIValue \$win "Document Size"
+                    \$quality = Find-UIValue \$win "Quality"
+                    \$duplex = Find-UIValue \$win "2-Sided Printing"
+
+                    # Orientation radio buttons
+                    try {
+                        \$pCond = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, "Portrait")
+                        \$pEls = \$win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$pCond)
+                        foreach (\$pe in \$pEls) {
+                            if (\$pe.Current.ControlType.ProgrammaticName -eq 'ControlType.RadioButton') {
+                                try {
+                                    \$si = \$pe.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                                    if (\$si.Current.IsSelected) { \$orient = "Portrait" }
+                                } catch {}
+                            }
+                        }
+                        \$lCond = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, "Landscape")
+                        \$lEls = \$win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$lCond)
+                        foreach (\$le in \$lEls) {
+                            if (\$le.Current.ControlType.ProgrammaticName -eq 'ControlType.RadioButton') {
+                                try {
+                                    \$si = \$le.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                                    if (\$si.Current.IsSelected) { \$orient = "Landscape" }
+                                } catch {}
+                            }
+                        }
+                    } catch {}
+
+                    # Extract printer name from dialog title (e.g. "EPSON L3150 Series Properties" -> "EPSON L3150 Series")
+                    \$printerFromTitle = \$wName -replace '\\s*(Properties|Preferences).*\$', ''
+
+                    if (\$media -or \$color -or \$copies) {
+                        \$copiesInt = 1
+                        if (\$copies) { try { \$copiesInt = [int]\$copies } catch {} }
+
+                        \$result = @{
+                            c = \$copiesInt
+                            p = \$printerFromTitle
+                            d = ""
+                            s = "driver_props"
+                            color = if (\$color) { \$color } else { "" }
+                            pages = ""
+                            paper = if (\$paper) { \$paper } else { "" }
+                            media = if (\$media) { \$media } else { "" }
+                            orient = \$orient
+                            duplex = if (\$duplex) { \$duplex } else { "" }
+                            sheets = 0
+                            final = 0; t = (Get-Date -Format o)
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
+
     # === DIALOG STATE TRACKING ===
     # Track open/close transitions to detect when user clicks Print or Cancel
     if (\$result) {
