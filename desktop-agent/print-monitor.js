@@ -5,8 +5,16 @@ const os = require('os');
 
 // Track processed jobs to avoid duplicates
 let processedJobIds = new Set();
-// Cache printer capabilities
+// Cache printer capabilities — invalidated every 30 minutes to pick up
+// hardware changes (e.g., color cartridge removed, new printer installed)
 let printerCache = new Map();
+const PRINTER_CACHE_INVALIDATION_MS = 30 * 60 * 1000; // 30 minutes
+setInterval(() => {
+    if (printerCache.size > 0) {
+        console.log(`[PrintMonitor] Clearing printer capability cache (${printerCache.size} entries) for fresh re-detection`);
+        printerCache.clear();
+    }
+}, PRINTER_CACHE_INVALIDATION_MS);
 // Cache printer page counters to avoid redundant calls
 let printerPageCounterCache = { data: null, timestamp: 0 };
 const PAGE_COUNTER_CACHE_TTL = 30000; // 30 seconds
@@ -669,7 +677,7 @@ function enablePrintLogging() {
     execFile('wevtutil', ['sl', 'Microsoft-Windows-PrintService/Operational', '/e:true'], (err) => {
         if (err) {
             console.log('[PrintMonitor] Direct enable failed, trying with elevation...');
-            // Try with PowerShell elevation â€” this shows a UAC prompt if needed
+            // Try with PowerShell elevation — this shows a UAC prompt if needed
             const { exec } = require('child_process');
             exec('powershell -NoProfile -Command "Start-Process wevtutil -ArgumentList \'sl\',\'Microsoft-Windows-PrintService/Operational\',\'/e:true\' -Verb RunAs -Wait -WindowStyle Hidden"',
                 { timeout: 15000 },
@@ -685,6 +693,54 @@ function enablePrintLogging() {
             console.log('[PrintMonitor] Print Service Operational logging enabled');
         }
     });
+}
+
+/**
+ * Verify that the Print Service Operational log is actually enabled.
+ * Returns a promise that resolves to true/false.
+ * If not enabled, attempts to enable with retries every 30 seconds.
+ */
+async function verifyPrintLogging() {
+    const checkScript = `
+try {
+    $log = Get-WinEvent -ListLog 'Microsoft-Windows-PrintService/Operational' -ErrorAction Stop
+    if ($log.IsEnabled) { 'ENABLED' } else { 'DISABLED' }
+} catch { 'ERROR' }
+`;
+    const result = await runPS(checkScript, 10000);
+    const status = result.trim();
+
+    if (status === 'ENABLED') {
+        console.log('[PrintMonitor] ✅ Print Service Operational log is ENABLED');
+        return true;
+    }
+
+    console.error('[PrintMonitor] ⚠️ Print Service Operational log is NOT enabled! Print tracking will NOT work.');
+
+    // Retry enabling
+    enablePrintLogging();
+
+    // Schedule periodic retry if still not enabled
+    let retryCount = 0;
+    const retryInterval = setInterval(async () => {
+        retryCount++;
+        if (retryCount > 10) {
+            clearInterval(retryInterval);
+            console.error('[PrintMonitor] ❌ Failed to enable print logging after 10 retries. Print tracking is DISABLED.');
+            return;
+        }
+
+        const retryResult = await runPS(checkScript, 10000);
+        if (retryResult.trim() === 'ENABLED') {
+            console.log('[PrintMonitor] ✅ Print Service Operational log is now ENABLED (after retry)');
+            clearInterval(retryInterval);
+        } else {
+            console.log(`[PrintMonitor] Retry ${retryCount}/10: Still not enabled, retrying...`);
+            enablePrintLogging();
+        }
+    }, 30000); // Retry every 30 seconds
+
+    return false;
 }
 
 /**
@@ -3293,6 +3349,7 @@ module.exports = {
     getAllPrinterData,
     clearPrinterCache,
     enablePrintLogging,
+    verifyPrintLogging,
     detectPrintType,
     detectColorCapability,
     generatePrintJobKey,

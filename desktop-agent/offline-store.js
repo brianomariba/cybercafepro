@@ -14,6 +14,7 @@ class OfflineStore {
         this.pendingActionsFile = path.join(this.storeDir, '.pending-actions.json');
         this.spoolerCacheFile = path.join(this.storeDir, '.spooler-cache.json');
         this.printJobsFile = path.join(this.storeDir, '.print-jobs-log.json');
+        this.sentPrintJobIdsFile = path.join(this.storeDir, '.sent-print-job-ids.json');
         this.data = {
             inventory: [],
             services: [],
@@ -469,6 +470,41 @@ class OfflineStore {
             return Array.isArray(parsed) ? parsed : [];
         } catch (e) {
             return [];
+        }
+    }
+
+    // ==================== SENT PRINT JOB IDS PERSISTENCE ====================
+    // Prevents duplicate job submissions after agent restart.
+    // The in-memory sentPrintJobIds Set is persisted so that on restart,
+    // jobs from the Event Log lookback window aren't re-sent.
+
+    /**
+     * Save the sentPrintJobIds Set to disk.
+     * @param {Set} sentIds - Set of print job ID strings
+     */
+    saveSentPrintJobIds(sentIds) {
+        try {
+            const entries = [...sentIds].slice(-500); // Keep last 500
+            fs.writeFileSync(this.sentPrintJobIdsFile, JSON.stringify(entries), 'utf8');
+        } catch (e) {
+            // Silent — best-effort persistence
+        }
+    }
+
+    /**
+     * Load persisted sentPrintJobIds from disk.
+     * @returns {Set} Set of print job ID strings
+     */
+    loadSentPrintJobIds() {
+        try {
+            if (!fs.existsSync(this.sentPrintJobIdsFile)) return new Set();
+            const raw = fs.readFileSync(this.sentPrintJobIdsFile, 'utf8');
+            const entries = JSON.parse(raw);
+            if (!Array.isArray(entries)) return new Set();
+            console.log(`[OfflineStore] Recovered ${entries.length} sent print job IDs from disk.`);
+            return new Set(entries);
+        } catch (e) {
+            return new Set();
         }
     }
 }

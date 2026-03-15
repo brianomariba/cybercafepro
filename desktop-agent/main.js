@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
 
@@ -210,7 +210,7 @@ let appUsageTracker = new AppUsageTracker();
 let urlTracker = new LiveUrlTracker();
 let lastScreenshotTime = 0;
 let connectedUsbDevices = [];
-let sentPrintJobIds = new Set(); // Track sent print jobs to avoid duplicates
+let sentPrintJobIds = offlineStore.loadSentPrintJobIds(); // Track sent print jobs — persisted across restarts
 
 // Cache for copies captured from print dialog UI (Word backstage, standard dialog)
 // Key: printer name (lowercase), Value: { copies, document, timestamp, source }
@@ -331,6 +331,10 @@ async function createWindows() {
 
     // --- ACTIVATION: PRINT LOGGING ---
     enablePrintLogging(); // Ensure event logging is active for history tracking
+    // Verify after a delay to confirm it actually took effect
+    setTimeout(async () => {
+        await verifyPrintLogging();
+    }, 5000);
 
     // --- SECURITY: PERSISTENT FOCUS ---
     // Delay startup focus enforcement to allow page to fully render and inputs to initialize
@@ -1066,7 +1070,9 @@ async function startSession(username) {
     resetDeviceTracking();
     connectedUsbDevices = [];
     sentBrowserUrls.clear();
-    sentPrintJobIds.clear();
+    // NOTE: Do NOT clear sentPrintJobIds on session start — we need cross-session
+    // dedup to prevent re-sending jobs from the Event Log lookback window.
+    // The set is pruned by size instead (keeps last 250 entries).
 
     currentSession = {
         id: uuidv4(),
@@ -1849,6 +1855,25 @@ async function startDataCollection() {
         console.error('[PRINT] Real-time watcher failed to start:', e.message);
     }
 
+    // HEALTH CHECK: Periodically verify the spooler watcher is alive and processing.
+    // The auto-restart only triggers on process crash. If the PowerShell process hangs
+    // (stops producing output but stays alive), prints get missed silently.
+    // This check detects hung watchers by verifying recent output activity.
+    let lastSpoolerCacheUpdate = Date.now();
+    const originalSaveSpoolerCache = offlineStore.saveSpoolerCache.bind(offlineStore);
+    offlineStore.saveSpoolerCache = function(cache) {
+        lastSpoolerCacheUpdate = Date.now();
+        return originalSaveSpoolerCache(cache);
+    };
+    setInterval(() => {
+        const timeSinceLastCapture = Date.now() - lastSpoolerCacheUpdate;
+        // If no spooler cache updates in 5 minutes, the watcher might be hung.
+        // Only alert — the watcher's internal auto-restart handles actual recovery.
+        if (timeSinceLastCapture > 300000) {
+            console.warn('[PRINT] ⚠️ Spooler watcher health check: No captures in ' + Math.round(timeSinceLastCapture / 60000) + ' minutes. Watcher may be idle or hung.');
+        }
+    }, 60000);
+
     // Start Print Dialog UI Monitor — reads copies from Word backstage / standard dialog
     // This is the ONLY reliable source for EPSON printers that hide copies from all APIs
     try {
@@ -2255,12 +2280,14 @@ async function startDataCollection() {
 
     // Main print poll interval - collects completed jobs, buffers them, groups, sends
     setInterval(async () => {
-        if (isLocked || !currentSession) return;
+        // CRITICAL: Do NOT skip when locked. We must capture ALL print jobs
+        // regardless of session state. Jobs printed while locked are tagged
+        // with session=null so they still appear in audit logs.
         if (printPollRunning) return;
         printPollRunning = true;
 
         try {
-            const completedJobs = await getRecentCompletedJobs(60);
+            const completedJobs = await getRecentCompletedJobs(120);
 
             // Add new completed jobs to the buffer
             for (const job of completedJobs) {
@@ -2291,6 +2318,8 @@ async function startDataCollection() {
                 const entries = [...sentPrintJobIds];
                 sentPrintJobIds = new Set(entries.slice(-250));
             }
+            // Persist to disk so restarts don't re-send jobs
+            offlineStore.saveSentPrintJobIds(sentPrintJobIds);
         } catch (e) {
             // Silently fail - event log might not be enabled yet
         }
@@ -2682,20 +2711,28 @@ async function sendToServer(url, data) {
     } catch (error) {
         const isNetworkError = !error.response; // No response = network-level failure
         const isServerError = error.response && error.response.status >= 500; // 5xx = server issue
+        const isClientError = error.response && error.response.status >= 400 && error.response.status < 500;
         const isPrintData = data && data.type === 'print';
 
         if (isNetworkError || isServerError) {
-            // Queue for retry â€” ALL network failures and 5xx server errors
+            // Queue for retry — ALL network failures and 5xx server errors
             dataQueue.enqueue(url, data);
             const reason = error.code || (isServerError ? `HTTP ${error.response.status}` : 'network_error');
             if (isPrintData) {
                 console.log(`[SYNC] Warning Print data queued for retry - ${reason} (job: ${data.data?.jobId || 'unknown'})`);
             } else {
-                console.log(`[SYNC] Queued for retry â€” ${reason}`);
+                console.log(`[SYNC] Queued for retry — ${reason}`);
             }
             isOnline = false;
+        } else if (isClientError && isPrintData) {
+            // SAFETY NET: Queue print data even on 4xx errors.
+            // Print data is irreplaceable — a 4xx could be a temporary API mismatch
+            // (e.g., endpoint changed during deploy). Better to retry and eventually
+            // discard after MAX_RETRY_ATTEMPTS than to lose billing data permanently.
+            dataQueue.enqueue(url, data);
+            console.warn(`[SYNC] ⚠️ Print data saved to retry queue despite HTTP ${error.response.status} — data too valuable to discard (job: ${data.data?.jobId || 'unknown'})`);
         } else {
-            // 4xx or other client errors â€” log but don't retry (would keep failing)
+            // 4xx for non-print data — log but don't retry (would keep failing)
             console.error('[SYNC] API Error:', error.message, error.response?.data);
         }
     }
