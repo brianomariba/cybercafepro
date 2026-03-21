@@ -660,11 +660,11 @@ function Inventory() {
 
             {/* Alerts */}
             {lowStockItems.length > 0 && (
-                <Alert message={`⚠️ ${lowStockItems.length} item(s) running low`} type="warning" showIcon closable style={{ marginBottom: 12 }}
+                <Alert message={<span style={{ color: '#000' }}>{`⚠️ ${lowStockItems.length} item(s) running low`}</span>} type="warning" showIcon closable style={{ marginBottom: 12 }}
                     description={<Space wrap>{lowStockItems.map(i => <Tag key={i._id} color="volcano" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name}: {i.stock} left</Tag>)}</Space>} />
             )}
             {outOfStockItems.length > 0 && (
-                <Alert message={`🚫 ${outOfStockItems.length} item(s) out of stock`} type="error" showIcon closable style={{ marginBottom: 12 }}
+                <Alert message={<span style={{ color: '#000' }}>{`🚫 ${outOfStockItems.length} item(s) out of stock`}</span>} type="error" showIcon closable style={{ marginBottom: 12 }}
                     description={<Space wrap>{outOfStockItems.map(i => <Tag key={i._id} color="red" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name}</Tag>)}</Space>} />
             )}
 
