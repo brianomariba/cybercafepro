@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData, createPageCounterReading, getPageCounterReadings, deletePageCounterReading, getPhotocopyData } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData, getPageCounterReadings, deletePageCounterReading, getPhotocopyData } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -40,10 +40,7 @@ function PhotocopyTracker({ printers }) {
     const [readings, setReadings] = useState([]);
     const [photocopyData, setPhotocopyData] = useState(null);
     const [selectedPrinter, setSelectedPrinter] = useState(null);
-    const [counterValue, setCounterValue] = useState('');
-    const [notes, setNotes] = useState('');
     const [loading, setLoading] = useState(false);
-    const [submitting, setSubmitting] = useState(false);
 
     // Build a flat list of unique printer names from all connected clients
     const allPrinterNames = useMemo(() => {
@@ -86,34 +83,6 @@ function PhotocopyTracker({ printers }) {
         fetchPhotocopyInfo();
     }, [selectedPrinter]);
 
-    const handleAddReading = async () => {
-        if (!selectedPrinter || !counterValue) {
-            message.warning('Select a printer and enter a counter value');
-            return;
-        }
-        const val = parseInt(counterValue, 10);
-        if (isNaN(val) || val < 0) {
-            message.error('Counter value must be a non-negative number');
-            return;
-        }
-        setSubmitting(true);
-        try {
-            await createPageCounterReading({
-                printerName: selectedPrinter,
-                counterValue: val,
-                notes
-            });
-            message.success('Page counter reading saved!');
-            setCounterValue('');
-            setNotes('');
-            fetchPhotocopyInfo();
-        } catch (e) {
-            const msg = e.response?.data?.error || 'Failed to save reading';
-            message.error(msg);
-        } finally {
-            setSubmitting(false);
-        }
-    };
 
     const handleDeleteReading = async (id) => {
         try {
@@ -136,9 +105,8 @@ function PhotocopyTracker({ printers }) {
         return <Tag style={{ fontSize: 10 }}>{source}</Tag>;
     };
 
-    // Count auto vs manual readings
+    // Count auto readings
     const autoReadings = readings.filter(r => r.source && r.source !== 'manual').length;
-    const manualReadings = readings.filter(r => !r.source || r.source === 'manual').length;
 
     return (
         <div>
@@ -153,68 +121,27 @@ function PhotocopyTracker({ printers }) {
                     <span style={{ fontSize: 18 }}>🤖</span>
                     <Text style={{ color: '#00d488', fontSize: 13 }}>
                         <strong>Auto-collection active!</strong> The agent is automatically reading page counters.
-                        <span> ({autoReadings} auto, {manualReadings} manual readings)</span>
+                        <span> ({autoReadings} automatic readings collected)</span>
                     </Text>
                 </div>
             )}
-            {/* Printer Selector + Counter Input */}
-            <Card
-                title={
-                    <Space>
-                        <PrinterOutlined style={{ color: '#7b2cbf' }} />
-                        <span>Record Page Counter Reading</span>
-                    </Space>
-                }
-                style={{ marginBottom: 24 }}
-            >
-                <Row gutter={[16, 16]} align="middle">
-                    <Col xs={24} md={6}>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Printer</Text>
-                        <Select
-                            value={selectedPrinter}
-                            onChange={setSelectedPrinter}
-                            style={{ width: '100%' }}
-                            placeholder="Select printer"
-                            showSearch
-                            filterOption={(input, option) => option.label.toLowerCase().includes(input.toLowerCase())}
-                            options={allPrinterNames.map(n => ({ value: n, label: n }))}
-                        />
-                    </Col>
-                    <Col xs={24} md={5}>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Counter Value</Text>
-                        <Input
-                            placeholder="e.g. 12345"
-                            value={counterValue}
-                            onChange={e => setCounterValue(e.target.value)}
-                            type="number"
-                            min={0}
-                            onPressEnter={handleAddReading}
-                        />
-                    </Col>
-                    <Col xs={24} md={8}>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Notes (optional)</Text>
-                        <Input
-                            placeholder="e.g. Morning reading, End of day"
-                            value={notes}
-                            onChange={e => setNotes(e.target.value)}
-                            onPressEnter={handleAddReading}
-                        />
-                    </Col>
-                    <Col xs={24} md={5}>
-                        <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>&nbsp;</Text>
-                        <Button
-                            type="primary"
-                            icon={<CheckCircleOutlined />}
-                            onClick={handleAddReading}
-                            loading={submitting}
-                            block
-                            style={{ background: '#7b2cbf', borderColor: '#7b2cbf' }}
-                        >
-                            Save Reading
-                        </Button>
-                    </Col>
-                </Row>
-            </Card>
+
+            {/* Printer Selector */}
+            <div style={{ marginBottom: 16 }}>
+                <Space>
+                    <Text type="secondary">Printer:</Text>
+                    <Select
+                        value={selectedPrinter}
+                        onChange={setSelectedPrinter}
+                        style={{ width: 250 }}
+                        placeholder="Select printer"
+                        showSearch
+                        filterOption={(input, option) => option.label.toLowerCase().includes(input.toLowerCase())}
+                        options={allPrinterNames.map(n => ({ value: n, label: n }))}
+                    />
+                    <Button icon={<ReloadOutlined />} onClick={fetchPhotocopyInfo} loading={loading} size="small">Refresh</Button>
+                </Space>
+            </div>
 
             {/* Summary Stats */}
             {photocopyData && photocopyData.intervals && photocopyData.intervals.length > 0 && (
@@ -427,10 +354,9 @@ function PhotocopyTracker({ printers }) {
                 <Text type="secondary" style={{ fontSize: 13 }}>
                     1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's internal page counter every ~5 minutes
                     (same data as <em>Printer Properties → Maintenance → Nozzle Check</em>).<br />
-                    2. <strong>👤 Manual fallback:</strong> If the printer is offline or not Epson, you can manually enter counter readings above.<br />
-                    3. The system tracks all print jobs sent through computers automatically.<br />
-                    4. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
-                    5. This gives you an accurate count of pages used for photocopying (manual copier usage).
+                    2. The system tracks all print jobs sent through computers automatically.<br />
+                    3. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
+                    4. This gives you an accurate count of pages used for photocopying (manual copier usage).
                 </Text>
             </Card>
         </div>
