@@ -2452,12 +2452,13 @@ try {
                                             # Map EPSON media IDs to human-readable names
                                             # (reverse-engineered via MergeAndValidatePrintTicket)
                                             $epsonMediaMap = @{
-                                                0 = 'Plain'
-                                                1 = 'Plain'
-                                                275 = 'PhotographicSemiGloss'
+                                                0 = 'Plain'; 1 = 'Plain'
+                                                2 = 'Transparency'; 3 = 'Glossy'; 4 = 'Heavyweight'
+                                                256 = 'BrightWhiteInkJet'; 267 = 'PhotoQualityInkJet'
+                                                269 = 'MatteHeavyweight'; 271 = 'DoubleSidedMatte'
+                                                275 = 'PhotographicSemiGloss'; 290 = 'PhotoPaperGlossy'
                                                 318 = 'Bond'
-                                                325 = 'PhotographicHighGloss'
-                                                326 = 'PhotographicMatte'
+                                                325 = 'PhotographicHighGloss'; 326 = 'PhotographicMatte'
                                                 352 = 'PhotographicGlossy'
                                             }
                                             if ($epsonMediaMap.ContainsKey($epsonMediaId)) {
@@ -2507,14 +2508,12 @@ try {
                     # EPSON custom: 275=SemiGloss, 318=Bond, 325=HighGloss, 326=Matte, 352=UltraGlossy
                     if ($dm[1] -gt 0) {
                         $mediaMap = @{
-                            1 = 'Plain'
-                            2 = 'Transparency'
-                            3 = 'Glossy'
-                            4 = 'Heavyweight'
-                            275 = 'PhotographicSemiGloss'
+                            1 = 'Plain'; 2 = 'Transparency'; 3 = 'Glossy'; 4 = 'Heavyweight'
+                            256 = 'BrightWhiteInkJet'; 267 = 'PhotoQualityInkJet'
+                            269 = 'MatteHeavyweight'; 271 = 'DoubleSidedMatte'
+                            275 = 'PhotographicSemiGloss'; 290 = 'PhotoPaperGlossy'
                             318 = 'Bond'
-                            325 = 'PhotographicHighGloss'
-                            326 = 'PhotographicMatte'
+                            325 = 'PhotographicHighGloss'; 326 = 'PhotographicMatte'
                             352 = 'PhotographicGlossy'
                         }
                         if ($mediaMap.ContainsKey($dm[1])) {
@@ -3026,10 +3025,73 @@ function Find-UIValue(\$parent, \$name) {
         foreach (\$el in \$els) {
             \$ct = \$el.Current.ControlType.ProgrammaticName
             if (\$ct -eq 'ControlType.Text') { continue }
+            # 1. Try ValuePattern (works for text inputs, web controls)
             try {
                 \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                return \$vp.Current.Value
+                \$val = \$vp.Current.Value
+                if (\$val -and \$val -ne '') { return \$val }
             } catch {}
+            # 2. Try SelectionPattern (works for ComboBoxes, ListBoxes - EPSON Paper Type dropdown)
+            try {
+                \$sp = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
+                \$sel = \$sp.Current.GetSelection()
+                if (\$sel -and \$sel.Length -gt 0) {
+                    return \$sel[0].Current.Name
+                }
+            } catch {}
+            # 3. For ComboBox: find selected ListItem inside
+            if (\$ct -eq 'ControlType.ComboBox') {
+                try {
+                    \$liCond = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                        [System.Windows.Automation.ControlType]::ListItem)
+                    \$items = \$el.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$liCond)
+                    foreach (\$item in \$items) {
+                        try {
+                            \$si = \$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                            if (\$si.Current.IsSelected) {
+                                return \$item.Current.Name
+                            }
+                        } catch {}
+                    }
+                } catch {}
+                # 3b. Fallback: first child text element often shows the selected value
+                try {
+                    \$firstChild = \$el.FindFirst([System.Windows.Automation.TreeScope]::Children,
+                        [System.Windows.Automation.Condition]::TrueCondition)
+                    if (\$firstChild -and \$firstChild.Current.Name -and \$firstChild.Current.Name -ne \$name -and \$firstChild.Current.Name -ne '') {
+                        return \$firstChild.Current.Name
+                    }
+                } catch {}
+            }
+        }
+    } catch {}
+    # 4. Fallback: search for label text followed by a sibling value control
+    try {
+        \$all = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        \$foundLabel = \$false
+        foreach (\$el in \$all) {
+            if (\$el.Current.Name -eq \$name -and \$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Text') {
+                \$foundLabel = \$true
+                continue
+            }
+            if (\$foundLabel) {
+                \$sct = \$el.Current.ControlType.ProgrammaticName
+                if (\$sct -eq 'ControlType.ComboBox' -or \$sct -eq 'ControlType.List' -or \$sct -eq 'ControlType.Edit') {
+                    try {
+                        \$vp2 = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$v2 = \$vp2.Current.Value
+                        if (\$v2 -and \$v2 -ne '') { return \$v2 }
+                    } catch {}
+                    try {
+                        \$sp2 = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
+                        \$sel2 = \$sp2.Current.GetSelection()
+                        if (\$sel2 -and \$sel2.Length -gt 0) { return \$sel2[0].Current.Name }
+                    } catch {}
+                }
+                \$foundLabel = \$false
+            }
         }
     } catch {}
     return \$null
@@ -3102,10 +3164,23 @@ while (\$true) {
                     }
                 } catch {}
 
+                # Try to capture paper/media type from Office settings area
+                \$officePaper = ""
+                \$officeMedia = ""
+                try {
+                    \$officePaper = Find-UIValue \$appWin "Paper Size"
+                    if (-not \$officePaper) { \$officePaper = Find-UIValue \$appWin "Page Size" }
+                    \$officeMedia = Find-UIValue \$appWin "Paper Type"
+                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media Type" }
+                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media type" }
+                } catch {}
+
                 \$result = @{
                     c = \$copies; p = \$printer; d = \$appWin.Current.Name
-                    s = "office"; color = ""; pages = ""; paper = ""
-                    media = ""; orient = ""; duplex = \$duplex; sheets = 0
+                    s = "office"; color = ""; pages = ""
+                    paper = if (\$officePaper) { \$officePaper } else { "" }
+                    media = if (\$officeMedia) { \$officeMedia } else { "" }
+                    orient = ""; duplex = \$duplex; sheets = 0
                     final = 0; t = (Get-Date -Format o)
                 }
             }
@@ -3248,8 +3323,16 @@ while (\$true) {
                 \$wName = \$win.Current.Name
                 if (\$wName -match '(Properties|Preferences)' -and \$wName -match '(Printer|EPSON|Canon|HP|Brother|Xerox|Ricoh|Samsung|Lexmark|Series)') {
                     # Found a printer properties dialog
+                    # Search all common label variants for paper/media type
                     \$media = Find-UIValue \$win "Paper Type"
                     if (-not \$media) { \$media = Find-UIValue \$win "Media Type" }
+                    if (-not \$media) { \$media = Find-UIValue \$win "Paper type" }
+                    if (-not \$media) { \$media = Find-UIValue \$win "Media type" }
+                    if (-not \$media) { \$media = Find-UIValue \$win "Type" }
+                    if (-not \$media) { \$media = Find-UIValue \$win "Media" }
+                    # EPSON-specific: some dialogs use "Paper Type:" with colon
+                    if (-not \$media) { \$media = Find-UIValue \$win "Paper Type:" }
+                    if (-not \$media) { \$media = Find-UIValue \$win "Media Type:" }
                     \$color = ""
                     \$copies = ""
                     \$paper = ""

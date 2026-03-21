@@ -2108,10 +2108,12 @@ async function startDataCollection() {
         const printerKey = (job.printer || '').toLowerCase().trim();
         const dialogData = printDialogCache.get(printerKey);
         let dialogColorOverride = '';
+        let dialogDataValid = false; // Track if dialog data is usable
         if (dialogData && dialogData.finalized) {
             const age = Date.now() - dialogData.timestamp;
             // Use dialog-captured data if finalized within last 2 minutes
             if (age < 120000) {
+                dialogDataValid = true;
                 if (dialogData.copies > copies) {
                     console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (finalized ' + Math.round(age/1000) + 's ago)');
                     copies = dialogData.copies;
@@ -2189,7 +2191,8 @@ async function startDataCollection() {
         let mediaType = (cached && cached.mediaType) ? cached.mediaType : (job.mediaType || 'Plain Paper');
         
         // Override with UI-captured media type (from Windows system dialog "Paper type" dropdown)
-        if (dialogData && dialogData.finalized && dialogData.mediaType) {
+        // IMPORTANT: Only use if dialogDataValid - prevents stale/expired dialog data from overriding
+        if (dialogDataValid && dialogData && dialogData.mediaType) {
             console.log('[PRINT] UI Dialog media type override: "' + mediaType + '" -> "' + dialogData.mediaType + '"');
             mediaType = dialogData.mediaType;
             dataSource += '+ui_media';
@@ -2207,7 +2210,13 @@ async function startDataCollection() {
                 'photographicglossy': 'Glossy Photo', 'photographic': 'Photo Paper',
                 'photographicmatte': 'Matte Photo', 'photographichighgloss': 'High Gloss Photo',
                 'photographicsatin': 'Satin Photo', 'photographicsemigloss': 'Semi-Gloss Photo',
-                // EPSON-specific types (from printer driver dropdown)
+                // DEVMODE media ID names (from SpoolerWatcher EPSON maps)
+                'brightwhiteinkjet': 'Epson Bright White', 'photoqualityinkjet': 'Epson Photo Quality Ink Jet',
+                'matteheavyweight': 'Epson Matte Heavyweight', 'doublesidedmatte': 'Epson Double-Sided Matte',
+                'photopaperglossy': 'Photo Paper Glossy', 'glossy': 'Glossy Photo',
+                'transparency': 'Transparency', 'heavyweight': 'Heavyweight',
+                'bond': 'Bond',
+                // EPSON-specific types (from printer driver dropdown — exact names)
                 'epson photo quality ink jet': 'Epson Photo Quality Ink Jet',
                 'epson matte': 'Epson Matte',
                 'epson ultra glossy': 'Epson Ultra Glossy',
@@ -2222,16 +2231,18 @@ async function startDataCollection() {
                 'epson ultra premium photo paper glossy': 'Epson Ultra Glossy',
                 'epson premium presentation paper matte': 'Epson Premium Matte',
                 'epson photo quality ink jet paper': 'Epson Photo Quality Ink Jet',
+                'epson premium presentation paper matte double-sided': 'Epson Double-Sided Matte',
+                'epson double-sided matte paper': 'Epson Double-Sided Matte',
                 // Other common types
-                'transparency': 'Transparency', 'tshirttransfer': 'T-Shirt Transfer',
+                'tshirttransfer': 'T-Shirt Transfer',
                 'envelope': 'Envelope', 'cardstock': 'Cardstock',
                 'labels': 'Labels', 'backlitfilm': 'Film',
-                'bond': 'Bond', 'recycled': 'Recycled',
-                'heavyweight': 'Heavyweight', 'lightweight': 'Lightweight',
+                'recycled': 'Recycled',
+                'lightweight': 'Lightweight',
                 'colored paper': 'Colored Paper', 'cotton': 'Cotton Paper',
                 'vellum': 'Vellum',
             };
-            mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy Photo' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mt.includes('satin') ? 'Satin Photo' : mt.includes('premium') ? 'Premium Paper' : mediaType);
+            mediaType = mediaMap[mt] || (mt.includes('glossy') ? 'Glossy Photo' : mt.includes('matte') ? 'Matte' : mt.includes('photo') ? 'Photo Paper' : mt.includes('satin') ? 'Satin Photo' : mt.includes('premium') ? 'Premium Paper' : mt.includes('epson') ? mediaType : mediaType);
         }
 
         // Color mode
