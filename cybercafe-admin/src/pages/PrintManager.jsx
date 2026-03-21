@@ -41,6 +41,8 @@ function PhotocopyTracker({ printers }) {
     const [photocopyData, setPhotocopyData] = useState(null);
     const [selectedPrinter, setSelectedPrinter] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [dateRange, setDateRange] = useState(null);
+    const [readingsSort, setReadingsSort] = useState('newest');
 
     // Build a flat list of unique printer names from all connected clients
     const allPrinterNames = useMemo(() => {
@@ -83,7 +85,6 @@ function PhotocopyTracker({ printers }) {
         fetchPhotocopyInfo();
     }, [selectedPrinter]);
 
-
     const handleDeleteReading = async (id) => {
         try {
             await deletePageCounterReading(id);
@@ -93,8 +94,6 @@ function PhotocopyTracker({ printers }) {
             message.error('Failed to delete reading');
         }
     };
-
-    const summary = photocopyData?.summary || {};
 
     // Helper to render source badge
     const renderSourceBadge = (reading) => {
@@ -107,6 +106,111 @@ function PhotocopyTracker({ printers }) {
 
     // Count auto readings
     const autoReadings = readings.filter(r => r.source && r.source !== 'manual').length;
+
+    // Filter intervals by date range
+    const filteredIntervals = useMemo(() => {
+        const intervals = photocopyData?.intervals || [];
+        if (!dateRange || !dateRange[0] || !dateRange[1]) return intervals;
+        return intervals.filter(interval => {
+            const start = dayjs(interval.startReading.recordedAt);
+            const end = dayjs(interval.endReading.recordedAt);
+            return end.isAfter(dateRange[0].startOf('day')) && start.isBefore(dateRange[1].endOf('day'));
+        });
+    }, [photocopyData, dateRange]);
+
+    // Filter readings by date range
+    const filteredReadings = useMemo(() => {
+        let result = [...readings];
+        if (dateRange && dateRange[0] && dateRange[1]) {
+            result = result.filter(r =>
+                dayjs(r.recordedAt).isAfter(dateRange[0].startOf('day')) &&
+                dayjs(r.recordedAt).isBefore(dateRange[1].endOf('day'))
+            );
+        }
+        // Sort
+        if (readingsSort === 'newest') result.sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt));
+        else if (readingsSort === 'oldest') result.sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt));
+        else if (readingsSort === 'highest') result.sort((a, b) => (b.counterValue || 0) - (a.counterValue || 0));
+        else if (readingsSort === 'lowest') result.sort((a, b) => (a.counterValue || 0) - (b.counterValue || 0));
+        return result;
+    }, [readings, dateRange, readingsSort]);
+
+    // Filtered summary stats
+    const filteredSummary = useMemo(() => {
+        const intervals = filteredIntervals;
+        return {
+            totalPhotocopies: intervals.reduce((s, i) => s + (i.photocopies || 0), 0),
+            totalCounterDiff: intervals.reduce((s, i) => s + (i.counterDiff || 0), 0),
+            totalPrintJobs: intervals.reduce((s, i) => s + (i.printPages || 0), 0),
+            estimatedRevenue: intervals.reduce((s, i) => s + (i.photocopyRevenue || 0), 0),
+        };
+    }, [filteredIntervals]);
+
+    // Interval table columns
+    const intervalColumns = [
+        {
+            title: 'Period', key: 'period', width: 200,
+            sorter: (a, b) => new Date(a.startReading.recordedAt) - new Date(b.startReading.recordedAt),
+            defaultSortOrder: 'descend',
+            render: (_, interval) => (
+                <div>
+                    <Text style={{ fontSize: 12 }}>{dayjs(interval.startReading.recordedAt).format('MMM D, HH:mm')}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}> → </Text>
+                    <Text style={{ fontSize: 12 }}>{dayjs(interval.endReading.recordedAt).format('MMM D, HH:mm')}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(interval.endReading.recordedAt).fromNow()}</Text>
+                </div>
+            )
+        },
+        {
+            title: 'Counter', key: 'counter', width: 140,
+            render: (_, interval) => (
+                <Tag color="purple" style={{ fontSize: 11 }}>
+                    {interval.startReading.counterValue?.toLocaleString()} → {interval.endReading.counterValue?.toLocaleString()}
+                </Tag>
+            )
+        },
+        {
+            title: 'Diff', dataIndex: 'counterDiff', key: 'counterDiff', width: 80,
+            sorter: (a, b) => (a.counterDiff || 0) - (b.counterDiff || 0),
+            render: (v) => <Text strong>{(v || 0).toLocaleString()}</Text>
+        },
+        {
+            title: 'Print Pages', dataIndex: 'printPages', key: 'printPages', width: 100,
+            sorter: (a, b) => (a.printPages || 0) - (b.printPages || 0),
+            render: (v) => <Text style={{ color: '#00d4ff' }}>{(v || 0).toLocaleString()}</Text>
+        },
+        {
+            title: 'Photocopies', dataIndex: 'photocopies', key: 'photocopies', width: 110,
+            sorter: (a, b) => (a.photocopies || 0) - (b.photocopies || 0),
+            render: (v) => <Text strong style={{ color: '#7b2cbf', fontSize: 14 }}>{(v || 0).toLocaleString()}</Text>
+        },
+        {
+            title: 'Revenue', dataIndex: 'photocopyRevenue', key: 'revenue', width: 120,
+            sorter: (a, b) => (a.photocopyRevenue || 0) - (b.photocopyRevenue || 0),
+            render: (v) => <Text style={{ color: '#00ff88', fontFamily: 'JetBrains Mono', fontSize: 12 }}>{formatKSH(v || 0)}</Text>
+        },
+        {
+            title: 'Breakdown', key: 'breakdown', width: 160,
+            render: (_, interval) => {
+                const total = interval.counterDiff || 1;
+                const printPct = Math.round((interval.printPages / total) * 100);
+                const copyPct = 100 - printPct;
+                return (
+                    <div>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
+                            <Text style={{ fontSize: 10, color: '#00d4ff' }}>🖨️ {printPct}%</Text>
+                            <Text style={{ fontSize: 10, color: '#7b2cbf' }}>📋 {copyPct}%</Text>
+                        </div>
+                        <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
+                            {interval.printPages > 0 && <div style={{ width: `${printPct}%`, background: '#00d4ff' }} />}
+                            {interval.photocopies > 0 && <div style={{ width: `${copyPct}%`, background: '#7b2cbf' }} />}
+                        </div>
+                    </div>
+                );
+            }
+        },
+    ];
 
     return (
         <div>
@@ -126,8 +230,8 @@ function PhotocopyTracker({ printers }) {
                 </div>
             )}
 
-            {/* Printer Selector */}
-            <div style={{ marginBottom: 16 }}>
+            {/* Printer Selector + Date Range */}
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                 <Space>
                     <Text type="secondary">Printer:</Text>
                     <Select
@@ -139,211 +243,198 @@ function PhotocopyTracker({ printers }) {
                         filterOption={(input, option) => option.label.toLowerCase().includes(input.toLowerCase())}
                         options={allPrinterNames.map(n => ({ value: n, label: n }))}
                     />
-                    <Button icon={<ReloadOutlined />} onClick={fetchPhotocopyInfo} loading={loading} size="small">Refresh</Button>
                 </Space>
+                <Space>
+                    <Text type="secondary">Date Range:</Text>
+                    <RangePicker
+                        size="small"
+                        onChange={setDateRange}
+                        value={dateRange}
+                        style={{ width: 240 }}
+                        allowClear
+                        presets={[
+                            { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                            { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] },
+                            { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
+                            { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                            { label: 'Last 7 Days', value: [dayjs().subtract(7, 'day'), dayjs()] },
+                            { label: 'Last 30 Days', value: [dayjs().subtract(30, 'day'), dayjs()] },
+                        ]}
+                    />
+                    {dateRange && <Button size="small" onClick={() => setDateRange(null)}>Clear</Button>}
+                </Space>
+                <Button icon={<ReloadOutlined />} onClick={fetchPhotocopyInfo} loading={loading} size="small">Refresh</Button>
             </div>
 
             {/* Summary Stats */}
-            {photocopyData && photocopyData.intervals && photocopyData.intervals.length > 0 && (
+            {filteredIntervals.length > 0 && (
                 <div className="stats-row" style={{ marginBottom: 24 }}>
                     <div className="stat-card" style={{ borderLeft: '3px solid #7b2cbf' }}>
                         <div className="stat-header">
                             <div className="stat-icon" style={{ background: 'rgba(123,44,191,0.15)', color: '#7b2cbf' }}><PrinterOutlined /></div>
-                            <div className="stat-value">{(summary.totalPhotocopies || 0).toLocaleString()}</div>
+                            <div className="stat-value">{(filteredSummary.totalPhotocopies || 0).toLocaleString()}</div>
                         </div>
-                        <div className="stat-label">Total Photocopies</div>
+                        <div className="stat-label">Total Photocopies{dateRange ? ' (filtered)' : ''}</div>
                     </div>
                     <div className="stat-card" style={{ borderLeft: '3px solid #00d4ff' }}>
                         <div className="stat-header">
                             <div className="stat-icon blue"><BarChartOutlined /></div>
-                            <div className="stat-value">{(summary.totalCounterDiff || 0).toLocaleString()}</div>
+                            <div className="stat-value">{(filteredSummary.totalCounterDiff || 0).toLocaleString()}</div>
                         </div>
                         <div className="stat-label">Counter Difference</div>
                     </div>
                     <div className="stat-card" style={{ borderLeft: '3px solid #b0b0c0' }}>
                         <div className="stat-header">
                             <div className="stat-icon" style={{ background: 'rgba(176,176,192,0.15)', color: '#b0b0c0' }}><FileTextOutlined /></div>
-                            <div className="stat-value">{(summary.totalPrintJobs || 0).toLocaleString()}</div>
+                            <div className="stat-value">{(filteredSummary.totalPrintJobs || 0).toLocaleString()}</div>
                         </div>
                         <div className="stat-label">Tracked Print Pages</div>
                     </div>
                     <div className="stat-card green">
                         <div className="stat-header">
                             <div className="stat-icon green"><DollarOutlined /></div>
-                            <div className="stat-value">{formatKSH(summary.estimatedRevenue || 0)}</div>
+                            <div className="stat-value">{formatKSH(filteredSummary.estimatedRevenue || 0)}</div>
                         </div>
                         <div className="stat-label">Photocopy Revenue (est.)</div>
                     </div>
                 </div>
             )}
 
-            <Row gutter={[24, 24]}>
-                {/* Interval Breakdown */}
-                <Col xs={24} lg={14}>
-                    <Card
-                        title={
-                            <Space>
-                                <BarChartOutlined style={{ color: '#7b2cbf' }} />
-                                <span>Photocopy Intervals</span>
-                            </Space>
+            {/* Photocopy Intervals Table */}
+            <Card
+                title={
+                    <Space>
+                        <BarChartOutlined style={{ color: '#7b2cbf' }} />
+                        <span>Photocopy Intervals ({filteredIntervals.length})</span>
+                    </Space>
+                }
+                style={{ marginBottom: 24 }}
+            >
+                {filteredIntervals.length === 0 ? (
+                    <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={
+                            <span style={{ color: '#b0b0c0' }}>
+                                {dateRange ? 'No photocopy data in the selected date range.' : (photocopyData?.message || 'Waiting for at least 2 automatic page counter readings to calculate photocopies.')}
+                            </span>
                         }
-                        extra={<Button icon={<ReloadOutlined />} onClick={fetchPhotocopyInfo} loading={loading} size="small">Refresh</Button>}
-                    >
-                        {(!photocopyData || !photocopyData.intervals || photocopyData.intervals.length === 0) ? (
-                            <Empty
-                                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                description={
-                                    <span style={{ color: '#b0b0c0' }}>
-                                        {photocopyData?.message || 'Record at least 2 page counter readings to see photocopy calculations.'}
-                                    </span>
-                                }
-                            />
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                {photocopyData.intervals.map((interval, idx) => {
-                                    const total = interval.counterDiff || 1;
-                                    const printPct = Math.round((interval.printPages / total) * 100);
-                                    const copyPct = 100 - printPct;
-                                    return (
-                                        <div key={idx} style={{
-                                            padding: 16, borderRadius: 12,
-                                            background: 'rgba(255,255,255,0.03)',
-                                            border: '1px solid rgba(255,255,255,0.06)'
-                                        }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
-                                                <Text style={{ fontSize: 12, color: '#b0b0c0' }}>
-                                                    {dayjs(interval.startReading.recordedAt).format('MMM D, HH:mm')} → {dayjs(interval.endReading.recordedAt).format('MMM D, HH:mm')}
-                                                </Text>
-                                                <Tag color="purple">
-                                                    {interval.startReading.counterValue} → {interval.endReading.counterValue}
-                                                </Tag>
-                                            </div>
-                                            <Row gutter={16}>
-                                                <Col span={6}>
-                                                    <Statistic
-                                                        title={<Text style={{ fontSize: 11, color: '#b0b0c0' }}>Counter Diff</Text>}
-                                                        value={interval.counterDiff}
-                                                        valueStyle={{ fontSize: 18, color: '#fff' }}
-                                                    />
-                                                </Col>
-                                                <Col span={6}>
-                                                    <Statistic
-                                                        title={<Text style={{ fontSize: 11, color: '#00d4ff' }}>Print Pages</Text>}
-                                                        value={interval.printPages}
-                                                        valueStyle={{ fontSize: 18, color: '#00d4ff' }}
-                                                    />
-                                                </Col>
-                                                <Col span={6}>
-                                                    <Statistic
-                                                        title={<Text style={{ fontSize: 11, color: '#7b2cbf' }}>Photocopies</Text>}
-                                                        value={interval.photocopies}
-                                                        valueStyle={{ fontSize: 18, color: '#7b2cbf' }}
-                                                    />
-                                                </Col>
-                                                <Col span={6}>
-                                                    <Statistic
-                                                        title={<Text style={{ fontSize: 11, color: '#00ff88' }}>Revenue</Text>}
-                                                        value={formatKSH(interval.photocopyRevenue)}
-                                                        valueStyle={{ fontSize: 14, color: '#00ff88', fontFamily: 'JetBrains Mono' }}
-                                                    />
-                                                </Col>
-                                            </Row>
-                                            {/* Visual bar */}
-                                            <div style={{ marginTop: 8 }}>
-                                                <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-                                                    <Text style={{ fontSize: 11, color: '#00d4ff' }}>🖨️ Prints {printPct}%</Text>
-                                                    <Text style={{ fontSize: 11, color: '#7b2cbf' }}>📋 Copies {copyPct}%</Text>
-                                                </div>
-                                                <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
-                                                    {interval.printPages > 0 && <div style={{ width: `${printPct}%`, background: '#00d4ff' }} />}
-                                                    {interval.photocopies > 0 && <div style={{ width: `${copyPct}%`, background: '#7b2cbf' }} />}
-                                                </div>
-                                            </div>
-                                            {interval.startReading.notes && (
-                                                <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>📝 {interval.startReading.notes}</Text>
-                                            )}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </Card>
-                </Col>
+                    />
+                ) : (
+                    <Table
+                        columns={intervalColumns}
+                        dataSource={filteredIntervals}
+                        rowKey={(_, idx) => idx}
+                        pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'], showTotal: (total) => `${total} intervals` }}
+                        scroll={{ x: 800 }}
+                        size="small"
+                        summary={() => {
+                            if (filteredIntervals.length <= 1) return null;
+                            return (
+                                <Table.Summary fixed>
+                                    <Table.Summary.Row>
+                                        <Table.Summary.Cell index={0}><Text strong style={{ color: '#7b2cbf' }}>Totals</Text></Table.Summary.Cell>
+                                        <Table.Summary.Cell index={1} />
+                                        <Table.Summary.Cell index={2}><Text strong>{filteredSummary.totalCounterDiff.toLocaleString()}</Text></Table.Summary.Cell>
+                                        <Table.Summary.Cell index={3}><Text strong style={{ color: '#00d4ff' }}>{filteredSummary.totalPrintJobs.toLocaleString()}</Text></Table.Summary.Cell>
+                                        <Table.Summary.Cell index={4}><Text strong style={{ color: '#7b2cbf', fontSize: 14 }}>{filteredSummary.totalPhotocopies.toLocaleString()}</Text></Table.Summary.Cell>
+                                        <Table.Summary.Cell index={5}><Text strong style={{ color: '#00ff88', fontFamily: 'JetBrains Mono' }}>{formatKSH(filteredSummary.estimatedRevenue)}</Text></Table.Summary.Cell>
+                                        <Table.Summary.Cell index={6} />
+                                    </Table.Summary.Row>
+                                </Table.Summary>
+                            );
+                        }}
+                    />
+                )}
+            </Card>
 
-                {/* Readings History */}
-                <Col xs={24} lg={10}>
-                    <Card
-                        title={
-                            <Space>
-                                <ClockCircleOutlined style={{ color: '#00d4ff' }} />
-                                <span>Counter Readings History</span>
-                            </Space>
-                        }
-                    >
-                        {readings.length === 0 ? (
-                            <Empty
-                                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                description="No readings yet"
-                            />
-                        ) : (
-                            <List
-                                dataSource={readings}
-                                renderItem={(reading) => (
-                                    <List.Item
-                                        actions={[
-                                            <Popconfirm
-                                                key="del"
-                                                title="Delete this reading?"
-                                                description="This may affect photocopy calculations."
-                                                onConfirm={() => handleDeleteReading(reading._id)}
-                                                okText="Delete"
-                                                okButtonProps={{ danger: true }}
-                                            >
-                                                <Button type="link" danger size="small" icon={<DeleteOutlined />} />
-                                            </Popconfirm>
-                                        ]}
+            {/* Readings History */}
+            <Card
+                title={
+                    <Space>
+                        <ClockCircleOutlined style={{ color: '#00d4ff' }} />
+                        <span>Counter Readings History ({filteredReadings.length})</span>
+                    </Space>
+                }
+                extra={
+                    <Space size={6}>
+                        <Select
+                            value={readingsSort}
+                            onChange={setReadingsSort}
+                            size="small"
+                            style={{ width: 150 }}
+                            options={[
+                                { value: 'newest', label: '🕐 Newest First' },
+                                { value: 'oldest', label: '🕐 Oldest First' },
+                                { value: 'highest', label: '📈 Highest Counter' },
+                                { value: 'lowest', label: '📉 Lowest Counter' },
+                            ]}
+                        />
+                    </Space>
+                }
+            >
+                {filteredReadings.length === 0 ? (
+                    <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={dateRange ? 'No readings in the selected date range' : 'No readings yet'}
+                    />
+                ) : (
+                    <List
+                        dataSource={filteredReadings}
+                        pagination={{ pageSize: 10, size: 'small', showTotal: (total) => `${total} readings` }}
+                        renderItem={(reading) => (
+                            <List.Item
+                                actions={[
+                                    <Popconfirm
+                                        key="del"
+                                        title="Delete this reading?"
+                                        description="This may affect photocopy calculations."
+                                        onConfirm={() => handleDeleteReading(reading._id)}
+                                        okText="Delete"
+                                        okButtonProps={{ danger: true }}
                                     >
-                                        <List.Item.Meta
-                                            avatar={
-                                                <div style={{
-                                                    width: 40, height: 40, borderRadius: 8,
-                                                    background: 'rgba(123,44,191,0.1)',
-                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                    fontSize: 16, fontWeight: 700, color: '#7b2cbf'
-                                                }}>
-                                                    {(reading.counterValue || 0).toLocaleString()}
-                                                </div>
-                                            }
-                                            title={
-                                                <Space>
-                                                    <Text strong>{reading.counterValue?.toLocaleString()} pages</Text>
-                                                    {renderSourceBadge(reading)}
-                                                </Space>
-                                            }
-                                            description={
-                                                <Space direction="vertical" size={0}>
-                                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                                        {dayjs(reading.recordedAt).format('MMM D, YYYY • hh:mm A')}
-                                                    </Text>
-                                                    {reading.colorPages != null && reading.bwPages != null && (
-                                                        <Text type="secondary" style={{ fontSize: 11 }}>
-                                                            🎨 Color: {reading.colorPages?.toLocaleString()} | ⬛ B/W: {reading.bwPages?.toLocaleString()}
-                                                        </Text>
-                                                    )}
-                                                    {reading.notes && <Text type="secondary" style={{ fontSize: 11 }}>📝 {reading.notes}</Text>}
-                                                    <Text type="secondary" style={{ fontSize: 11 }}>
-                                                        By: {reading.recordedBy}{reading.hostname ? ` (${reading.hostname})` : ''}
-                                                    </Text>
-                                                </Space>
-                                            }
-                                        />
-                                    </List.Item>
-                                )}
-                            />
+                                        <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+                                    </Popconfirm>
+                                ]}
+                            >
+                                <List.Item.Meta
+                                    avatar={
+                                        <div style={{
+                                            width: 40, height: 40, borderRadius: 8,
+                                            background: 'rgba(123,44,191,0.1)',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            fontSize: 16, fontWeight: 700, color: '#7b2cbf'
+                                        }}>
+                                            {(reading.counterValue || 0).toLocaleString()}
+                                        </div>
+                                    }
+                                    title={
+                                        <Space>
+                                            <Text strong>{reading.counterValue?.toLocaleString()} pages</Text>
+                                            {renderSourceBadge(reading)}
+                                        </Space>
+                                    }
+                                    description={
+                                        <Space direction="vertical" size={0}>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                                {dayjs(reading.recordedAt).format('MMM D, YYYY • hh:mm A')}
+                                            </Text>
+                                            {reading.colorPages != null && reading.bwPages != null && (
+                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                    🎨 Color: {reading.colorPages?.toLocaleString()} | ⬛ B/W: {reading.bwPages?.toLocaleString()}
+                                                </Text>
+                                            )}
+                                            {reading.notes && <Text type="secondary" style={{ fontSize: 11 }}>📝 {reading.notes}</Text>}
+                                            <Text type="secondary" style={{ fontSize: 11 }}>
+                                                By: {reading.recordedBy}{reading.hostname ? ` (${reading.hostname})` : ''}
+                                            </Text>
+                                        </Space>
+                                    }
+                                />
+                            </List.Item>
                         )}
-                    </Card>
-                </Col>
-            </Row>
+                    />
+                )}
+            </Card>
 
             {/* How it works */}
             <Card style={{ marginTop: 24, background: 'rgba(123,44,191,0.05)', border: '1px solid rgba(123,44,191,0.15)' }}>
