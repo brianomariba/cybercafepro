@@ -2911,6 +2911,93 @@ app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
     }
 });
 
+// ==================== AGENT: AUTOMATIC PAGE COUNTER COLLECTION ====================
+
+/**
+ * POST /api/v1/agent/page-counter
+ * Agent submits automatic page counter readings from printer hardware.
+ * Deduplicates by only storing when the counter value has changed.
+ * Body: { clientId, hostname, counters: [{ printerName, totalPages, colorPages, bwPages, ... }] }
+ */
+app.post('/api/v1/agent/page-counter', async (req, res) => {
+    try {
+        const { clientId, hostname, counters } = req.body;
+
+        if (!clientId || !counters || !Array.isArray(counters)) {
+            return res.status(400).json({ error: 'clientId and counters array are required' });
+        }
+
+        const results = [];
+
+        for (const counter of counters) {
+            if (!counter.printerName || counter.totalPages === null || counter.totalPages === undefined) {
+                continue; // Skip printers without valid counter data
+            }
+
+            const counterValue = Math.round(counter.totalPages);
+            if (counterValue <= 0) continue;
+
+            // Check the last reading for this printer to avoid duplicate entries
+            const lastReading = await PageCounterReading.findOne({ printerName: counter.printerName })
+                .sort({ recordedAt: -1 });
+
+            // Only store if counter has changed (new pages printed since last reading)
+            if (lastReading && lastReading.counterValue === counterValue) {
+                results.push({ printerName: counter.printerName, status: 'unchanged', counterValue });
+                continue;
+            }
+
+            // Validate counter is >= last reading (counters only go up)
+            if (lastReading && counterValue < lastReading.counterValue) {
+                results.push({
+                    printerName: counter.printerName,
+                    status: 'skipped',
+                    reason: `New value (${counterValue}) < last (${lastReading.counterValue})`,
+                    counterValue
+                });
+                continue;
+            }
+
+            // Create new reading
+            const reading = await PageCounterReading.create({
+                printerName: counter.printerName,
+                counterValue: counterValue,
+                colorPages: counter.colorPages || null,
+                bwPages: counter.bwPages || null,
+                blankPages: counter.blankPages || null,
+                borderlessColor: counter.borderlessColor || null,
+                borderlessBW: counter.borderlessBW || null,
+                withBorderColor: counter.withBorderColor || null,
+                withBorderBW: counter.withBorderBW || null,
+                firstPrintDate: counter.firstPrintDate || null,
+                source: counter.source || 'agent_auto',
+                clientId: clientId,
+                hostname: hostname,
+                printerOnline: counter.isOnline === true,
+                notes: `Auto-collected by agent (${counter.source || 'auto'})`,
+                recordedBy: 'agent',
+                recordedAt: new Date()
+            });
+
+            const pagesSinceLast = lastReading ? counterValue - lastReading.counterValue : 0;
+            console.log(`[PAGE COUNTER] Auto: ${counter.printerName} = ${counterValue} (+${pagesSinceLast}) via ${counter.source} from ${clientId}`);
+
+            results.push({
+                printerName: counter.printerName,
+                status: 'stored',
+                counterValue,
+                pagesSinceLast,
+                readingId: reading._id
+            });
+        }
+
+        res.json({ success: true, results });
+    } catch (error) {
+        console.error('Agent Page Counter Error:', error);
+        res.status(500).json({ error: 'Failed to process page counter data' });
+    }
+});
+
 // ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
 
 /**

@@ -127,8 +127,36 @@ function PhotocopyTracker({ printers }) {
 
     const summary = photocopyData?.summary || {};
 
+    // Helper to render source badge
+    const renderSourceBadge = (reading) => {
+        const source = reading.source || 'manual';
+        if (source === 'manual') return <Tag color="blue" style={{ fontSize: 10 }}>👤 Manual</Tag>;
+        if (source === 'agent_auto' || source === 'epson_stm3_registry' || source === 'bidi') return <Tag color="green" style={{ fontSize: 10 }}>🤖 Auto</Tag>;
+        if (source === 'snmp' || source === 'snmp_raw') return <Tag color="cyan" style={{ fontSize: 10 }}>📡 SNMP</Tag>;
+        return <Tag style={{ fontSize: 10 }}>{source}</Tag>;
+    };
+
+    // Count auto vs manual readings
+    const autoReadings = readings.filter(r => r.source && r.source !== 'manual').length;
+    const manualReadings = readings.filter(r => !r.source || r.source === 'manual').length;
+
     return (
         <div>
+            {/* Auto-collection status banner */}
+            {autoReadings > 0 && (
+                <div style={{
+                    padding: '10px 16px', marginBottom: 16, borderRadius: 8,
+                    background: 'linear-gradient(135deg, rgba(0,212,136,0.08), rgba(0,180,255,0.08))',
+                    border: '1px solid rgba(0,212,136,0.2)',
+                    display: 'flex', alignItems: 'center', gap: 10
+                }}>
+                    <span style={{ fontSize: 18 }}>🤖</span>
+                    <Text style={{ color: '#00d488', fontSize: 13 }}>
+                        <strong>Auto-collection active!</strong> The agent is automatically reading page counters.
+                        <span> ({autoReadings} auto, {manualReadings} manual readings)</span>
+                    </Text>
+                </div>
+            )}
             {/* Printer Selector + Counter Input */}
             <Card
                 title={
@@ -362,6 +390,7 @@ function PhotocopyTracker({ printers }) {
                                             title={
                                                 <Space>
                                                     <Text strong>{reading.counterValue?.toLocaleString()} pages</Text>
+                                                    {renderSourceBadge(reading)}
                                                 </Space>
                                             }
                                             description={
@@ -369,8 +398,15 @@ function PhotocopyTracker({ printers }) {
                                                     <Text type="secondary" style={{ fontSize: 12 }}>
                                                         {dayjs(reading.recordedAt).format('MMM D, YYYY • hh:mm A')}
                                                     </Text>
+                                                    {reading.colorPages != null && reading.bwPages != null && (
+                                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                                            🎨 Color: {reading.colorPages?.toLocaleString()} | ⬛ B/W: {reading.bwPages?.toLocaleString()}
+                                                        </Text>
+                                                    )}
                                                     {reading.notes && <Text type="secondary" style={{ fontSize: 11 }}>📝 {reading.notes}</Text>}
-                                                    <Text type="secondary" style={{ fontSize: 11 }}>By: {reading.recordedBy}</Text>
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>
+                                                        By: {reading.recordedBy}{reading.hostname ? ` (${reading.hostname})` : ''}
+                                                    </Text>
                                                 </Space>
                                             }
                                         />
@@ -389,10 +425,12 @@ function PhotocopyTracker({ printers }) {
                     How Photocopy Tracking Works
                 </Title>
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                    1. Record the printer's physical page counter at regular intervals (start of day, end of day, etc.).<br />
-                    2. The system tracks all print jobs sent through computers automatically.<br />
-                    3. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
-                    4. This gives you an accurate count of pages used for photocopying (manual copier usage).
+                    1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's internal page counter every ~5 minutes
+                    (same data as <em>Printer Properties → Maintenance → Nozzle Check</em>).<br />
+                    2. <strong>👤 Manual fallback:</strong> If the printer is offline or not Epson, you can manually enter counter readings above.<br />
+                    3. The system tracks all print jobs sent through computers automatically.<br />
+                    4. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
+                    5. This gives you an accurate count of pages used for photocopying (manual copier usage).
                 </Text>
             </Card>
         </div>

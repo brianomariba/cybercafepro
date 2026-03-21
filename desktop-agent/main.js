@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor, getPrinterPageCounters } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
 
@@ -1519,6 +1519,40 @@ async function startDataCollection() {
                 }
             } catch (e) { }
 
+            // Collect page counters automatically from printers (every 30 heartbeats = ~5 minutes)
+            // This reads the Epson printer's internal lifetime page counters
+            // (same data as Printer Properties > Maintenance > Nozzle Check)
+            // and sends them to the backend for photocopy tracking
+            try {
+                if (!global.pageCounterInterval) global.pageCounterInterval = 0;
+                global.pageCounterInterval++;
+
+                if (global.pageCounterInterval >= 30) {
+                    global.pageCounterInterval = 0;
+
+                    const pageCounters = await getPrinterPageCounters();
+                    const validCounters = pageCounters.filter(c => c.totalPages !== null && c.totalPages > 0);
+
+                    if (validCounters.length > 0) {
+                        console.log(`[PAGE COUNTER] Auto-collected counters for ${validCounters.length} printer(s):`,
+                            validCounters.map(c => `${c.printerName}=${c.totalPages}`).join(', '));
+
+                        const counterPayload = {
+                            clientId: CLIENT_ID,
+                            hostname: os.hostname(),
+                            counters: validCounters
+                        };
+
+                        sendToServer(
+                            config.server.baseUrl + '/api/v1/agent/page-counter',
+                            counterPayload
+                        ).catch(e => console.error('[PAGE COUNTER] Send failed:', e.message));
+                    }
+                }
+            } catch (e) {
+                // Page counter collection is non-critical, don't let it affect heartbeat
+            }
+
             // Build Payload
             const payload = {
                 clientId: CLIENT_ID,
@@ -1820,6 +1854,20 @@ async function startDataCollection() {
     try {
         startSpoolerWatcher((job) => {
             if (!job.jobKey) return;
+
+            // Handle canceled/deleted job notifications from the deletion watcher
+            if (job.status === 'canceled') {
+                const existing = spoolerPageCache.get(job.jobKey);
+                spoolerPageCache.set(job.jobKey, {
+                    ...(existing || {}),
+                    status: 'canceled',
+                    canceledAt: job.canceledAt || new Date().toISOString(),
+                    cachedAt: Date.now()
+                });
+                console.log(`[PRINT] ❌ Marked as CANCELED in cache: "${job.document}" @ ${job.printer}`);
+                offlineStore.saveSpoolerCache(spoolerPageCache);
+                return;
+            }
 
             // Cache the captured DEVMODE data for when Event Log 307 confirms completion
             const existing = spoolerPageCache.get(job.jobKey);
@@ -2294,9 +2342,38 @@ async function startDataCollection() {
                 if (!job.jobId) continue;
                 if (sentPrintJobIds.has(job.jobId)) continue;
 
+                // ACCURACY FIX: Skip jobs with canceled/error/deleted status
+                // This catches cases where Event 307 fires but the job was actually canceled
+                const jobStatus = (job.status || '').toLowerCase();
+                if (jobStatus.includes('cancel') || jobStatus.includes('delet') || 
+                    jobStatus.includes('error') || jobStatus.includes('fail') ||
+                    jobStatus.includes('offline')) {
+                    console.log(`[PRINT] SKIPPED canceled/error job: "${job.document}" status="${job.status}" @ ${job.printer}`);
+                    sentPrintJobIds.add(job.jobId); // Mark as seen so we don't re-process
+                    continue;
+                }
+
+                // Also check spooler cache for canceled status
+                const cached = spoolerPageCache.get(job.jobId);
+                if (cached && cached.status) {
+                    const cachedStatus = cached.status.toLowerCase();
+                    if (cachedStatus.includes('cancel') || cachedStatus.includes('delet') ||
+                        cachedStatus.includes('error') || cachedStatus.includes('fail')) {
+                        console.log(`[PRINT] SKIPPED job (spooler marked as ${cached.status}): "${job.document}" @ ${job.printer}`);
+                        sentPrintJobIds.add(job.jobId);
+                        continue;
+                    }
+                }
+
+                // Check for zero-size jobs â€" these are often canceled before data was spooled
+                if ((job.sizeBytes || 0) === 0 && (!cached || (cached.sizeBytes || 0) === 0)) {
+                    console.log(`[PRINT] SKIPPED zero-size job (likely canceled before spool): "${job.document}" @ ${job.printer}`);
+                    sentPrintJobIds.add(job.jobId);
+                    continue;
+                }
+
                 sentPrintJobIds.add(job.jobId);
 
-                const cached = spoolerPageCache.get(job.jobId);
                 pendingJobBuffer.push({ job, cached, receivedAt: Date.now() });
                 lastJobBufferAddTime = Date.now();
             }
