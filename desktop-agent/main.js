@@ -827,7 +827,7 @@ ipcMain.on('submit-document', async (event, { title, description, category, targ
         // Use AGENT endpoint
         const response = await axios.post(`${config.server.baseUrl}/api/v1/agent/submissions`, form, {
             headers: { ...form.getHeaders() },
-            timeout: 60000
+            timeout: 300000  // 5 min — allow large file uploads
         });
 
         if (response.data.success) {

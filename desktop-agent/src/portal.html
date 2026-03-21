@@ -984,8 +984,9 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">File</label>
-                    <input type="file" class="form-input" id="subFile">
+                    <label class="form-label">Files (select as many as you need)</label>
+                    <input type="file" class="form-input" id="subFile" multiple>
+                    <div id="subFileCount" style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;"></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -1020,6 +1021,13 @@
             document.getElementById('inventoryCategory').addEventListener('change', filterAndRenderInventory);
             document.getElementById('serviceSearch').addEventListener('input', filterAndRenderServices);
             document.getElementById('serviceCategory').addEventListener('change', filterAndRenderServices);
+
+            // File count indicator for multi-file upload
+            document.getElementById('subFile').addEventListener('change', function() {
+                const count = this.files ? this.files.length : 0;
+                const el = document.getElementById('subFileCount');
+                el.textContent = count > 0 ? `${count} file(s) selected` : '';
+            });
         });
 
         // Navigation
@@ -1406,32 +1414,68 @@
             const category = document.getElementById('subCategory').value;
             const fileInput = document.getElementById('subFile');
 
-            if (!title || !fileInput.files[0]) {
-                showToast('Please provide a title and select a file.', 'error');
+            if (!title || !fileInput.files || fileInput.files.length === 0) {
+                showToast('Please provide a title and select at least one file.', 'error');
                 return;
             }
 
             const btn = document.getElementById('btnSubmitDoc');
-            btn.textContent = 'Uploading...';
+            const totalFiles = fileInput.files.length;
             btn.disabled = true;
 
-            // We need to read the file in the renderer and send it to main process
-            // simpler approach: send path if strict isolation is off, or read to buffer
-            // Since contextIsolation is false in createWindows options, we can probably use fs if we require it, 
-            // but ipcRenderer is safeguarding. standard way in electron without context isolation:
-            // Just pass the file path.
+            // Upload each file sequentially
+            let successCount = 0;
+            let failCount = 0;
 
-            const file = fileInput.files[0];
-            // In electron with nodeIntegration: true, file object has 'path' property
-            const filePath = file.path;
+            for (let i = 0; i < totalFiles; i++) {
+                const file = fileInput.files[i];
+                const filePath = file.path; // Electron with nodeIntegration: true provides file.path
+                const fileTitle = totalFiles > 1 ? `${title} (${file.name})` : title;
 
-            ipcRenderer.send('submit-document', {
-                title,
-                description,
-                targetType,
-                category,
-                filePath
-            });
+                btn.textContent = `Uploading ${i + 1} of ${totalFiles}...`;
+
+                try {
+                    await new Promise((resolve, reject) => {
+                        const onResult = (event, result) => {
+                            ipcRenderer.removeListener('submission-result', onResult);
+                            if (result.success) {
+                                successCount++;
+                                resolve();
+                            } else {
+                                failCount++;
+                                reject(new Error(result.message));
+                            }
+                        };
+                        ipcRenderer.on('submission-result', onResult);
+                        ipcRenderer.send('submit-document', {
+                            title: fileTitle,
+                            description,
+                            targetType,
+                            category,
+                            filePath
+                        });
+                        // Timeout safety net
+                        setTimeout(() => {
+                            ipcRenderer.removeListener('submission-result', onResult);
+                            resolve(); // Don't block the queue
+                        }, 120000);
+                    });
+                } catch (e) {
+                    console.error(`Upload failed for ${file.name}:`, e.message);
+                }
+            }
+
+            btn.textContent = 'Submit for Review';
+            btn.disabled = false;
+
+            if (successCount > 0) {
+                showToast(`${successCount} file(s) submitted successfully!`, 'success');
+                closeSubmissionModal();
+                refreshData('submissions');
+            }
+            if (failCount > 0) {
+                showToast(`${failCount} file(s) failed to upload.`, 'error');
+            }
         }
 
         function deleteSubmission(id) {
