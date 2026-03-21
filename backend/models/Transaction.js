@@ -22,6 +22,12 @@ const TransactionSchema = new mongoose.Schema({
     seller: { type: String }, // e.g. 'admin' or hostname
     reason: { type: String },
     paymentMethod: { type: String, enum: ['cash', 'mpesa', 'other'], default: 'cash' },
+    // Sale correction fields
+    status: { type: String, enum: ['completed', 'corrected'], default: 'completed' },
+    correctedAt: { type: Date },
+    correctionReason: { type: String },
+    correctedBy: { type: String },
+    originalTransactionId: { type: String }, // Links correction entry back to the original sale
     createdAt: { type: Date, default: Date.now }
 });
 

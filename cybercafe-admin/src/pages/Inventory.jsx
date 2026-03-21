@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Card, Table, Button, Modal, Form, Input, InputNumber, Switch, Space, Tag, message, Popconfirm, Row, Col, Statistic, Alert, Badge, Tooltip, Typography, Divider, Tabs, Progress, List, DatePicker, Select, Empty, Radio, Transfer, Checkbox } from 'antd';
 import {
     PlusOutlined, EditOutlined, DeleteOutlined, ShoppingCartOutlined, SettingOutlined,
@@ -63,6 +63,7 @@ function Inventory() {
     const [salesDateRange, setSalesDateRange] = useState(null);
     const [salesItemFilter, setSalesItemFilter] = useState('all');
     const [salesPaymentFilter, setSalesPaymentFilter] = useState('all');
+    const [salesSellerFilter, setSalesSellerFilter] = useState('all');
 
     // Inventory search & filter
     const [invSearch, setInvSearch] = useState('');
@@ -85,6 +86,11 @@ function Inventory() {
     // Bulk selection state
     const [selectedRowKeys, setSelectedRowKeys] = useState([]);
 
+    // Guard against React StrictMode double-mount causing duplicate fetches/sockets
+    const mountedRef = useRef(false);
+    // Guard against double form submission
+    const [saving, setSaving] = useState(false);
+
     const fetchInventory = async () => {
         setLoading(true);
         try { setItems(await getInventory()); } catch { message.error('Failed to load inventory'); }
@@ -105,6 +111,10 @@ function Inventory() {
     };
 
     useEffect(() => {
+        // Skip the first (throwaway) mount in StrictMode dev — only run on the second
+        if (mountedRef.current) return;
+        mountedRef.current = true;
+
         fetchInventory(); fetchSettings(); fetchSalesHistory();
         const socket = connectSocket({ onConnect: () => { } });
         socket.on('low-stock-alert', (data) => {
@@ -113,7 +123,14 @@ function Inventory() {
         });
         socket.on('inventory-update', () => fetchInventory());
         socket.on('transaction-created', (txn) => {
-            if (txn?.type === 'inventory-sale') setSalesHistory(p => [txn, ...p]);
+            if (txn?.type === 'inventory-sale') {
+                // Deduplicate: only prepend if the transaction isn't already in the list
+                setSalesHistory(prev => {
+                    const txnId = txn._id || txn.id;
+                    if (prev.some(s => (s._id || s.id) === txnId)) return prev;
+                    return [txn, ...prev];
+                });
+            }
         });
         return () => socket?.disconnect();
     }, []);
@@ -121,11 +138,14 @@ function Inventory() {
     const handleEdit = (item) => { setEditingItem(item); form.setFieldsValue(item); setModalVisible(true); };
     const handleDelete = async (id) => { try { await deleteInventoryItem(id); message.success('Deleted'); fetchInventory(); } catch { message.error('Failed'); } };
     const handleCreate = async (values) => {
+        if (saving) return; // Prevent double-submit
+        setSaving(true);
         try {
             if (editingItem) { await updateInventoryItem(editingItem._id, values); message.success('Updated'); }
             else { await addInventoryItem(values); message.success('Added'); }
             setModalVisible(false); form.resetFields(); setEditingItem(null); fetchInventory();
         } catch { message.error('Failed'); }
+        setSaving(false);
     };
     const handleUpdateSettings = async (key, value) => {
         try { const n = { ...settings, [key]: value }; setSettings(n); await updateInventorySettings(n); message.success('Settings updated'); } catch { message.error('Failed'); }
@@ -313,9 +333,10 @@ function Inventory() {
             const matchesItem = salesItemFilter === 'all' || s.itemName === salesItemFilter;
             const matchesDate = !salesDateRange || (dayjs(s.createdAt).isAfter(salesDateRange[0].startOf('day')) && dayjs(s.createdAt).isBefore(salesDateRange[1].endOf('day')));
             const matchesPayment = salesPaymentFilter === 'all' || (s.paymentMethod || 'cash') === salesPaymentFilter;
-            return matchesSearch && matchesItem && matchesDate && matchesPayment;
+            const matchesSeller = salesSellerFilter === 'all' || (s.seller || '') === salesSellerFilter;
+            return matchesSearch && matchesItem && matchesDate && matchesPayment && matchesSeller;
         });
-    }, [salesHistory, salesSearch, salesItemFilter, salesDateRange, salesPaymentFilter]);
+    }, [salesHistory, salesSearch, salesItemFilter, salesDateRange, salesPaymentFilter, salesSellerFilter]);
 
     // Sales by day for chart (last 7 days)
     const salesByDay = useMemo(() => {
@@ -825,6 +846,7 @@ function Inventory() {
                                 extra={<Space wrap>
                                     <Search placeholder="Search..." style={{ width: 180 }} value={salesSearch} onChange={e => setSalesSearch(e.target.value)} allowClear />
                                     <Select value={salesItemFilter} onChange={setSalesItemFilter} style={{ width: 150 }} options={[{ value: 'all', label: 'All Items' }, ...[...new Set(salesHistory.map(s => s.itemName).filter(Boolean))].map(n => ({ value: n, label: n }))]} />
+                                    <Select value={salesSellerFilter} onChange={setSalesSellerFilter} style={{ width: 150 }} options={[{ value: 'all', label: '👤 All Sellers' }, ...[...new Set(salesHistory.map(s => s.seller).filter(Boolean))].sort().map(s => ({ value: s, label: s }))]} />
                                     <Select value={salesPaymentFilter} onChange={setSalesPaymentFilter} style={{ width: 130 }} options={[{ value: 'all', label: '💰 All Payments' }, { value: 'cash', label: '💵 Cash' }, { value: 'mpesa', label: '📱 M-Pesa' }]} />
                                     <RangePicker size="small" onChange={setSalesDateRange} style={{ width: 220 }} />
                                     <Button icon={<DownloadOutlined />} onClick={exportCSV} size="small">Export CSV</Button>
@@ -880,7 +902,7 @@ function Inventory() {
             </Modal>
 
             {/* Add/Edit Modal */}
-            <Modal title={editingItem ? "Edit Item" : "Add New Item"} open={modalVisible} onCancel={() => setModalVisible(false)} onOk={() => form.submit()} okText={editingItem ? "Update" : "Add Item"} width={600}>
+            <Modal title={editingItem ? "Edit Item" : "Add New Item"} open={modalVisible} onCancel={() => setModalVisible(false)} onOk={() => form.submit()} okText={editingItem ? "Update" : "Add Item"} confirmLoading={saving} width={600}>
                 <Form form={form} layout="vertical" onFinish={handleCreate}>
                     <Form.Item name="name" label="Item Name" rules={[{ required: true }]}><Input placeholder="e.g. A4 Envelope" /></Form.Item>
                     <Row gutter={16}>

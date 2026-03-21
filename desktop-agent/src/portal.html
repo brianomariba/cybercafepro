@@ -680,6 +680,165 @@
                 transform: translateX(20px);
             }
         }
+
+        /* Sales History Styles */
+        .sales-stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 800px) {
+            .sales-stats-row { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        .sales-stat-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+        }
+
+        .sales-stat-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--success);
+            margin-bottom: 2px;
+        }
+
+        .sales-stat-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .sale-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 10px;
+            margin-bottom: 8px;
+            transition: all 0.2s;
+        }
+
+        .sale-row:hover {
+            border-color: rgba(0,180,216,0.3);
+            background: rgba(0,180,216,0.04);
+        }
+
+        .sale-row.corrected {
+            opacity: 0.55;
+            border-left: 3px solid var(--danger);
+        }
+
+        .sale-row.reversal {
+            border-left: 3px solid var(--warning);
+            background: rgba(245,158,11,0.04);
+        }
+
+        .sale-left {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+        }
+
+        .sale-item-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .sale-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .sale-amount {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--success);
+            min-width: 100px;
+            text-align: right;
+        }
+
+        .sale-amount.negative {
+            color: var(--danger);
+        }
+
+        .sale-actions {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+            margin-left: 12px;
+        }
+
+        .btn-correct {
+            padding: 5px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--warning);
+            background: rgba(245,158,11,0.12);
+            color: var(--warning);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-correct:hover {
+            background: var(--warning);
+            color: #000;
+        }
+
+        .correction-timer {
+            font-size: 10px;
+            color: var(--warning);
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .correction-timer.expired {
+            color: var(--text-secondary);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-badge.completed {
+            background: rgba(0,200,83,0.15);
+            color: var(--success);
+        }
+
+        .status-badge.corrected {
+            background: rgba(239,68,68,0.15);
+            color: var(--danger);
+        }
+
+        .status-badge.reversal {
+            background: rgba(245,158,11,0.15);
+            color: var(--warning);
+        }
+
+        .sales-filter-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
     </style>
 </head>
 
@@ -709,6 +868,7 @@
     <!-- Navigation -->
     <div class="nav-tabs">
         <button class="nav-tab active" data-section="store">🛒 Store</button>
+        <button class="nav-tab" data-section="saleshistory">📊 Sales History</button>
         <button class="nav-tab" data-section="services">💼 Services & Prices</button>
         <button class="nav-tab" data-section="documents">📂 Documents <span class="badge" id="docsBadge"
                 style="display:none">0</span></button>
@@ -747,6 +907,49 @@
                     <div class="empty-state">
                         <div class="empty-icon">📦</div>
                         <p>Loading inventory...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sales History Section -->
+        <div class="page-section" id="section-saleshistory">
+            <div class="sales-stats-row">
+                <div class="sales-stat-card">
+                    <div class="sales-stat-value" id="shTodayCount">0</div>
+                    <div class="sales-stat-label">Today's Sales</div>
+                </div>
+                <div class="sales-stat-card">
+                    <div class="sales-stat-value" style="color: var(--primary);" id="shTodayRevenue">KSH 0</div>
+                    <div class="sales-stat-label">Today's Revenue</div>
+                </div>
+                <div class="sales-stat-card">
+                    <div class="sales-stat-value" style="color: #7B2CBF;" id="shTotalCount">0</div>
+                    <div class="sales-stat-label">All-Time Sales</div>
+                </div>
+                <div class="sales-stat-card">
+                    <div class="sales-stat-value" style="color: var(--accent);" id="shTotalRevenue">KSH 0</div>
+                    <div class="sales-stat-label">All-Time Revenue</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+                    <h2 class="card-title">📊 My Sales History</h2>
+                    <div class="sales-filter-bar">
+                        <input type="text" class="form-input btn-small" id="salesHistorySearch"
+                            placeholder="Search sales..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="salesHistoryFilter" style="max-width: 140px;">
+                            <option value="all">All Sales</option>
+                            <option value="completed">✅ Completed</option>
+                            <option value="corrected">🔄 Corrected</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="loadSalesHistory()">↻ Refresh</button>
+                    </div>
+                </div>
+                <div id="salesHistoryList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📊</div>
+                        <p>Loading sales history...</p>
                     </div>
                 </div>
             </div>
@@ -946,6 +1149,35 @@
         </div>
     </div>
 
+    <!-- Sale Correction Modal -->
+    <div class="modal-overlay" id="correctionModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">🔄 Correct This Sale</h3>
+                <button class="modal-close" onclick="closeCorrectionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+                    <div style="font-size: 13px; color: var(--warning); margin-bottom: 4px;">⚠️ This will reverse the following sale:</div>
+                    <div style="font-size: 16px; font-weight: 700;" id="corrItemName">—</div>
+                    <div style="font-size: 13px; color: var(--text-secondary);" id="corrDetails">—</div>
+                </div>
+                <div style="background: rgba(239,68,68,0.08); border-radius: 8px; padding: 10px; margin-bottom: 16px; font-size: 12px; color: var(--danger);">
+                    ⏰ <strong>This action restores stock and reverses the transaction.</strong> The correction will be logged for audit purposes.
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Reason for correction *</label>
+                    <input type="text" class="form-input" id="corrReason" placeholder="e.g. Wrong item, wrong quantity, customer changed mind...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeCorrectionModal()">Cancel</button>
+                <button class="btn" id="confirmCorrectionBtn" onclick="confirmCorrection()"
+                    style="background: var(--warning); color: #000; font-weight: 700;">Confirm Correction</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Submission Modal -->
     <div class="modal-overlay" id="submissionModal">
         <div class="modal" style="max-width: 600px;">
@@ -1006,6 +1238,9 @@
         let isOnline = true;
         let allInventory = [];
         let allServices = [];
+        let allSalesHistory = [];
+        let correctionTarget = null; // { transactionId, itemName, qty, amount }
+        let correctionTimerInterval = null;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -1021,6 +1256,8 @@
             document.getElementById('inventoryCategory').addEventListener('change', filterAndRenderInventory);
             document.getElementById('serviceSearch').addEventListener('input', filterAndRenderServices);
             document.getElementById('serviceCategory').addEventListener('change', filterAndRenderServices);
+            document.getElementById('salesHistorySearch').addEventListener('input', filterAndRenderSalesHistory);
+            document.getElementById('salesHistoryFilter').addEventListener('change', filterAndRenderSalesHistory);
 
             // File count indicator for multi-file upload
             document.getElementById('subFile').addEventListener('change', function() {
@@ -1040,11 +1277,6 @@
                     tab.classList.add('active');
                 });
             });
-        }
-
-        function showSection(sectionId) {
-            document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
-            document.getElementById(`section-${sectionId}`).classList.add('active');
         }
 
         // Data Loading
@@ -1132,9 +1364,43 @@
                 showToast(result.message, 'success');
                 closeSaleModal();
                 loadAllData();
+                // Refresh sales history too
+                loadSalesHistory();
             } else {
                 showToast(result.message, 'error');
             }
+        });
+
+        // Sales history data
+        ipcRenderer.on('sales-history-data', (event, data) => {
+            if (data.success) {
+                allSalesHistory = data.sales || [];
+                filterAndRenderSalesHistory();
+                updateSalesStats();
+            }
+        });
+
+        // Sale correction result
+        ipcRenderer.on('correct-sale-result', (event, result) => {
+            const btn = document.getElementById('confirmCorrectionBtn');
+            if (btn) {
+                btn.textContent = 'Confirm Correction';
+                btn.disabled = false;
+            }
+
+            if (result.success) {
+                showToast(result.message, 'success');
+                closeCorrectionModal();
+                loadSalesHistory();
+                loadAllData(); // Refresh inventory too
+            } else {
+                showToast(result.message, 'error');
+            }
+        });
+
+        // Listen for real-time sale correction events
+        ipcRenderer.on('sale-corrected', (event, data) => {
+            loadSalesHistory();
         });
 
         ipcRenderer.on('sync-result', (event, result) => {
@@ -1689,6 +1955,222 @@
                 return matchesSearch && matchesCategory;
             });
             renderServices(filtered);
+        }
+
+        // ==================== SALES HISTORY ====================
+
+        function loadSalesHistory() {
+            ipcRenderer.send('get-sales-history');
+        }
+
+        // Auto-load sales history when switching to the tab
+        function showSection(sectionId) {
+            document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(`section-${sectionId}`).classList.add('active');
+            if (sectionId === 'saleshistory' && allSalesHistory.length === 0) {
+                loadSalesHistory();
+            }
+        }
+
+        function filterAndRenderSalesHistory() {
+            const search = (document.getElementById('salesHistorySearch').value || '').toLowerCase();
+            const filter = document.getElementById('salesHistoryFilter').value;
+
+            const filtered = allSalesHistory.filter(sale => {
+                const matchesSearch = (sale.itemName || '').toLowerCase().includes(search) ||
+                    (sale.description || '').toLowerCase().includes(search) ||
+                    (sale.reason || '').toLowerCase().includes(search);
+
+                let matchesFilter = true;
+                if (filter === 'completed') {
+                    matchesFilter = sale.type === 'inventory-sale' && sale.status !== 'corrected';
+                } else if (filter === 'corrected') {
+                    matchesFilter = sale.status === 'corrected' || sale.type === 'inventory-sale-reversal';
+                }
+
+                return matchesSearch && matchesFilter;
+            });
+
+            renderSalesHistory(filtered);
+        }
+
+        function renderSalesHistory(sales) {
+            const list = document.getElementById('salesHistoryList');
+
+            // Clear previous timer
+            if (correctionTimerInterval) {
+                clearInterval(correctionTimerInterval);
+                correctionTimerInterval = null;
+            }
+
+            if (!sales || sales.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><p>No sales found</p></div>';
+                return;
+            }
+
+            const FIVE_MINUTES_MS = 5 * 60 * 1000;
+            const now = Date.now();
+
+            list.innerHTML = sales.map(sale => {
+                const isReversal = sale.type === 'inventory-sale-reversal';
+                const isCorrected = sale.status === 'corrected';
+                const saleTime = new Date(sale.createdAt).getTime();
+                const timeLeft = FIVE_MINUTES_MS - (now - saleTime);
+                const canCorrect = !isReversal && !isCorrected && timeLeft > 0;
+                const rowClass = isReversal ? 'reversal' : (isCorrected ? 'corrected' : '');
+
+                // Status badge
+                let statusBadge = '';
+                if (isReversal) {
+                    statusBadge = '<span class="status-badge reversal">Reversal</span>';
+                } else if (isCorrected) {
+                    statusBadge = '<span class="status-badge corrected">Corrected</span>';
+                } else {
+                    statusBadge = '<span class="status-badge completed">Completed</span>';
+                }
+
+                // Amount display
+                const amountClass = (sale.amount < 0) ? 'negative' : '';
+                const amountPrefix = sale.amount < 0 ? '-' : '+';
+                const absAmount = Math.abs(sale.amount || 0);
+
+                // Payment icon
+                const pmIcon = sale.paymentMethod === 'mpesa' ? '📱 M-Pesa' : '💵 Cash';
+
+                // Correction actions
+                let actionsHtml = '';
+                if (canCorrect) {
+                    const txId = sale.id || sale._id;
+                    actionsHtml = `
+                        <div class="sale-actions">
+                            <button class="btn-correct" onclick="openCorrectionModal('${txId}', '${escapeHtml(sale.itemName)}', ${sale.quantity}, ${sale.amount})">
+                                🔄 Correct
+                            </button>
+                            <span class="correction-timer" data-sale-time="${saleTime}"></span>
+                        </div>
+                    `;
+                } else if (isCorrected) {
+                    actionsHtml = `
+                        <div class="sale-actions">
+                            <span style="font-size: 11px; color: var(--danger);">Corrected by ${escapeHtml(sale.correctedBy || '—')}</span>
+                            <span style="font-size: 10px; color: var(--text-secondary);">${sale.correctionReason || ''}</span>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="sale-row ${rowClass}">
+                        <div class="sale-left">
+                            <div class="sale-item-name">
+                                ${isReversal ? '↩️' : '📦'} ${escapeHtml(sale.itemName || 'Unknown')}
+                                ${statusBadge}
+                            </div>
+                            <div class="sale-meta">
+                                <span>Qty: ${Math.abs(sale.quantity || 0)}</span>
+                                <span>${pmIcon}</span>
+                                <span>🕐 ${new Date(sale.createdAt).toLocaleString()}</span>
+                                ${sale.reason ? `<span>📝 ${escapeHtml(sale.reason)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="sale-amount ${amountClass}">${amountPrefix}KSH ${absAmount.toLocaleString()}</div>
+                        ${actionsHtml}
+                    </div>
+                `;
+            }).join('');
+
+            // Start countdown timer for correction windows
+            startCorrectionTimers();
+        }
+
+        function startCorrectionTimers() {
+            if (correctionTimerInterval) clearInterval(correctionTimerInterval);
+
+            function updateTimers() {
+                const timers = document.querySelectorAll('.correction-timer[data-sale-time]');
+                const FIVE_MINUTES_MS = 5 * 60 * 1000;
+                const now = Date.now();
+                let hasActiveTimers = false;
+
+                timers.forEach(timer => {
+                    const saleTime = parseInt(timer.dataset.saleTime, 10);
+                    const timeLeft = FIVE_MINUTES_MS - (now - saleTime);
+
+                    if (timeLeft <= 0) {
+                        timer.textContent = 'Window expired';
+                        timer.classList.add('expired');
+                        // Disable the correct button
+                        const btn = timer.parentElement?.querySelector('.btn-correct');
+                        if (btn) {
+                            btn.disabled = true;
+                            btn.style.opacity = '0.4';
+                            btn.style.cursor = 'not-allowed';
+                        }
+                    } else {
+                        hasActiveTimers = true;
+                        const mins = Math.floor(timeLeft / 60000);
+                        const secs = Math.floor((timeLeft % 60000) / 1000);
+                        timer.textContent = `⏱️ ${mins}:${secs.toString().padStart(2, '0')} left`;
+                    }
+                });
+
+                if (!hasActiveTimers && correctionTimerInterval) {
+                    clearInterval(correctionTimerInterval);
+                    correctionTimerInterval = null;
+                }
+            }
+
+            updateTimers();
+            correctionTimerInterval = setInterval(updateTimers, 1000);
+        }
+
+        function updateSalesStats() {
+            const activeSales = allSalesHistory.filter(s => s.type === 'inventory-sale' && s.status !== 'corrected');
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
+
+            const todaySales = activeSales.filter(s => new Date(s.createdAt) >= todayStart);
+            const todayRevenue = todaySales.reduce((sum, s) => sum + (s.amount || 0), 0);
+            const totalRevenue = activeSales.reduce((sum, s) => sum + (s.amount || 0), 0);
+
+            document.getElementById('shTodayCount').textContent = todaySales.length;
+            document.getElementById('shTodayRevenue').textContent = `KSH ${todayRevenue.toLocaleString()}`;
+            document.getElementById('shTotalCount').textContent = activeSales.length;
+            document.getElementById('shTotalRevenue').textContent = `KSH ${totalRevenue.toLocaleString()}`;
+        }
+
+        // ==================== CORRECTION MODAL ====================
+
+        function openCorrectionModal(transactionId, itemName, qty, amount) {
+            correctionTarget = { transactionId, itemName, qty, amount };
+            document.getElementById('corrItemName').textContent = `${itemName}`;
+            document.getElementById('corrDetails').textContent = `${qty} unit(s) • KSH ${(amount || 0).toLocaleString()}`;
+            document.getElementById('corrReason').value = '';
+            document.getElementById('correctionModal').classList.add('active');
+            setTimeout(() => document.getElementById('corrReason').focus(), 200);
+        }
+
+        function closeCorrectionModal() {
+            document.getElementById('correctionModal').classList.remove('active');
+            correctionTarget = null;
+        }
+
+        function confirmCorrection() {
+            if (!correctionTarget) return;
+            const reason = document.getElementById('corrReason').value.trim();
+
+            if (!reason) {
+                showToast('Please enter a reason for the correction', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('confirmCorrectionBtn');
+            btn.textContent = 'Correcting...';
+            btn.disabled = true;
+
+            ipcRenderer.send('correct-sale', {
+                transactionId: correctionTarget.transactionId,
+                correctionReason: reason
+            });
         }
 
         // Logout

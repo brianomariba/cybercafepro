@@ -6298,6 +6298,164 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
     }
 });
 
+/**
+ * POST /api/v1/inventory/sale/:transactionId/correct
+ * Correct/reverse a sale within the 5-minute correction window.
+ * Restores stock, marks original transaction as 'corrected', and creates a reversal transaction.
+ */
+app.post('/api/v1/inventory/sale/:transactionId/correct', async (req, res) => {
+    try {
+        const { correctionReason, correctedBy } = req.body;
+        const transactionId = req.params.transactionId;
+
+        // Find the original sale transaction
+        const originalTxn = await Transaction.findOne({
+            $or: [{ id: transactionId }, { _id: transactionId }],
+            type: 'inventory-sale'
+        });
+
+        if (!originalTxn) {
+            return res.status(404).json({ error: 'Sale transaction not found' });
+        }
+
+        // Check if already corrected
+        if (originalTxn.status === 'corrected') {
+            return res.status(400).json({ error: 'This sale has already been corrected' });
+        }
+
+        // Check 5-minute window
+        const saleTime = new Date(originalTxn.createdAt).getTime();
+        const now = Date.now();
+        const FIVE_MINUTES_MS = 5 * 60 * 1000;
+        const timeElapsed = now - saleTime;
+
+        if (timeElapsed > FIVE_MINUTES_MS) {
+            const minutesAgo = Math.round(timeElapsed / 60000);
+            return res.status(400).json({
+                error: `Correction window expired. This sale was ${minutesAgo} minute(s) ago. Corrections must be made within 5 minutes.`,
+                expiredAt: new Date(saleTime + FIVE_MINUTES_MS).toISOString(),
+                saleTime: originalTxn.createdAt
+            });
+        }
+
+        // Restore stock to the inventory item
+        const item = await InventoryItem.findById(originalTxn.itemId);
+        if (item) {
+            item.stock += originalTxn.quantity;
+            item.updatedAt = new Date();
+            await item.save();
+            console.log(`[INVENTORY] Stock restored: ${item.name} +${originalTxn.quantity} (now ${item.stock})`);
+        }
+
+        // Determine who is correcting
+        let correctorName = correctedBy || originalTxn.seller || 'unknown';
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    correctorName = session.name || session.username;
+                } else {
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        correctorName = session.name || session.username;
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical
+        }
+
+        // Mark original transaction as corrected
+        originalTxn.status = 'corrected';
+        originalTxn.correctedAt = new Date();
+        originalTxn.correctionReason = correctionReason || 'Mistake correction';
+        originalTxn.correctedBy = correctorName;
+        await originalTxn.save();
+
+        // Create a reversal transaction for audit trail
+        const reversalTxn = await Transaction.create({
+            id: `txn-rev-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            type: 'inventory-sale-reversal',
+            amount: -(originalTxn.amount),
+            description: `CORRECTION: Reversed ${originalTxn.quantity}x ${originalTxn.itemName} — ${correctionReason || 'Mistake correction'}`,
+            itemId: originalTxn.itemId,
+            itemName: originalTxn.itemName,
+            quantity: -(originalTxn.quantity),
+            seller: correctorName,
+            reason: `Correction: ${correctionReason || 'Mistake'}`,
+            paymentMethod: originalTxn.paymentMethod,
+            clientId: originalTxn.clientId,
+            userId: correctorName,
+            originalTransactionId: originalTxn.id || originalTxn._id.toString(),
+            status: 'completed',
+            createdAt: new Date()
+        });
+
+        console.log(`[INVENTORY] Sale corrected: ${originalTxn.quantity}x ${originalTxn.itemName} by ${correctorName} (reason: ${correctionReason || 'Mistake correction'})`);
+
+        // Emit real-time updates
+        io.emit('inventory-update', { itemId: originalTxn.itemId, stock: item ? item.stock : null, name: originalTxn.itemName });
+        io.emit('transaction-created', reversalTxn);
+        io.emit('sale-corrected', {
+            originalTransactionId: originalTxn.id || originalTxn._id,
+            reversalTransactionId: reversalTxn.id,
+            itemName: originalTxn.itemName,
+            quantity: originalTxn.quantity,
+            correctedBy: correctorName,
+            reason: correctionReason
+        });
+
+        res.json({
+            success: true,
+            message: `Sale corrected: ${originalTxn.quantity}x ${originalTxn.itemName} — stock restored`,
+            correction: {
+                originalTransaction: originalTxn.id,
+                reversalTransaction: reversalTxn.id,
+                itemName: originalTxn.itemName,
+                quantityRestored: originalTxn.quantity,
+                amountReversed: originalTxn.amount,
+                newStock: item ? item.stock : null,
+                correctedBy: correctorName,
+                reason: correctionReason
+            }
+        });
+
+    } catch (error) {
+        console.error('[INVENTORY] Sale correction failed:', error);
+        res.status(500).json({ error: 'Failed to correct sale' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/sales-history
+ * Returns inventory sale transactions for the current agent/seller.
+ * Query params: seller (username), clientId, limit
+ */
+app.get('/api/v1/agent/sales-history', async (req, res) => {
+    try {
+        const { seller, clientId, limit = 100 } = req.query;
+
+        const query = { type: { $in: ['inventory-sale', 'inventory-sale-reversal'] } };
+        if (seller) {
+            query.seller = { $regex: seller, $options: 'i' };
+        }
+        if (clientId) {
+            query.clientId = clientId;
+        }
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        console.error('[INVENTORY] Agent sales history fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch sales history' });
+    }
+});
+
 
 /**
  * GET /api/v1/admin/inventory/low-stock

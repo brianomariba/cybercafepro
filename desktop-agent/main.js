@@ -704,6 +704,77 @@ ipcMain.on('record-sale', async (event, saleData) => {
     }
 });
 
+// Get sales history for the current agent/user
+ipcMain.on('get-sales-history', async (event) => {
+    try {
+        const params = {};
+        if (currentSession && currentSession.user) {
+            params.seller = currentSession.user;
+        }
+        params.clientId = CLIENT_ID;
+        params.limit = 200;
+
+        const response = await axios.get(`${config.server.baseUrl}/api/v1/agent/sales-history`, {
+            params,
+            timeout: 10000
+        });
+
+        event.reply('sales-history-data', {
+            success: true,
+            sales: Array.isArray(response.data) ? response.data : []
+        });
+    } catch (error) {
+        console.error('[Portal] Failed to fetch sales history:', error.message);
+        event.reply('sales-history-data', {
+            success: false,
+            sales: [],
+            message: error.message
+        });
+    }
+});
+
+// Correct a sale within the 5-minute window
+ipcMain.on('correct-sale', async (event, { transactionId, correctionReason }) => {
+    if (!isOnline) {
+        event.reply('correct-sale-result', {
+            success: false,
+            message: 'Cannot correct sales while offline. Please wait for connection.'
+        });
+        return;
+    }
+
+    try {
+        const response = await axios.post(
+            `${config.server.baseUrl}/api/v1/inventory/sale/${transactionId}/correct`,
+            {
+                correctionReason: correctionReason || 'Agent correction',
+                correctedBy: currentSession ? currentSession.user : CLIENT_ID
+            },
+            { timeout: 10000 }
+        );
+
+        if (response.data.success) {
+            // Refresh inventory cache after correction
+            await fetchAndCacheData('inventory');
+            event.reply('correct-sale-result', {
+                success: true,
+                message: response.data.message,
+                correction: response.data.correction
+            });
+            console.log(`[Portal] Sale corrected: ${response.data.correction?.itemName}`);
+        } else {
+            event.reply('correct-sale-result', {
+                success: false,
+                message: response.data.error || 'Correction failed'
+            });
+        }
+    } catch (error) {
+        const msg = error.response?.data?.error || error.message || 'Correction failed';
+        event.reply('correct-sale-result', { success: false, message: msg });
+        console.error('[Portal] Sale correction failed:', msg);
+    }
+});
+
 // Get pending actions count
 ipcMain.on('get-pending-count', (event) => {
     const pending = offlineStore.getPendingActions();
