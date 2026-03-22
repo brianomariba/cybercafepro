@@ -1590,23 +1590,23 @@ async function startDataCollection() {
                 }
             } catch (e) { }
 
-            // Collect page counters automatically from printers (every 30 heartbeats = ~5 minutes)
-            // This reads the Epson printer's internal lifetime page counters
-            // (same data as Printer Properties > Maintenance > Nozzle Check)
-            // and sends them to the backend for photocopy tracking
+            // Collect page counters automatically from printers (every 3 heartbeats = ~30 seconds)
+            // Reads Total Sheets from "Printer and Option Information" dialog
+            // and sends to backend for photocopy tracking
             try {
                 if (!global.pageCounterInterval) global.pageCounterInterval = 0;
                 global.pageCounterInterval++;
-
-                if (global.pageCounterInterval >= 30) {
+                if (global.pageCounterInterval >= 3) {
                     global.pageCounterInterval = 0;
-
                     const pageCounters = await getPrinterPageCounters();
-                    const validCounters = pageCounters.filter(c => c.totalPages !== null && c.totalPages > 0);
+                    const validCounters = pageCounters.filter(c => 
+                        (c.totalPages !== null && c.totalPages > 0) || 
+                        (c.totalSheets !== null && c.totalSheets > 0)
+                    );
 
                     if (validCounters.length > 0) {
                         console.log(`[PAGE COUNTER] Auto-collected counters for ${validCounters.length} printer(s):`,
-                            validCounters.map(c => `${c.printerName}=${c.totalPages}`).join(', '));
+                            validCounters.map(c => `${c.printerName}=${c.totalPages}${c.totalSheets ? ' sheets=' + c.totalSheets : ''}`).join(', '));
 
                         const counterPayload = {
                             clientId: CLIENT_ID,
