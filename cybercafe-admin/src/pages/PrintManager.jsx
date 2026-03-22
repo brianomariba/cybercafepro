@@ -99,6 +99,7 @@ function PhotocopyTracker({ printers }) {
     const renderSourceBadge = (reading) => {
         const source = reading.source || 'manual';
         if (source === 'manual') return <Tag color="blue" style={{ fontSize: 10 }}>👤 Manual</Tag>;
+        if (source === 'epson_stm3_tag36') return <Tag color="green" style={{ fontSize: 10 }}>🤖 Tag36</Tag>;
         if (source === 'agent_auto' || source === 'epson_stm3_registry' || source === 'bidi') return <Tag color="green" style={{ fontSize: 10 }}>🤖 Auto</Tag>;
         if (source === 'snmp' || source === 'snmp_raw') return <Tag color="cyan" style={{ fontSize: 10 }}>📡 SNMP</Tag>;
         return <Tag style={{ fontSize: 10 }}>{source}</Tag>;
@@ -140,9 +141,13 @@ function PhotocopyTracker({ printers }) {
         const intervals = filteredIntervals;
         return {
             totalPhotocopies: intervals.reduce((s, i) => s + (i.photocopies || 0), 0),
+            photocopiesBW: intervals.reduce((s, i) => s + (i.photocopiesBW || 0), 0),
+            photocopiesColor: intervals.reduce((s, i) => s + (i.photocopiesColor || 0), 0),
             totalCounterDiff: intervals.reduce((s, i) => s + (i.counterDiff || 0), 0),
             totalPrintJobs: intervals.reduce((s, i) => s + (i.printPages || 0), 0),
             estimatedRevenue: intervals.reduce((s, i) => s + (i.photocopyRevenue || 0), 0),
+            revenueBW: intervals.reduce((s, i) => s + (i.photocopyRevenueBW || 0), 0),
+            revenueColor: intervals.reduce((s, i) => s + (i.photocopyRevenueColor || 0), 0),
         };
     }, [filteredIntervals]);
 
@@ -181,14 +186,34 @@ function PhotocopyTracker({ printers }) {
             render: (v) => <Text style={{ color: '#00d4ff' }}>{(v || 0).toLocaleString()}</Text>
         },
         {
-            title: 'Photocopies', dataIndex: 'photocopies', key: 'photocopies', width: 110,
+            title: 'Photocopies', key: 'photocopies', width: 140,
             sorter: (a, b) => (a.photocopies || 0) - (b.photocopies || 0),
-            render: (v) => <Text strong style={{ color: '#7b2cbf', fontSize: 14 }}>{(v || 0).toLocaleString()}</Text>
+            render: (_, interval) => (
+                <div>
+                    <Text strong style={{ color: '#7b2cbf', fontSize: 14 }}>{(interval.photocopies || 0).toLocaleString()}</Text>
+                    {(interval.photocopiesBW > 0 || interval.photocopiesColor > 0) && (
+                        <div style={{ fontSize: 10, marginTop: 2 }}>
+                            {interval.photocopiesBW > 0 && <Text style={{ color: '#b0b0c0' }}>⬛ {interval.photocopiesBW} </Text>}
+                            {interval.photocopiesColor > 0 && <Text style={{ color: '#e040fb' }}>🎨 {interval.photocopiesColor}</Text>}
+                        </div>
+                    )}
+                </div>
+            )
         },
         {
-            title: 'Revenue', dataIndex: 'photocopyRevenue', key: 'revenue', width: 120,
+            title: 'Revenue', dataIndex: 'photocopyRevenue', key: 'revenue', width: 130,
             sorter: (a, b) => (a.photocopyRevenue || 0) - (b.photocopyRevenue || 0),
-            render: (v) => <Text style={{ color: '#00ff88', fontFamily: 'JetBrains Mono', fontSize: 12 }}>{formatKSH(v || 0)}</Text>
+            render: (v, interval) => (
+                <div>
+                    <Text style={{ color: '#00ff88', fontFamily: 'JetBrains Mono', fontSize: 12 }}>{formatKSH(v || 0)}</Text>
+                    {(interval.photocopyRevenueBW > 0 && interval.photocopyRevenueColor > 0) && (
+                        <div style={{ fontSize: 10, marginTop: 2 }}>
+                            <Text style={{ color: '#b0b0c0' }}>BW: {formatKSH(interval.photocopyRevenueBW)} </Text>
+                            <Text style={{ color: '#e040fb' }}>Color: {formatKSH(interval.photocopyRevenueColor)}</Text>
+                        </div>
+                    )}
+                </div>
+            )
         },
         {
             title: 'Breakdown', key: 'breakdown', width: 160,
@@ -201,6 +226,7 @@ function PhotocopyTracker({ printers }) {
                         <div style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
                             <Text style={{ fontSize: 10, color: '#00d4ff' }}>🖨️ {printPct}%</Text>
                             <Text style={{ fontSize: 10, color: '#7b2cbf' }}>📋 {copyPct}%</Text>
+                            {interval.printJobCount > 0 && <Text type="secondary" style={{ fontSize: 10 }}>({interval.printJobCount} jobs)</Text>}
                         </div>
                         <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
                             {interval.printPages > 0 && <div style={{ width: `${printPct}%`, background: '#00d4ff' }} />}
@@ -275,6 +301,12 @@ function PhotocopyTracker({ printers }) {
                             <div className="stat-value">{(filteredSummary.totalPhotocopies || 0).toLocaleString()}</div>
                         </div>
                         <div className="stat-label">Total Photocopies{dateRange ? ' (filtered)' : ''}</div>
+                        {(filteredSummary.photocopiesBW > 0 || filteredSummary.photocopiesColor > 0) && (
+                            <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
+                                <span style={{ color: '#b0b0c0' }}>⬛ {filteredSummary.photocopiesBW} BW</span>
+                                {filteredSummary.photocopiesColor > 0 && <span style={{ color: '#e040fb', marginLeft: 8 }}>🎨 {filteredSummary.photocopiesColor} Color</span>}
+                            </div>
+                        )}
                     </div>
                     <div className="stat-card" style={{ borderLeft: '3px solid #00d4ff' }}>
                         <div className="stat-header">
@@ -296,6 +328,12 @@ function PhotocopyTracker({ printers }) {
                             <div className="stat-value">{formatKSH(filteredSummary.estimatedRevenue || 0)}</div>
                         </div>
                         <div className="stat-label">Photocopy Revenue (est.)</div>
+                        {(filteredSummary.revenueBW > 0 && filteredSummary.revenueColor > 0) && (
+                            <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
+                                <span style={{ color: '#b0b0c0' }}>BW: {formatKSH(filteredSummary.revenueBW)}</span>
+                                <span style={{ color: '#e040fb', marginLeft: 6 }}>Color: {formatKSH(filteredSummary.revenueColor)}</span>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -421,6 +459,13 @@ function PhotocopyTracker({ printers }) {
                                             {reading.colorPages != null && reading.bwPages != null && (
                                                 <Text type="secondary" style={{ fontSize: 11 }}>
                                                     🎨 Color: {reading.colorPages?.toLocaleString()} | ⬛ B/W: {reading.bwPages?.toLocaleString()}
+                                                </Text>
+                                            )}
+                                            {(reading.withBorderColor != null || reading.withBorderBW != null) && (
+                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                    WB-Color: {(reading.withBorderColor || 0).toLocaleString()} | WB-BW: {(reading.withBorderBW || 0).toLocaleString()}
+                                                    {reading.borderlessColor > 0 && ` | BL-Color: ${reading.borderlessColor.toLocaleString()}`}
+                                                    {reading.borderlessBW > 0 && ` | BL-BW: ${reading.borderlessBW.toLocaleString()}`}
                                                 </Text>
                                             )}
                                             {reading.notes && <Text type="secondary" style={{ fontSize: 11 }}>📝 {reading.notes}</Text>}

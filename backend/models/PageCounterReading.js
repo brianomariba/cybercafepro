@@ -13,7 +13,7 @@ const PageCounterReadingSchema = new mongoose.Schema({
     withBorderBW: { type: Number, default: null },
     firstPrintDate: { type: String, default: null },
     // Source tracking
-    source: { type: String, enum: ['manual', 'agent_auto', 'snmp', 'epson_stm3_registry', 'bidi'], default: 'manual' },
+    source: { type: String, default: 'manual' },
     clientId: { type: String, default: null },
     hostname: { type: String, default: null },
     printerOnline: { type: Boolean, default: null },

@@ -3525,6 +3525,15 @@ while (\$true) {
     } catch (e) {
         console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
     }
+
+    function stop() {
+        running = false;
+        if (proc) { try { proc.kill(); } catch (e) {} }
+    }
+
+    return { stop, isRunning: () => running };
+}
+
 /**
  * Get page counters from all installed printers.
  * For Epson printers: reads from Epson Status Monitor 3 registry + bidirectional communication.
@@ -3537,13 +3546,224 @@ while (\$true) {
  */
 async function getPrinterPageCounters() {
     const script = `
+Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
+Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
+
+# Win32 APIs to hide/move windows off-screen so they're invisible to the user
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinHelper {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+
+    public const int SW_HIDE = 0;
+    public const int SW_SHOW = 5;
+    public const int SW_MINIMIZE = 6;
+    public const int SW_RESTORE = 9;
+
+    // Move window far off-screen so user never sees it
+    // InvokePattern still works on off-screen/hidden windows
+    public static void HideOffScreen(IntPtr hWnd) {
+        if (hWnd == IntPtr.Zero) return;
+        RECT rect;
+        GetWindowRect(hWnd, out rect);
+        int w = rect.Right - rect.Left;
+        int h = rect.Bottom - rect.Top;
+        if (w < 50) w = 500;
+        if (h < 50) h = 400;
+        MoveWindow(hWnd, -9999, -9999, w, h, false);
+    }
+}
+"@ -ErrorAction SilentlyContinue
+
+# Helper: hide any window by moving it off-screen
+function Hide-Window {
+    param($uiElement)
+    try {
+        $hwnd = [IntPtr]::new($uiElement.Current.NativeWindowHandle)
+        if ($hwnd -ne [IntPtr]::Zero) {
+            [WinHelper]::HideOffScreen($hwnd)
+        }
+    } catch {}
+}
+
 $results = @()
 
 # ============================================================
-# METHOD 1: Epson Status Monitor 3 — Bidirectional Query
-# Forces the Epson driver to refresh its cached status from
-# the printer via bidirectional USB/network communication,
-# then reads the updated registry values.
+# Force-EpsonRefreshViaUI
+# Opens Printing Preferences -> Maintenance tab -> clicks
+# "EPSON Status Monitor 3" which forces the driver to query
+# the printer hardware over USB and update the STM3 registry.
+# This is the ONLY method proven to work for USB Epson printers.
+# ALL WINDOWS ARE MOVED OFF-SCREEN — invisible to the user.
+# ============================================================
+function Force-EpsonRefreshViaUI {
+    param([string]$PrinterName)
+
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+
+        # Open Printing Preferences via rundll32
+        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \\\`"$PrinterName\\\`"" -PassThru -WindowStyle Hidden -ErrorAction Stop
+
+        # Wait for window (search by name since rundll32 spawns child)
+        $mainWin = $null
+        $escapedName = [regex]::Escape($PrinterName)
+        for ($w = 0; $w -lt 20; $w++) {
+            Start-Sleep -Milliseconds 500
+            $allWins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($wn in $allWins) {
+                if ($wn.Current.Name -match "$escapedName.*Printing Preferences") {
+                    $mainWin = $wn
+                    break
+                }
+            }
+            if ($mainWin) { break }
+        }
+
+        if (-not $mainWin) {
+            try { $proc.Kill() } catch {}
+            return $false
+        }
+
+        # IMMEDIATELY move window off-screen so user never sees it
+        Hide-Window -uiElement $mainWin
+
+        # Dismiss any blocking child dialog (e.g. "Print Head Cleaning" completion)
+        $childWinCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Window)
+        $childWins = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
+        foreach ($cw in $childWins) {
+            foreach ($btnName in @("Finish", "Close", "OK", "Cancel", "No")) {
+                $nameCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::NameProperty, $btnName)
+                $btn = $cw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond)
+                if ($btn -and $btn.Current.IsEnabled) {
+                    try {
+                        $ip = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                        $ip.Invoke()
+                    } catch {}
+                    Start-Sleep -Milliseconds 500
+                    break
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 300
+
+        # Click Maintenance tab
+        $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, "Maintenance")
+        $maintTab = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+        if ($maintTab -and $maintTab.Current.IsEnabled) {
+            try {
+                $sip = $maintTab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                $sip.Select()
+            } catch {}
+            Start-Sleep -Milliseconds 500
+        }
+
+        # Click "EPSON Status Monitor 3" button (queries printer, no printing!)
+        $stm3Cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, "EPSON Status Monitor 3")
+        $stm3Btn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $stm3Cond)
+        $clicked = $false
+        if ($stm3Btn -and $stm3Btn.Current.IsEnabled) {
+            try {
+                $ip = $stm3Btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                $ip.Invoke()
+                $clicked = $true
+            } catch {}
+            Start-Sleep -Seconds 3
+
+            # Close the Status Monitor window that opens
+            $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($aw in $allWins2) {
+                if ($aw.Current.Name -match 'EPSON Status Monitor 3' -and $aw.Current.Name -notmatch 'Preferences|Properties|Printing') {
+                    Hide-Window -uiElement $aw  # Move off-screen immediately
+                    $closeCond = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, "Close")
+                    $closeBtn = $aw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $closeCond)
+                    if ($closeBtn) {
+                        try {
+                            $cip = $closeBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                            $cip.Invoke()
+                        } catch {}
+                    }
+                }
+            }
+            # Close child status monitor windows
+            $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
+            foreach ($cw2 in $childWins2) {
+                if ($cw2.Current.Name -match 'Status Monitor') {
+                    foreach ($bn in @("Close", "OK")) {
+                        $nc = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
+                        $b = $cw2.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
+                        if ($b -and $b.Current.IsEnabled) {
+                            try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        if (-not $clicked) {
+            # Fallback: try "Printer and Option Information"
+            $poiCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, "Printer and Option Information")
+            $poiBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $poiCond)
+            if ($poiBtn -and $poiBtn.Current.IsEnabled) {
+                try {
+                    $poiBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                    $clicked = $true
+                } catch {}
+                Start-Sleep -Seconds 3
+                $childWins3 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
+                foreach ($cw3 in $childWins3) {
+                    foreach ($bn in @("Close", "OK", "Cancel")) {
+                        $nc = New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
+                        $b = $cw3.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
+                        if ($b -and $b.Current.IsEnabled) {
+                            try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        # Close preferences
+        Start-Sleep -Milliseconds 300
+        $cancelCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, "Cancel")
+        $cancelBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cancelCond)
+        if ($cancelBtn -and $cancelBtn.Current.IsEnabled) {
+            try { $cancelBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
+        }
+        Start-Sleep -Milliseconds 500
+        try { $proc.Kill() } catch {}
+
+        # Wait for registry propagation
+        Start-Sleep -Seconds 5
+
+        return $clicked
+    } catch {
+        return $false
+    }
+}
+
+# ============================================================
+# Read Epson counters from STM3 registry (after UI refresh)
+# Parses Tag 0x36 from the BDC ST2 binary blob for accurate
+# WB-Color, WB-BW, BL-Color, BL-BW values.
 # ============================================================
 function Get-EpsonCountersViaRegistry {
     param([string]$PrinterName)
@@ -3563,7 +3783,6 @@ function Get-EpsonCountersViaRegistry {
         IsOnline = $false
     }
 
-    # Check if printer is online first
     try {
         $wmiPrinter = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $PrinterName }
         if ($wmiPrinter -and -not $wmiPrinter.WorkOffline) {
@@ -3571,26 +3790,7 @@ function Get-EpsonCountersViaRegistry {
         }
     } catch {}
 
-    # ----- Step 1: Try to trigger a status refresh via EPSON Status Monitor -----
-    # The Epson driver uses bidirectional communication; when we open the printer
-    # handle and request status, it queries the hardware and updates the registry.
-    if ($result.IsOnline) {
-        try {
-            # Opening the print queue with System.Printing forces a status refresh
-            Add-Type -AssemblyName System.Printing -ErrorAction SilentlyContinue
-            $server = New-Object System.Printing.LocalPrintServer -ErrorAction SilentlyContinue
-            if ($server) {
-                $q = $server.GetPrintQueues() | Where-Object { $_.Name -eq $PrinterName }
-                if ($q -and $q.IsBidiEnabled) {
-                    $q.Refresh()
-                    Start-Sleep -Milliseconds 500  # Give driver time to update
-                }
-            }
-        } catch {}
-    }
-
-    # ----- Step 2: Read Epson STM3 registry data -----
-    # Location: HKCU:\\SOFTWARE\\EPSON\\STM3\\STMData\\EPLTarget\\P*
+    # Read Epson STM3 registry data
     $stmPath = 'HKCU:\\SOFTWARE\\EPSON\\STM3\\STMData\\EPLTarget'
     if (Test-Path $stmPath) {
         $targets = Get-ChildItem $stmPath -ErrorAction SilentlyContinue
@@ -3599,88 +3799,59 @@ function Get-EpsonCountersViaRegistry {
             if ($props -and $props.Name -eq $PrinterName) {
                 $result.Source = "epson_stm3_registry"
 
-                # Read the Status binary blob (BDC ST2 protocol)
                 $statusBytes = $props.Status
                 if ($statusBytes -and $statusBytes.Length -gt 20) {
-                    # Parse Epson BDC ST2 binary protocol
-                    # Header: @BDC ST2\\r\\n (10 bytes)
-                    # Then TLV fields: tag(1 byte) + length(1 byte) + data(length bytes)
-                    $pos = 10
-                    while ($pos -lt $statusBytes.Length - 1) {
-                        $tag = $statusBytes[$pos]
-                        $len = $statusBytes[$pos + 1]
+                    # Verify BDC ST2 header
+                    $header = [System.Text.Encoding]::ASCII.GetString($statusBytes[0..7])
+                    if ($header -match '@BDC ST2') {
+                        $pos = 10
+                        # Skip CRLF after header
+                        while ($pos -lt $statusBytes.Length -and ($statusBytes[$pos] -eq 0x0D -or $statusBytes[$pos] -eq 0x0A)) { $pos++ }
 
-                        if ($pos + 2 + $len -gt $statusBytes.Length) { break }
-                        if ($len -eq 0) { $pos += 2; continue }
+                        while ($pos -lt ($statusBytes.Length - 1)) {
+                            $tag = $statusBytes[$pos]
+                            $len = $statusBytes[$pos + 1]
+                            if (($pos + 2 + $len) -gt $statusBytes.Length) { break }
+                            if ($len -eq 0) { $pos += 2; continue }
 
-                        $data = $statusBytes[($pos + 2)..($pos + 1 + $len)]
+                            # Tag 0x36: Extended page counter block with detailed breakdown
+                            # Contains UInt32 LE values: [padding][padding][WB-Color][WB-BW][BL-Color][padding][BL-BW]
+                            if ($tag -eq 0x36 -and $len -ge 28) {
+                                $data = $statusBytes[($pos + 2)..($pos + 1 + $len)]
+                                $vals = @()
+                                for ($k = 0; $k -le ($data.Length - 4); $k += 4) {
+                                    $vals += [BitConverter]::ToUInt32($data[$k..($k+3)], 0)
+                                }
 
-                        # Tag 0x19: Page Counter (when printer is online, contains numeric data)
-                        if ($tag -eq 0x19 -and $len -ge 4) {
-                            # Check if it contains "unknown" (printer offline)
-                            $str = [System.Text.Encoding]::ASCII.GetString($data)
-                            if ($str -notmatch 'unknown') {
-                                # Parse sub-fields within the page counter tag
-                                # Format varies by model but typically:
-                                # Sub-tag structures or raw counter bytes
-                                if ($data.Length -ge 12) {
-                                    # Try 4-byte LE integer at various offsets
-                                    for ($k = 0; $k -le ($data.Length - 4); $k += 4) {
-                                        $val = [BitConverter]::ToUInt32($data[$k..($k+3)], 0)
-                                        if ($val -gt 0 -and $val -lt 10000000) {
-                                            if ($result.TotalPages -lt 0) { $result.TotalPages = [int]$val }
-                                        }
-                                    }
+                                if ($vals.Count -ge 7) {
+                                    # vals[2] = WithBorder Color, vals[3] = WithBorder BW
+                                    # vals[4] = Borderless Color, vals[6] = Borderless BW
+                                    if ($vals[2] -ne 4294967295) { $result.WithBorderColor = [int]$vals[2] }
+                                    if ($vals[3] -ne 4294967295) { $result.WithBorderBW = [int]$vals[3] }
+                                    if ($vals[4] -ne 4294967295) { $result.BorderlessColor = [int]$vals[4] }
+                                    if ($vals[6] -ne 4294967295) { $result.BorderlessBW = [int]$vals[6] }
+
+                                    # Calculate totals
+                                    $total = 0; $color = 0; $bw = 0
+                                    if ($result.WithBorderColor -ge 0) { $color += $result.WithBorderColor; $total += $result.WithBorderColor }
+                                    if ($result.WithBorderBW -ge 0) { $bw += $result.WithBorderBW; $total += $result.WithBorderBW }
+                                    if ($result.BorderlessColor -ge 0) { $color += $result.BorderlessColor; $total += $result.BorderlessColor }
+                                    if ($result.BorderlessBW -ge 0) { $bw += $result.BorderlessBW; $total += $result.BorderlessBW }
+
+                                    $result.TotalPages = $total
+                                    $result.ColorPages = $color
+                                    $result.BWPages = $bw
+                                    $result.Source = "epson_stm3_tag36"
                                 }
                             }
+
+                            $pos += 2 + $len
                         }
-
-                        # Tag 0x28: Total/Summary counter
-                        if ($tag -eq 0x28 -and $len -ge 4) {
-                            $val = [BitConverter]::ToUInt32($data[0..3], 0)
-                            if ($val -gt 0 -and $val -lt 10000000) {
-                                # Could be total pages or a sub-counter
-                                if ($result.TotalPages -lt 0) {
-                                    $result.TotalPages = [int]$val
-                                }
-                            }
-                        }
-
-                        # Tag 0x36: Extended counter block (contains detailed page breakdowns)
-                        if ($tag -eq 0x36 -and $len -ge 16) {
-                            # Parse 4-byte LE integers from the extended block
-                            $counters = @()
-                            for ($k = 0; $k -le ($data.Length - 4); $k += 4) {
-                                $val = [BitConverter]::ToUInt32($data[$k..($k+3)], 0)
-                                if ($val -ne 0xFFFFFFFF) {
-                                    $counters += [int]$val
-                                }
-                            }
-                            # Extended block typically has: totalPages, colorPages, bwPages, blankPages, etc.
-                            if ($counters.Count -ge 3) {
-                                foreach ($c in $counters) {
-                                    if ($c -gt 0 -and $c -lt 10000000) {
-                                        if ($result.TotalPages -lt 0 -or $c -gt $result.TotalPages) {
-                                            # The largest non-FFFFFFFF counter is likely total pages
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        # Tag 0x40: Serial number (ASCII)
-                        # Tag 0x48: Firmware version
-
-                        $pos += 2 + $len
                     }
                 }
 
-                # PrintNotifyInkConsumptionCounter — a rough page counter cached by the driver
                 if ($props.PrintNotifyInkConsumptionCounter) {
                     $inkCounter = [int]$props.PrintNotifyInkConsumptionCounter
-                    if ($inkCounter -gt 0 -and $result.TotalPages -lt 0) {
-                        # This is NOT the total pages but can serve as a fallback indicator
-                    }
                 }
                 break
             }
@@ -3691,44 +3862,7 @@ function Get-EpsonCountersViaRegistry {
 }
 
 # ============================================================
-# METHOD 2: Windows Bidirectional Printer Communication (Bidi)
-# Uses the IBidiSpl COM interface to send an Epson STATUS
-# request directly to the printer and parse the response.
-# This works for USB and network Epson printers when online.
-# ============================================================
-function Get-EpsonCountersViaBidi {
-    param([string]$PrinterName)
-
-    $result = @{
-        TotalPages = -1
-        ColorPages = -1
-        BWPages = -1
-        Source = "bidi"
-    }
-
-    try {
-        Add-Type -AssemblyName System.Printing -ErrorAction Stop
-        $server = New-Object System.Printing.LocalPrintServer
-        $q = $server.GetPrintQueues() | Where-Object { $_.Name -eq $PrinterName }
-
-        if ($q -and $q.IsBidiEnabled -and -not $q.IsOffline) {
-            # The Bidi schema for page counters varies by manufacturer
-            # Epson uses proprietary extensions but we can try standard schemas
-            $q.Refresh()
-            # Note: Actual Bidi queries need low-level COM (IBidiSpl)
-            # which is complex from PowerShell. The registry method above
-            # captures the same data after a Refresh() triggers the driver.
-        }
-    } catch {}
-
-    return $result
-}
-
-# ============================================================
-# METHOD 3: SNMP Query (for network printers)
-# Standard OIDs for printer page counters:
-#   1.3.6.1.2.1.43.10.2.1.4.1.1 = Total Pages (prtMarkerLifeCount)
-#   1.3.6.1.2.1.43.11.1.1.9     = Ink/toner levels
+# SNMP Query (for network printers)
 # ============================================================
 function Get-PrinterCountersViaSNMP {
     param([string]$PrinterIP)
@@ -3745,77 +3879,45 @@ function Get-PrinterCountersViaSNMP {
     }
 
     try {
-        # Try using snmpget if available (common on Windows with SNMP tools)
-        # OID for prtMarkerLifeCount (total pages printed)
         $oid = "1.3.6.1.2.1.43.10.2.1.4.1.1"
-        $output = & snmpget -v 2c -c public "$PrinterIP" "$oid" 2>$null
-        if ($output -match '(\d+)$') {
-            $result.TotalPages = [int]$Matches[1]
-            $result.Source = "snmp"
-        }
-    } catch {}
+        $udpClient = New-Object System.Net.Sockets.UdpClient
+        $udpClient.Client.ReceiveTimeout = 3000
 
-    # Fallback: Try Test-Connection + custom UDP SNMP query
-    if ($result.TotalPages -lt 0) {
-        try {
-            # Use .NET to send a raw SNMP GET request
-            # This is a simplified SNMP v1 GET for the total page counter
-            $ping = Test-Connection $PrinterIP -Count 1 -Quiet -ErrorAction SilentlyContinue
-            if ($ping) {
-                $udpClient = New-Object System.Net.Sockets.UdpClient
-                $udpClient.Client.ReceiveTimeout = 3000
+        $snmpGetBytes = [byte[]]@(
+            0x30, 0x2E, 0x02, 0x01, 0x00,
+            0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63,
+            0xA0, 0x21, 0x02, 0x04, 0x00, 0x00, 0x00, 0x01,
+            0x02, 0x01, 0x00, 0x02, 0x01, 0x00,
+            0x30, 0x13, 0x30, 0x11, 0x06, 0x0D,
+            0x2B, 0x06, 0x01, 0x02, 0x01, 0x2B, 0x0A, 0x02, 0x01, 0x04, 0x01, 0x01, 0x00,
+            0x05, 0x00
+        )
 
-                # SNMP v1 GET request for OID 1.3.6.1.2.1.43.10.2.1.4.1.1 (prtMarkerLifeCount)
-                # Pre-built SNMP packet for community "public"
-                $snmpGetBytes = [byte[]]@(
-                    0x30, 0x2E,  # SEQUENCE
-                    0x02, 0x01, 0x00,  # version: v1
-                    0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63,  # community: "public"
-                    0xA0, 0x21,  # GetRequest-PDU
-                    0x02, 0x04, 0x00, 0x00, 0x00, 0x01,  # request-id: 1
-                    0x02, 0x01, 0x00,  # error-status: noError
-                    0x02, 0x01, 0x00,  # error-index: 0
-                    0x30, 0x13,  # varbind list
-                    0x30, 0x11,  # varbind
-                    0x06, 0x0D,  # OID
-                    0x2B, 0x06, 0x01, 0x02, 0x01, 0x2B, 0x0A, 0x02, 0x01, 0x04, 0x01, 0x01, 0x00,
-                    0x05, 0x00   # NULL value
-                )
+        $endpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($PrinterIP), 161)
+        $udpClient.Send($snmpGetBytes, $snmpGetBytes.Length, $endpoint) | Out-Null
+        $remoteEP = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $response = $udpClient.Receive([ref]$remoteEP)
+        $udpClient.Close()
 
-                $endpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($PrinterIP), 161)
-                $udpClient.Send($snmpGetBytes, $snmpGetBytes.Length, $endpoint) | Out-Null
-
-                $remoteEP = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
-                $response = $udpClient.Receive([ref]$remoteEP)
-                $udpClient.Close()
-
-                if ($response -and $response.Length -gt 20) {
-                    # Parse SNMP response — look for Integer value at the end
-                    # The page counter integer is typically the last TLV in the response
-                    for ($i = $response.Length - 1; $i -ge 4; $i--) {
-                        if ($response[$i - 1] -eq 0x02) {  # ASN.1 INTEGER tag
-                            $intLen = 0
-                            $intVal = 0
-                            # Simple integer parsing
-                            $iLen = $response[$i]
-                            if ($iLen -ge 1 -and $iLen -le 4 -and ($i + $iLen) -lt $response.Length) {
-                                for ($j = 0; $j -lt $iLen; $j++) {
-                                    $intVal = ($intVal -shl 8) -bor $response[$i + 1 + $j]
-                                }
-                                if ($intVal -gt 0 -and $intVal -lt 10000000) {
-                                    $result.TotalPages = [int]$intVal
-                                    $result.Source = "snmp_raw"
-                                }
-                            }
-                            break
+        if ($response -and $response.Length -gt 20) {
+            for ($i = $response.Length - 1; $i -ge 4; $i--) {
+                if ($response[$i - 1] -eq 0x02) {
+                    $iLen = $response[$i]
+                    if ($iLen -ge 1 -and $iLen -le 4 -and ($i + $iLen) -lt $response.Length) {
+                        $intVal = 0
+                        for ($j = 0; $j -lt $iLen; $j++) {
+                            $intVal = ($intVal -shl 8) -bor $response[$i + 1 + $j]
+                        }
+                        if ($intVal -gt 0 -and $intVal -lt 10000000) {
+                            $result.TotalPages = [int]$intVal
+                            $result.Source = "snmp_raw"
                         }
                     }
+                    break
                 }
             }
-        } catch {
-            # SNMP not available or printer not reachable
         }
-    }
+    } catch {}
 
     return $result
 }
@@ -3826,8 +3928,25 @@ function Get-PrinterCountersViaSNMP {
 try {
     $printers = Get-Printer -ErrorAction Stop
 
+    # First pass: force refresh Epson USB printers via UI Automation
     foreach ($printer in $printers) {
-        # Skip virtual printers
+        $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
+        if (-not $isEpson) { continue }
+
+        $nameLower = $printer.Name.ToLower()
+        if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
+
+        # Only refresh online printers
+        try {
+            $wmi = Get-WmiObject Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $printer.Name }
+            if ($wmi -and -not $wmi.WorkOffline -and $printer.PortName -match '^USB') {
+                Force-EpsonRefreshViaUI -PrinterName $printer.Name | Out-Null
+            }
+        } catch {}
+    }
+
+    # Second pass: read counters from registry (now updated)
+    foreach ($printer in $printers) {
         $nameLower = $printer.Name.ToLower()
         if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
 
@@ -3849,13 +3968,11 @@ try {
             Timestamp = (Get-Date).ToString("o")
         }
 
-        # Check online status
         try {
             $wmi = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $printer.Name }
             $printerResult.IsOnline = ($wmi -and -not $wmi.WorkOffline)
         } catch {}
 
-        # Try Epson-specific methods for Epson printers
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
 
         if ($isEpson) {
@@ -3875,19 +3992,15 @@ try {
             }
         }
 
-        # Try SNMP for network printers (any brand)
+        # Try SNMP for network printers
         if ($printerResult.TotalPages -lt 0) {
             $portName = $printer.PortName
             $printerIP = ""
-            # Check if port is a TCP/IP port
             try {
                 $tcpPort = Get-WmiObject Win32_TCPIPPrinterPort -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $portName }
-                if ($tcpPort) {
-                    $printerIP = $tcpPort.HostAddress
-                }
+                if ($tcpPort) { $printerIP = $tcpPort.HostAddress }
             } catch {}
-            # Also check if port looks like an IP
-            if (-not $printerIP -and $portName -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') {
+            if (-not $printerIP -and $portName -match '(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})') {
                 $printerIP = $Matches[1]
             }
 
@@ -3900,7 +4013,6 @@ try {
             }
         }
 
-        # Only include printers that have SOME counter data or are Epson
         if ($printerResult.TotalPages -ge 0 -or $isEpson) {
             $results += [PSCustomObject]$printerResult
         }
@@ -3916,7 +4028,7 @@ if ($results.Count -eq 0) {
 }
 `;
 
-    const stdout = await runPS(script, 30000);
+    const stdout = await runPS(script, 60000);
     if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
         return [];
     }
@@ -3946,14 +4058,6 @@ if ($results.Count -eq 0) {
         console.error('[PrintMonitor] Page counter parse error:', e.message);
         return [];
     }
-}
-
-    function stop() {
-        running = false;
-        if (proc) { try { proc.kill(); } catch (e) {} }
-    }
-
-    return { stop, isRunning: () => running };
 }
 
 
