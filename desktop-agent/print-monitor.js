@@ -3536,20 +3536,17 @@ while (\$true) {
 
 /**
  * Get page counters from all installed printers.
- * For Epson printers: reads from Epson Status Monitor 3 registry + bidirectional communication.
+ * For Epson printers: reads "Total Sheets" from "Printer and Option Information" dialog
+ * (Maintenance tab) which is the hardware sheet counter of ALL physical sheets fed through.
+ * Also reads STM3 registry for color/BW breakdown.
  * For network printers: attempts SNMP query.
- * Returns an array of { printerName, totalPages, colorPages, bwPages, blankPages, firstPrintDate, source, timestamp, isOnline }
- *
- * The data corresponds to what Epson shows under:
- *   Printer Properties > Maintenance > Nozzle Check / Head Cleaning
- * These are lifetime counters stored in the printer's firmware (EEPROM).
+ * Returns an array of { printerName, totalPages, totalSheets, colorPages, bwPages, ... }
  */
 async function getPrinterPageCounters() {
     const script = `
 Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
 Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
 
-# Win32 API for mouse clicks - visible but reliable (only method Epson buttons respond to)
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -3558,9 +3555,12 @@ public class UserInput {
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT lpPoint);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessage(IntPtr hWnd, UInt32 Msg, IntPtr wParam, IntPtr lParam);
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
     public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     public const uint MOUSEEVENTF_LEFTUP   = 0x0004;
+    public const UInt32 BM_CLICK = 0x00F5;
     public static void Click(int x, int y) {
         POINT saved;
         GetCursorPos(out saved);
@@ -3575,23 +3575,37 @@ public class UserInput {
 $results = @()
 
 # ============================================================
-# Force-EpsonRefreshViaUI
-# Opens Printing Preferences -> Maintenance tab -> clicks
-# "EPSON Status Monitor 3" which forces the driver to query
-# the printer hardware over USB and update the STM3 registry.
-# This is the ONLY method proven to work for USB Epson printers.
-# Window is visible for ~5 seconds per cycle.
+# Click element using cascade: Invoke -> SendMessage -> Coordinate
 # ============================================================
-function Force-EpsonRefreshViaUI {
+function Click-UIElement {
+    param($el, [string]$label)
+    try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch {}
+    try { $el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); return $true } catch {}
+    try {
+        $h = [IntPtr]::new($el.Current.NativeWindowHandle)
+        if ($h -ne [IntPtr]::Zero) { [UserInput]::SendMessage($h, [UserInput]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null; return $true }
+    } catch {}
+    try {
+        $r = $el.Current.BoundingRectangle
+        $cx = [int]($r.X + $r.Width / 2); $cy = [int]($r.Y + $r.Height / 2)
+        if ($cx -gt 0 -and $cy -gt 0) { [UserInput]::Click($cx, $cy); return $true }
+    } catch {}
+    return $false
+}
+
+# ============================================================
+# Get Total Sheets from "Printer and Option Information" dialog
+# ============================================================
+function Get-EpsonTotalSheets {
     param([string]$PrinterName)
+
+    $sheetResult = @{ TotalSheets = -1; BorderlessSheets = -1 }
 
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
-
-        # Open Printing Preferences via rundll32
         $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \\\`"$PrinterName\\\`"" -PassThru -ErrorAction Stop
 
-        # Wait for window (search by name since rundll32 spawns child)
+        # Wait for Printing Preferences window
         $mainWin = $null
         $escapedName = [regex]::Escape($PrinterName)
         for ($w = 0; $w -lt 20; $w++) {
@@ -3599,41 +3613,28 @@ function Force-EpsonRefreshViaUI {
             $allWins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
                 [System.Windows.Automation.Condition]::TrueCondition)
             foreach ($wn in $allWins) {
-                if ($wn.Current.Name -match "$escapedName.*Printing Preferences") {
-                    $mainWin = $wn
-                    break
-                }
+                if ($wn.Current.Name -match "$escapedName.*Printing Preferences") { $mainWin = $wn; break }
             }
             if ($mainWin) { break }
         }
 
-        if (-not $mainWin) {
-            try { $proc.Kill() } catch {}
-            return $false
-        }
+        if (-not $mainWin) { try { $proc.Kill() } catch {}; return $sheetResult }
 
-        # Bring window to foreground for clicking
+        # Bring to foreground
         $hwnd = [IntPtr]::new($mainWin.Current.NativeWindowHandle)
         if ($hwnd -ne [IntPtr]::Zero) { [UserInput]::SetForegroundWindow($hwnd) }
 
-        # Dismiss any blocking child dialog (e.g. "Print Head Cleaning" completion)
+        # Dismiss any blocking dialog
         $childWinCond = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
             [System.Windows.Automation.ControlType]::Window)
         $childWins = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
         foreach ($cw in $childWins) {
-            foreach ($btnName in @("Finish", "Close", "OK", "Cancel", "No")) {
-                $nameCond = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::NameProperty, $btnName)
-                $btn = $cw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond)
-                if ($btn -and $btn.Current.IsEnabled) {
-                    try {
-                        $ip = $btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                        $ip.Invoke()
-                    } catch {}
-                    Start-Sleep -Milliseconds 500
-                    break
-                }
+            foreach ($bn in @("Finish", "Close", "OK", "Cancel", "No")) {
+                $nc = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
+                $b = $cw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
+                if ($b -and $b.Current.IsEnabled) { Click-UIElement -el $b -label $bn | Out-Null; Start-Sleep -Milliseconds 500; break }
             }
         }
         Start-Sleep -Milliseconds 300
@@ -3642,215 +3643,149 @@ function Force-EpsonRefreshViaUI {
         $tabCond = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::NameProperty, "Maintenance")
         $maintTab = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
-        if ($maintTab -and $maintTab.Current.IsEnabled) {
-            try {
-                $sip = $maintTab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                $sip.Select()
-            } catch {}
-            Start-Sleep -Milliseconds 500
-        }
+        if ($maintTab -and $maintTab.Current.IsEnabled) { Click-UIElement -el $maintTab -label "Maintenance" | Out-Null; Start-Sleep -Milliseconds 500 }
 
-        # Click "EPSON Status Monitor 3" button - use REAL coordinate click
-        $stm3Cond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "EPSON Status Monitor 3")
-        $stm3Btn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $stm3Cond)
+        # Click "Printer and Option Information"
+        $poiCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, "Printer and Option Information")
+        $poiBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $poiCond)
         $clicked = $false
-        if ($stm3Btn -and $stm3Btn.Current.IsEnabled) {
-            try {
-                $ip = $stm3Btn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                $ip.Invoke()
-                $clicked = $true
-            } catch {}
-            if (-not $clicked) {
-                $rect = $stm3Btn.Current.BoundingRectangle
-                $cx = [int]($rect.X + $rect.Width / 2)
-                $cy = [int]($rect.Y + $rect.Height / 2)
-                if ($cx -gt 0 -and $cy -gt 0) {
-                    [UserInput]::Click($cx, $cy)
-                    $clicked = $true
-                }
-            }
-        }
+        if ($poiBtn -and $poiBtn.Current.IsEnabled) { $clicked = Click-UIElement -el $poiBtn -label "POI" }
+
         if ($clicked) {
             Start-Sleep -Seconds 3
 
-            # Close the Status Monitor window that opens
-            $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
-                [System.Windows.Automation.Condition]::TrueCondition)
-            foreach ($aw in $allWins2) {
-                if ($aw.Current.Name -match 'EPSON Status Monitor 3' -and $aw.Current.Name -notmatch 'Preferences|Properties|Printing') {
-                    $closeCond = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, "Close")
-                    $closeBtn = $aw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $closeCond)
-                    if ($closeBtn) {
+            # Find the dialog
+            $poiWin = $null
+            $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
+            foreach ($cw in $childWins2) {
+                if ($cw.Current.Name -match 'Printer and Option Information|Option') { $poiWin = $cw; break }
+            }
+            if (-not $poiWin) {
+                $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+                foreach ($aw in $allWins2) {
+                    if ($aw.Current.Name -match 'Printer and Option Information') { $poiWin = $aw; break }
+                }
+            }
+
+            if ($poiWin) {
+                # Read Edit controls (Total Sheets and Borderless Sheets values)
+                $editCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Edit)
+                $edits = $poiWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCond)
+                $numericValues = @()
+                foreach ($edit in $edits) {
+                    try {
+                        $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        $val = $vp.Current.Value
+                        if ($val -match '^\d+$') { $numericValues += [int]$val }
+                    } catch {
+                        $name = $edit.Current.Name
+                        if ($name -match '^\d+$') { $numericValues += [int]$name }
+                    }
+                }
+
+                # If no edits found, try all descendants
+                if ($numericValues.Count -eq 0) {
+                    $allDesc = $poiWin.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                        [System.Windows.Automation.Condition]::TrueCondition)
+                    foreach ($d in $allDesc) {
                         try {
-                            $cip = $closeBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                            $cip.Invoke()
+                            $vp = $d.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                            $val = $vp.Current.Value
+                            if ($val -match '^\d+$' -and [int]$val -gt 0) { $numericValues += [int]$val }
                         } catch {}
                     }
                 }
-            }
-            # Close child status monitor windows
-            $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
-            foreach ($cw2 in $childWins2) {
-                if ($cw2.Current.Name -match 'Status Monitor') {
-                    foreach ($bn in @("Close", "OK")) {
-                        $nc = New-Object System.Windows.Automation.PropertyCondition(
-                            [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
-                        $b = $cw2.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
-                        if ($b -and $b.Current.IsEnabled) {
-                            try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-                            break
-                        }
-                    }
+
+                if ($numericValues.Count -ge 1) { $sheetResult.TotalSheets = $numericValues[0] }
+                if ($numericValues.Count -ge 2) { $sheetResult.BorderlessSheets = $numericValues[1] }
+
+                # Close dialog
+                $okBtn = $null
+                foreach ($bn in @("OK", "Close", "Cancel")) {
+                    $nc2 = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
+                    $okBtn = $poiWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc2)
+                    if ($okBtn) { Click-UIElement -el $okBtn -label $bn | Out-Null; break }
                 }
+                Start-Sleep -Milliseconds 500
             }
         }
 
-        if (-not $clicked) {
-            # Fallback: try "Printer and Option Information"
-            $poiCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::NameProperty, "Printer and Option Information")
-            $poiBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $poiCond)
-            if ($poiBtn -and $poiBtn.Current.IsEnabled) {
-                try {
-                    $poiBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                    $clicked = $true
-                } catch {}
-                Start-Sleep -Seconds 3
-                $childWins3 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
-                foreach ($cw3 in $childWins3) {
-                    foreach ($bn in @("Close", "OK", "Cancel")) {
-                        $nc = New-Object System.Windows.Automation.PropertyCondition(
-                            [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
-                        $b = $cw3.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
-                        if ($b -and $b.Current.IsEnabled) {
-                            try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-                            break
-                        }
-                    }
-                }
-            }
-        }
-
-        # Close preferences
-        Start-Sleep -Milliseconds 300
+        # Close Preferences
         $cancelCond = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::NameProperty, "Cancel")
         $cancelBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cancelCond)
-        if ($cancelBtn -and $cancelBtn.Current.IsEnabled) {
-            try { $cancelBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch {}
-        }
-        Start-Sleep -Milliseconds 500
+        if ($cancelBtn -and $cancelBtn.Current.IsEnabled) { Click-UIElement -el $cancelBtn -label "Cancel" | Out-Null }
+        Start-Sleep -Seconds 1
         try { $proc.Kill() } catch {}
+    } catch {}
 
-        # Wait for registry propagation
-        Start-Sleep -Seconds 5
-
-        return $clicked
-    } catch {
-        return $false
-    }
+    return $sheetResult
 }
 
 # ============================================================
-# Read Epson counters from STM3 registry (after UI refresh)
-# Parses Tag 0x36 from the BDC ST2 binary blob for accurate
-# WB-Color, WB-BW, BL-Color, BL-BW values.
+# Read Epson counters from STM3 registry
 # ============================================================
 function Get-EpsonCountersViaRegistry {
     param([string]$PrinterName)
 
     $result = @{
         PrinterName = $PrinterName
-        TotalPages = -1
-        ColorPages = -1
-        BWPages = -1
-        BlankPages = -1
-        BorderlessColor = -1
-        BorderlessBW = -1
-        WithBorderColor = -1
-        WithBorderBW = -1
-        FirstPrintDate = ""
-        Source = "none"
-        IsOnline = $false
+        TotalPages = -1; ColorPages = -1; BWPages = -1; BlankPages = -1
+        BorderlessColor = -1; BorderlessBW = -1; WithBorderColor = -1; WithBorderBW = -1
+        FirstPrintDate = ""; Source = "none"; IsOnline = $false
     }
 
     try {
-        $wmiPrinter = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $PrinterName }
-        if ($wmiPrinter -and -not $wmiPrinter.WorkOffline) {
-            $result.IsOnline = $true
-        }
+        $wmiP = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $PrinterName }
+        if ($wmiP -and -not $wmiP.WorkOffline) { $result.IsOnline = $true }
     } catch {}
 
-    # Read Epson STM3 registry data
-    $stmPath = 'HKCU:\\SOFTWARE\\EPSON\\STM3\\STMData\\EPLTarget'
+    $stmPath = 'HKCU:\\\\SOFTWARE\\\\EPSON\\\\STM3\\\\STMData\\\\EPLTarget'
     if (Test-Path $stmPath) {
         $targets = Get-ChildItem $stmPath -ErrorAction SilentlyContinue
         foreach ($target in $targets) {
             $props = Get-ItemProperty $target.PSPath -ErrorAction SilentlyContinue
             if ($props -and $props.Name -eq $PrinterName) {
                 $result.Source = "epson_stm3_registry"
-
                 $statusBytes = $props.Status
                 if ($statusBytes -and $statusBytes.Length -gt 20) {
-                    # Verify BDC ST2 header
                     $header = [System.Text.Encoding]::ASCII.GetString($statusBytes[0..7])
                     if ($header -match '@BDC ST2') {
                         $pos = 10
-                        # Skip CRLF after header
                         while ($pos -lt $statusBytes.Length -and ($statusBytes[$pos] -eq 0x0D -or $statusBytes[$pos] -eq 0x0A)) { $pos++ }
-
                         while ($pos -lt ($statusBytes.Length - 1)) {
-                            $tag = $statusBytes[$pos]
-                            $len = $statusBytes[$pos + 1]
+                            $tag = $statusBytes[$pos]; $len = $statusBytes[$pos + 1]
                             if (($pos + 2 + $len) -gt $statusBytes.Length) { break }
                             if ($len -eq 0) { $pos += 2; continue }
-
-                            # Tag 0x36: Extended page counter block with detailed breakdown
-                            # Contains UInt32 LE values: [padding][padding][WB-Color][WB-BW][BL-Color][padding][BL-BW]
                             if ($tag -eq 0x36 -and $len -ge 28) {
                                 $data = $statusBytes[($pos + 2)..($pos + 1 + $len)]
-                                $vals = @()
-                                for ($k = 0; $k -le ($data.Length - 4); $k += 4) {
-                                    $vals += [BitConverter]::ToUInt32($data[$k..($k+3)], 0)
-                                }
-
+                                $vals = @(); for ($k = 0; $k -le ($data.Length - 4); $k += 4) { $vals += [BitConverter]::ToUInt32($data[$k..($k+3)], 0) }
                                 if ($vals.Count -ge 7) {
-                                    # vals[2] = WithBorder Color, vals[3] = WithBorder BW
-                                    # vals[4] = Borderless Color, vals[6] = Borderless BW
                                     if ($vals[2] -ne 4294967295) { $result.WithBorderColor = [int]$vals[2] }
                                     if ($vals[3] -ne 4294967295) { $result.WithBorderBW = [int]$vals[3] }
                                     if ($vals[4] -ne 4294967295) { $result.BorderlessColor = [int]$vals[4] }
                                     if ($vals[6] -ne 4294967295) { $result.BorderlessBW = [int]$vals[6] }
-
-                                    # Calculate totals
                                     $total = 0; $color = 0; $bw = 0
                                     if ($result.WithBorderColor -ge 0) { $color += $result.WithBorderColor; $total += $result.WithBorderColor }
                                     if ($result.WithBorderBW -ge 0) { $bw += $result.WithBorderBW; $total += $result.WithBorderBW }
                                     if ($result.BorderlessColor -ge 0) { $color += $result.BorderlessColor; $total += $result.BorderlessColor }
                                     if ($result.BorderlessBW -ge 0) { $bw += $result.BorderlessBW; $total += $result.BorderlessBW }
-
-                                    $result.TotalPages = $total
-                                    $result.ColorPages = $color
-                                    $result.BWPages = $bw
+                                    $result.TotalPages = $total; $result.ColorPages = $color; $result.BWPages = $bw
                                     $result.Source = "epson_stm3_tag36"
                                 }
                             }
-
                             $pos += 2 + $len
                         }
                     }
-                }
-
-                if ($props.PrintNotifyInkConsumptionCounter) {
-                    $inkCounter = [int]$props.PrintNotifyInkConsumptionCounter
                 }
                 break
             }
         }
     }
-
     return $result
 }
 
@@ -3859,105 +3794,59 @@ function Get-EpsonCountersViaRegistry {
 # ============================================================
 function Get-PrinterCountersViaSNMP {
     param([string]$PrinterIP)
-
-    $result = @{
-        TotalPages = -1
-        ColorPages = -1
-        BWPages = -1
-        Source = "snmp"
-    }
-
-    if (-not $PrinterIP -or $PrinterIP -eq 'USB' -or $PrinterIP -match '^USB') {
-        return $result
-    }
-
+    $result = @{ TotalPages = -1; ColorPages = -1; BWPages = -1; Source = "snmp" }
+    if (-not $PrinterIP -or $PrinterIP -match '^USB') { return $result }
     try {
-        $oid = "1.3.6.1.2.1.43.10.2.1.4.1.1"
         $udpClient = New-Object System.Net.Sockets.UdpClient
         $udpClient.Client.ReceiveTimeout = 3000
-
         $snmpGetBytes = [byte[]]@(
             0x30, 0x2E, 0x02, 0x01, 0x00,
             0x04, 0x06, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63,
-            0xA0, 0x21, 0x02, 0x04, 0x00, 0x00, 0x00, 0x01,
-            0x02, 0x01, 0x00, 0x02, 0x01, 0x00,
-            0x30, 0x13, 0x30, 0x11, 0x06, 0x0D,
-            0x2B, 0x06, 0x01, 0x02, 0x01, 0x2B, 0x0A, 0x02, 0x01, 0x04, 0x01, 0x01, 0x00,
-            0x05, 0x00
-        )
-
-        $endpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($PrinterIP), 161)
-        $udpClient.Send($snmpGetBytes, $snmpGetBytes.Length, $endpoint) | Out-Null
+            0xA0, 0x21, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00,
+            0x30, 0x16, 0x30, 0x14, 0x06, 0x10,
+            0x2B, 0x06, 0x01, 0x02, 0x01, 0x2B, 0x0A, 0x02, 0x01, 0x04, 0x01, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x05, 0x00)
+        $udpClient.Send($snmpGetBytes, $snmpGetBytes.Length, $PrinterIP, 161) | Out-Null
         $remoteEP = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
         $response = $udpClient.Receive([ref]$remoteEP)
         $udpClient.Close()
-
-        if ($response -and $response.Length -gt 20) {
-            for ($i = $response.Length - 1; $i -ge 4; $i--) {
-                if ($response[$i - 1] -eq 0x02) {
-                    $iLen = $response[$i]
-                    if ($iLen -ge 1 -and $iLen -le 4 -and ($i + $iLen) -lt $response.Length) {
+        if ($response -and $response.Length -gt 30) {
+            for ($i = 0; $i -lt ($response.Length - 2); $i++) {
+                if ($response[$i] -eq 0x02 -and $i -gt 30) {
+                    $iLen = $response[$i + 1]
+                    if ($iLen -ge 1 -and $iLen -le 4 -and ($i + 1 + $iLen) -lt $response.Length) {
                         $intVal = 0
-                        for ($j = 0; $j -lt $iLen; $j++) {
-                            $intVal = ($intVal -shl 8) -bor $response[$i + 1 + $j]
-                        }
-                        if ($intVal -gt 0 -and $intVal -lt 10000000) {
-                            $result.TotalPages = [int]$intVal
-                            $result.Source = "snmp_raw"
-                        }
+                        for ($j = 0; $j -lt $iLen; $j++) { $intVal = ($intVal -shl 8) -bor $response[$i + 1 + $j] }
+                        if ($intVal -gt 0 -and $intVal -lt 10000000) { $result.TotalPages = [int]$intVal; $result.Source = "snmp_raw" }
                     }
                     break
                 }
             }
         }
     } catch {}
-
     return $result
 }
 
 # ============================================================
-# MAIN: Iterate all printers and collect page counters
+# MAIN: Iterate all printers and collect counters + Total Sheets
 # ============================================================
 try {
     $printers = Get-Printer -ErrorAction Stop
 
-    # First pass: force refresh Epson USB printers via UI Automation
     foreach ($printer in $printers) {
+        $nameLower = $printer.Name.ToLower()
+        if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
+
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
-        if (-not $isEpson) { continue }
-
-        $nameLower = $printer.Name.ToLower()
-        if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
-
-        # Only refresh online printers
-        try {
-            $wmi = Get-WmiObject Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $printer.Name }
-            if ($wmi -and -not $wmi.WorkOffline -and $printer.PortName -match '^USB') {
-                Force-EpsonRefreshViaUI -PrinterName $printer.Name | Out-Null
-            }
-        } catch {}
-    }
-
-    # Second pass: read counters from registry (now updated)
-    foreach ($printer in $printers) {
-        $nameLower = $printer.Name.ToLower()
-        if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
 
         $printerResult = @{
             PrinterName = $printer.Name
             DriverName = $printer.DriverName
             PortName = $printer.PortName
-            TotalPages = -1
-            ColorPages = -1
-            BWPages = -1
-            BlankPages = -1
-            BorderlessColor = -1
-            BorderlessBW = -1
-            WithBorderColor = -1
-            WithBorderBW = -1
-            FirstPrintDate = ""
-            Source = "none"
-            IsOnline = $false
+            TotalPages = -1; ColorPages = -1; BWPages = -1; BlankPages = -1
+            BorderlessColor = -1; BorderlessBW = -1; WithBorderColor = -1; WithBorderBW = -1
+            TotalSheets = -1; BorderlessSheets = -1
+            FirstPrintDate = ""; Source = "none"; IsOnline = $false
             Timestamp = (Get-Date).ToString("o")
         }
 
@@ -3966,47 +3855,49 @@ try {
             $printerResult.IsOnline = ($wmi -and -not $wmi.WorkOffline)
         } catch {}
 
-        $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
-
         if ($isEpson) {
+            # Read STM3 registry for color/BW breakdown
             $epsonData = Get-EpsonCountersViaRegistry -PrinterName $printer.Name
             if ($epsonData.TotalPages -ge 0) {
                 $printerResult.TotalPages = $epsonData.TotalPages
                 $printerResult.ColorPages = $epsonData.ColorPages
                 $printerResult.BWPages = $epsonData.BWPages
-                $printerResult.BlankPages = $epsonData.BlankPages
                 $printerResult.BorderlessColor = $epsonData.BorderlessColor
                 $printerResult.BorderlessBW = $epsonData.BorderlessBW
                 $printerResult.WithBorderColor = $epsonData.WithBorderColor
                 $printerResult.WithBorderBW = $epsonData.WithBorderBW
-                $printerResult.FirstPrintDate = $epsonData.FirstPrintDate
                 $printerResult.Source = $epsonData.Source
                 $printerResult.IsOnline = $epsonData.IsOnline
+            }
+
+            # Get Total Sheets from "Printer and Option Information" (hardware counter)
+            if ($printerResult.IsOnline -and $printer.PortName -match '^USB') {
+                $sheetsData = Get-EpsonTotalSheets -PrinterName $printer.Name
+                if ($sheetsData.TotalSheets -ge 0) {
+                    $printerResult.TotalSheets = $sheetsData.TotalSheets
+                    $printerResult.BorderlessSheets = $sheetsData.BorderlessSheets
+                    if ($printerResult.Source -eq "none") { $printerResult.Source = "epson_poi_dialog" }
+                    else { $printerResult.Source += "+poi_dialog" }
+                }
             }
         }
 
         # Try SNMP for network printers
-        if ($printerResult.TotalPages -lt 0) {
+        if ($printerResult.TotalPages -lt 0 -and $printerResult.TotalSheets -lt 0) {
             $portName = $printer.PortName
             $printerIP = ""
             try {
                 $tcpPort = Get-WmiObject Win32_TCPIPPrinterPort -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $portName }
                 if ($tcpPort) { $printerIP = $tcpPort.HostAddress }
             } catch {}
-            if (-not $printerIP -and $portName -match '(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})') {
-                $printerIP = $Matches[1]
-            }
-
+            if (-not $printerIP -and $portName -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $printerIP = $Matches[1] }
             if ($printerIP) {
                 $snmpData = Get-PrinterCountersViaSNMP -PrinterIP $printerIP
-                if ($snmpData.TotalPages -ge 0) {
-                    $printerResult.TotalPages = $snmpData.TotalPages
-                    $printerResult.Source = $snmpData.Source
-                }
+                if ($snmpData.TotalPages -ge 0) { $printerResult.TotalPages = $snmpData.TotalPages; $printerResult.Source = $snmpData.Source }
             }
         }
 
-        if ($printerResult.TotalPages -ge 0 -or $isEpson) {
+        if ($printerResult.TotalPages -ge 0 -or $printerResult.TotalSheets -ge 0 -or $isEpson) {
             $results += [PSCustomObject]$printerResult
         }
     }
@@ -4014,14 +3905,11 @@ try {
     Write-Error "Failed to enumerate printers: $_"
 }
 
-if ($results.Count -eq 0) {
-    "[]"
-} else {
-    @($results) | ConvertTo-Json -Depth 3
-}
+if ($results.Count -eq 0) { "[]" }
+else { @($results) | ConvertTo-Json -Depth 3 }
 `;
 
-    const stdout = await runPS(script, 60000);
+    const stdout = await runPS(script, 90000);
     if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
         return [];
     }
@@ -4042,6 +3930,8 @@ if ($results.Count -eq 0) {
             borderlessBW: c.BorderlessBW >= 0 ? c.BorderlessBW : null,
             withBorderColor: c.WithBorderColor >= 0 ? c.WithBorderColor : null,
             withBorderBW: c.WithBorderBW >= 0 ? c.WithBorderBW : null,
+            totalSheets: c.TotalSheets >= 0 ? c.TotalSheets : null,
+            borderlessSheets: c.BorderlessSheets >= 0 ? c.BorderlessSheets : null,
             firstPrintDate: c.FirstPrintDate || null,
             source: c.Source || 'unknown',
             isOnline: c.IsOnline === true,

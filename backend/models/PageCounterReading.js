@@ -11,6 +11,9 @@ const PageCounterReadingSchema = new mongoose.Schema({
     borderlessBW: { type: Number, default: null },
     withBorderColor: { type: Number, default: null },
     withBorderBW: { type: Number, default: null },
+    // Hardware sheet counter from "Printer and Option Information" dialog
+    totalSheets: { type: Number, default: null },
+    borderlessSheets: { type: Number, default: null },
     firstPrintDate: { type: String, default: null },
     // Source tracking
     source: { type: String, default: 'manual' },

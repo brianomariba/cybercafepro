@@ -2935,25 +2935,30 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
             }
 
             const counterValue = Math.round(counter.totalPages);
-            if (counterValue <= 0) continue;
+            // Use totalSheets (hardware counter from "Printer and Option Information") as the primary counter
+            // It includes ALL physical sheets: prints + photocopies
+            const totalSheetsValue = counter.totalSheets ? Math.round(counter.totalSheets) : null;
+            const primaryCounter = totalSheetsValue && totalSheetsValue > 0 ? totalSheetsValue : counterValue;
+            if (primaryCounter <= 0) continue;
 
             // Check the last reading for this printer to avoid duplicate entries
             const lastReading = await PageCounterReading.findOne({ printerName: counter.printerName })
                 .sort({ recordedAt: -1 });
 
             // Only store if counter has changed (new pages printed since last reading)
-            if (lastReading && lastReading.counterValue === counterValue) {
-                results.push({ printerName: counter.printerName, status: 'unchanged', counterValue });
+            if (lastReading && lastReading.counterValue === primaryCounter && 
+                (!totalSheetsValue || lastReading.totalSheets === totalSheetsValue)) {
+                results.push({ printerName: counter.printerName, status: 'unchanged', counterValue: primaryCounter });
                 continue;
             }
 
             // Validate counter is >= last reading (counters only go up)
-            if (lastReading && counterValue < lastReading.counterValue) {
+            if (lastReading && primaryCounter < lastReading.counterValue) {
                 results.push({
                     printerName: counter.printerName,
                     status: 'skipped',
-                    reason: `New value (${counterValue}) < last (${lastReading.counterValue})`,
-                    counterValue
+                    reason: `New value (${primaryCounter}) < last (${lastReading.counterValue})`,
+                    counterValue: primaryCounter
                 });
                 continue;
             }
@@ -2961,7 +2966,7 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
             // Create new reading
             const reading = await PageCounterReading.create({
                 printerName: counter.printerName,
-                counterValue: counterValue,
+                counterValue: primaryCounter,
                 colorPages: counter.colorPages || null,
                 bwPages: counter.bwPages || null,
                 blankPages: counter.blankPages || null,
@@ -2969,12 +2974,14 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 borderlessBW: counter.borderlessBW || null,
                 withBorderColor: counter.withBorderColor || null,
                 withBorderBW: counter.withBorderBW || null,
+                totalSheets: totalSheetsValue,
+                borderlessSheets: counter.borderlessSheets || null,
                 firstPrintDate: counter.firstPrintDate || null,
                 source: counter.source || 'agent_auto',
                 clientId: clientId,
                 hostname: hostname,
                 printerOnline: counter.isOnline === true,
-                notes: `Auto-collected by agent (${counter.source || 'auto'})`,
+                notes: `Auto-collected by agent (${counter.source || 'auto'})${totalSheetsValue ? ' [HW sheets: ' + totalSheetsValue + ']' : ''}`,
                 recordedBy: 'agent',
                 recordedAt: new Date()
             });
