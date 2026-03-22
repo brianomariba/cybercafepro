@@ -3549,46 +3549,28 @@ async function getPrinterPageCounters() {
 Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
 Add-Type -AssemblyName UIAutomationTypes -ErrorAction SilentlyContinue
 
-# Win32 APIs to hide/move windows off-screen so they're invisible to the user
+# Win32 API for mouse clicks - visible but reliable (only method Epson buttons respond to)
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class WinHelper {
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-
-    public const int SW_HIDE = 0;
-    public const int SW_SHOW = 5;
-    public const int SW_MINIMIZE = 6;
-    public const int SW_RESTORE = 9;
-
-    // Move window far off-screen so user never sees it
-    // InvokePattern still works on off-screen/hidden windows
-    public static void HideOffScreen(IntPtr hWnd) {
-        if (hWnd == IntPtr.Zero) return;
-        RECT rect;
-        GetWindowRect(hWnd, out rect);
-        int w = rect.Right - rect.Left;
-        int h = rect.Bottom - rect.Top;
-        if (w < 50) w = 500;
-        if (h < 50) h = 400;
-        MoveWindow(hWnd, -9999, -9999, w, h, false);
+public class UserInput {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT lpPoint);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, int dwExtraInfo);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    public const uint MOUSEEVENTF_LEFTUP   = 0x0004;
+    public static void Click(int x, int y) {
+        POINT saved;
+        GetCursorPos(out saved);
+        SetCursorPos(x, y);
+        mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        System.Threading.Thread.Sleep(100);
+        SetCursorPos(saved.X, saved.Y);
     }
 }
 "@ -ErrorAction SilentlyContinue
-
-# Helper: hide any window by moving it off-screen
-function Hide-Window {
-    param($uiElement)
-    try {
-        $hwnd = [IntPtr]::new($uiElement.Current.NativeWindowHandle)
-        if ($hwnd -ne [IntPtr]::Zero) {
-            [WinHelper]::HideOffScreen($hwnd)
-        }
-    } catch {}
-}
 
 $results = @()
 
@@ -3598,7 +3580,7 @@ $results = @()
 # "EPSON Status Monitor 3" which forces the driver to query
 # the printer hardware over USB and update the STM3 registry.
 # This is the ONLY method proven to work for USB Epson printers.
-# ALL WINDOWS ARE MOVED OFF-SCREEN — invisible to the user.
+# Window is visible for ~5 seconds per cycle.
 # ============================================================
 function Force-EpsonRefreshViaUI {
     param([string]$PrinterName)
@@ -3607,7 +3589,7 @@ function Force-EpsonRefreshViaUI {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
 
         # Open Printing Preferences via rundll32
-        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \\\`"$PrinterName\\\`"" -PassThru -WindowStyle Hidden -ErrorAction Stop
+        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \\\`"$PrinterName\\\`"" -PassThru -ErrorAction Stop
 
         # Wait for window (search by name since rundll32 spawns child)
         $mainWin = $null
@@ -3630,8 +3612,9 @@ function Force-EpsonRefreshViaUI {
             return $false
         }
 
-        # IMMEDIATELY move window off-screen so user never sees it
-        Hide-Window -uiElement $mainWin
+        # Bring window to foreground for clicking
+        $hwnd = [IntPtr]::new($mainWin.Current.NativeWindowHandle)
+        if ($hwnd -ne [IntPtr]::Zero) { [UserInput]::SetForegroundWindow($hwnd) }
 
         # Dismiss any blocking child dialog (e.g. "Print Head Cleaning" completion)
         $childWinCond = New-Object System.Windows.Automation.PropertyCondition(
@@ -3667,7 +3650,7 @@ function Force-EpsonRefreshViaUI {
             Start-Sleep -Milliseconds 500
         }
 
-        # Click "EPSON Status Monitor 3" button (queries printer, no printing!)
+        # Click "EPSON Status Monitor 3" button - use REAL coordinate click
         $stm3Cond = New-Object System.Windows.Automation.PropertyCondition(
             [System.Windows.Automation.AutomationElement]::NameProperty, "EPSON Status Monitor 3")
         $stm3Btn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $stm3Cond)
@@ -3678,6 +3661,17 @@ function Force-EpsonRefreshViaUI {
                 $ip.Invoke()
                 $clicked = $true
             } catch {}
+            if (-not $clicked) {
+                $rect = $stm3Btn.Current.BoundingRectangle
+                $cx = [int]($rect.X + $rect.Width / 2)
+                $cy = [int]($rect.Y + $rect.Height / 2)
+                if ($cx -gt 0 -and $cy -gt 0) {
+                    [UserInput]::Click($cx, $cy)
+                    $clicked = $true
+                }
+            }
+        }
+        if ($clicked) {
             Start-Sleep -Seconds 3
 
             # Close the Status Monitor window that opens
@@ -3685,7 +3679,6 @@ function Force-EpsonRefreshViaUI {
                 [System.Windows.Automation.Condition]::TrueCondition)
             foreach ($aw in $allWins2) {
                 if ($aw.Current.Name -match 'EPSON Status Monitor 3' -and $aw.Current.Name -notmatch 'Preferences|Properties|Printing') {
-                    Hide-Window -uiElement $aw  # Move off-screen immediately
                     $closeCond = New-Object System.Windows.Automation.PropertyCondition(
                         [System.Windows.Automation.AutomationElement]::NameProperty, "Close")
                     $closeBtn = $aw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $closeCond)
