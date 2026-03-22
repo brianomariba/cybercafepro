@@ -448,6 +448,9 @@ function PhotocopyTracker({ printers }) {
                                     title={
                                         <Space>
                                             <Text strong>{reading.counterValue?.toLocaleString()} pages</Text>
+                                            {reading.totalSheets != null && (
+                                                <Tag color="gold" style={{ fontSize: 11 }}>📄 HW Sheets: {reading.totalSheets?.toLocaleString()}</Tag>
+                                            )}
                                             {renderSourceBadge(reading)}
                                         </Space>
                                     }
@@ -488,11 +491,12 @@ function PhotocopyTracker({ printers }) {
                     How Photocopy Tracking Works
                 </Title>
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                    1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's internal page counter every ~5 minutes
-                    (same data as <em>Printer Properties → Maintenance → Nozzle Check</em>).<br />
-                    2. The system tracks all print jobs sent through computers automatically.<br />
-                    3. <strong>Photocopies = Counter Difference − Tracked Print Jobs</strong> for each interval.<br />
-                    4. This gives you an accurate count of pages used for photocopying (manual copier usage).
+                    1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's hardware "Total Sheets" counter every ~5 minutes
+                    from <em>Printer Properties → Maintenance → Printer and Option Information</em>.<br />
+                    2. This hardware counter includes ALL physical sheets fed through the printer (prints + photocopies).<br />
+                    3. The system also tracks all print jobs sent from computers automatically.<br />
+                    4. <strong>Photocopies = Total Sheets (hardware) − Tracked Print Jobs</strong> for each interval.<br />
+                    5. This gives you an accurate count of pages used for photocopying (manual copier usage).
                 </Text>
             </Card>
         </div>

@@ -3059,7 +3059,11 @@ app.get('/api/v1/admin/page-counter-readings', requireAdminAuth, async (req, res
     try {
         const { printerName, limit = 50 } = req.query;
         const query = {};
-        if (printerName) query.printerName = printerName;
+        if (printerName) {
+            // Use regex to match base name - e.g. "EPSON L3250 Series" matches "EPSON L3250 Series (Copy 2)"
+            const escapedName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            query.printerName = { $regex: new RegExp(escapedName, 'i') };
+        }
 
         const readings = await PageCounterReading.find(query)
             .sort({ recordedAt: -1 })
@@ -3111,7 +3115,10 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         }
 
         // Get all readings for this printer, ordered oldest first
-        const readings = await PageCounterReading.find({ printerName })
+        // Use regex to match base name + variants like (Copy 1), (Copy 2)
+        const escapedPName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const printerQuery = { printerName: { $regex: new RegExp(escapedPName, 'i') } };
+        const readings = await PageCounterReading.find(printerQuery)
             .sort({ recordedAt: 1 });
 
         if (readings.length < 2) {
