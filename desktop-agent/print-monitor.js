@@ -3653,19 +3653,23 @@ function Get-EpsonTotalSheets {
         if ($poiBtn -and $poiBtn.Current.IsEnabled) { $clicked = Click-UIElement -el $poiBtn -label "POI" }
 
         if ($clicked) {
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 5
 
-            # Find the dialog
+            # Find the dialog (retry a few times - printer USB communication can be slow)
             $poiWin = $null
-            $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
-            foreach ($cw in $childWins2) {
-                if ($cw.Current.Name -match 'Printer and Option Information|Option') { $poiWin = $cw; break }
-            }
-            if (-not $poiWin) {
-                $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
-                foreach ($aw in $allWins2) {
-                    if ($aw.Current.Name -match 'Printer and Option Information') { $poiWin = $aw; break }
+            for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
+                foreach ($cw in $childWins2) {
+                    if ($cw.Current.Name -match 'Printer and Option Information|Option') { $poiWin = $cw; break }
                 }
+                if (-not $poiWin) {
+                    $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+                    foreach ($aw in $allWins2) {
+                        if ($aw.Current.Name -match 'Printer and Option Information') { $poiWin = $aw; break }
+                    }
+                }
+                if ($poiWin) { break }
+                Start-Sleep -Seconds 2
             }
 
             if ($poiWin) {
@@ -3829,9 +3833,15 @@ function Get-PrinterCountersViaSNMP {
 
 # ============================================================
 # MAIN: Iterate all printers and collect counters + Total Sheets
+# Consolidates printer copies (e.g. "EPSON L3250 Series (Copy 1)")
+# into a single result per physical printer to avoid conflicts.
 # ============================================================
 try {
     $printers = Get-Printer -ErrorAction Stop
+
+    # Group Epson printers by base name to consolidate copies
+    $epsonGroups = @{}
+    $nonEpsonPrinters = @()
 
     foreach ($printer in $printers) {
         $nameLower = $printer.Name.ToLower()
@@ -3839,6 +3849,99 @@ try {
 
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
 
+        if ($isEpson) {
+            # Extract base name: "EPSON L3250 Series (Copy 1)" -> "EPSON L3250 Series"
+            $baseName = $printer.Name -replace '\s*\(Copy\s*\d+\)\s*$', ''
+            if (-not $epsonGroups.ContainsKey($baseName)) { $epsonGroups[$baseName] = @() }
+            $epsonGroups[$baseName] += $printer
+        } else {
+            $nonEpsonPrinters += $printer
+        }
+    }
+
+    # Process each Epson printer GROUP (one result per physical printer)
+    foreach ($group in $epsonGroups.GetEnumerator()) {
+        $baseName = $group.Key
+        $copies = $group.Value
+
+        $printerResult = @{
+            PrinterName = $baseName
+            DriverName = ""
+            PortName = ""
+            TotalPages = -1; ColorPages = -1; BWPages = -1; BlankPages = -1
+            BorderlessColor = -1; BorderlessBW = -1; WithBorderColor = -1; WithBorderBW = -1
+            TotalSheets = -1; BorderlessSheets = -1
+            FirstPrintDate = ""; Source = "none"; IsOnline = $false
+            Timestamp = (Get-Date).ToString("o")
+        }
+
+        # Check online status from any copy
+        foreach ($cp in $copies) {
+            try {
+                $wmi = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $cp.Name }
+                if ($wmi -and -not $wmi.WorkOffline) { $printerResult.IsOnline = $true; break }
+            } catch {}
+        }
+
+        # Read STM3 registry from all copies, pick the one with LOWEST totalPages
+        # (lowest is most likely to match the hardware counter / real usage)
+        $bestStmData = $null
+        $bestTotalPages = [int]::MaxValue
+        foreach ($cp in $copies) {
+            $epsonData = Get-EpsonCountersViaRegistry -PrinterName $cp.Name
+            if ($epsonData.TotalPages -ge 0 -and $epsonData.TotalPages -lt $bestTotalPages) {
+                $bestStmData = $epsonData
+                $bestTotalPages = $epsonData.TotalPages
+            }
+        }
+        if ($bestStmData) {
+            $printerResult.TotalPages = $bestStmData.TotalPages
+            $printerResult.ColorPages = $bestStmData.ColorPages
+            $printerResult.BWPages = $bestStmData.BWPages
+            $printerResult.BorderlessColor = $bestStmData.BorderlessColor
+            $printerResult.BorderlessBW = $bestStmData.BorderlessBW
+            $printerResult.WithBorderColor = $bestStmData.WithBorderColor
+            $printerResult.WithBorderBW = $bestStmData.WithBorderBW
+            $printerResult.Source = $bestStmData.Source
+            if ($bestStmData.IsOnline) { $printerResult.IsOnline = $true }
+        }
+
+        # Get Total Sheets from POI dialog — only try ONE copy with full Epson driver
+        # Prefer copies with full driver (has Maintenance tab) over V4 class driver
+        if ($printerResult.IsOnline) {
+            $poiPrinter = $null
+            foreach ($cp in $copies) {
+                # Full Epson driver name matches the printer model exactly (not "Epson ESC/P-R V4 Class Driver")
+                if ($cp.DriverName -notmatch 'V4 Class Driver|ESC/P-R' -and $cp.PortName -match '^USB') {
+                    $poiPrinter = $cp; break
+                }
+            }
+            # Fallback: try any USB-connected copy
+            if (-not $poiPrinter) {
+                foreach ($cp in $copies) {
+                    if ($cp.PortName -match '^USB') { $poiPrinter = $cp; break }
+                }
+            }
+            if ($poiPrinter) {
+                $printerResult.DriverName = $poiPrinter.DriverName
+                $printerResult.PortName = $poiPrinter.PortName
+                $sheetsData = Get-EpsonTotalSheets -PrinterName $poiPrinter.Name
+                if ($sheetsData.TotalSheets -ge 0) {
+                    $printerResult.TotalSheets = $sheetsData.TotalSheets
+                    $printerResult.BorderlessSheets = $sheetsData.BorderlessSheets
+                    if ($printerResult.Source -eq "none") { $printerResult.Source = "epson_poi_dialog" }
+                    else { $printerResult.Source += "+poi_dialog" }
+                }
+            }
+        }
+
+        if ($printerResult.TotalPages -ge 0 -or $printerResult.TotalSheets -ge 0) {
+            $results += [PSCustomObject]$printerResult
+        }
+    }
+
+    # Process non-Epson printers normally
+    foreach ($printer in $nonEpsonPrinters) {
         $printerResult = @{
             PrinterName = $printer.Name
             DriverName = $printer.DriverName
@@ -3855,33 +3958,6 @@ try {
             $printerResult.IsOnline = ($wmi -and -not $wmi.WorkOffline)
         } catch {}
 
-        if ($isEpson) {
-            # Read STM3 registry for color/BW breakdown
-            $epsonData = Get-EpsonCountersViaRegistry -PrinterName $printer.Name
-            if ($epsonData.TotalPages -ge 0) {
-                $printerResult.TotalPages = $epsonData.TotalPages
-                $printerResult.ColorPages = $epsonData.ColorPages
-                $printerResult.BWPages = $epsonData.BWPages
-                $printerResult.BorderlessColor = $epsonData.BorderlessColor
-                $printerResult.BorderlessBW = $epsonData.BorderlessBW
-                $printerResult.WithBorderColor = $epsonData.WithBorderColor
-                $printerResult.WithBorderBW = $epsonData.WithBorderBW
-                $printerResult.Source = $epsonData.Source
-                $printerResult.IsOnline = $epsonData.IsOnline
-            }
-
-            # Get Total Sheets from "Printer and Option Information" (hardware counter)
-            if ($printerResult.IsOnline -and $printer.PortName -match '^USB') {
-                $sheetsData = Get-EpsonTotalSheets -PrinterName $printer.Name
-                if ($sheetsData.TotalSheets -ge 0) {
-                    $printerResult.TotalSheets = $sheetsData.TotalSheets
-                    $printerResult.BorderlessSheets = $sheetsData.BorderlessSheets
-                    if ($printerResult.Source -eq "none") { $printerResult.Source = "epson_poi_dialog" }
-                    else { $printerResult.Source += "+poi_dialog" }
-                }
-            }
-        }
-
         # Try SNMP for network printers
         if ($printerResult.TotalPages -lt 0 -and $printerResult.TotalSheets -lt 0) {
             $portName = $printer.PortName
@@ -3897,7 +3973,7 @@ try {
             }
         }
 
-        if ($printerResult.TotalPages -ge 0 -or $printerResult.TotalSheets -ge 0 -or $isEpson) {
+        if ($printerResult.TotalPages -ge 0 -or $printerResult.TotalSheets -ge 0) {
             $results += [PSCustomObject]$printerResult
         }
     }

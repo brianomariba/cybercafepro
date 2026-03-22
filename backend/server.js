@@ -2934,6 +2934,10 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 continue; // Skip printers without valid counter data
             }
 
+            // Normalize printer name: strip "(Copy N)" suffix so all copies
+            // of the same physical printer consolidate into one reading
+            const normalizedName = counter.printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
+
             const counterValue = Math.round(counter.totalPages);
             // Use totalSheets (hardware counter from "Printer and Option Information") as the primary counter
             // It includes ALL physical sheets: prints + photocopies
@@ -2941,21 +2945,21 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
             const primaryCounter = totalSheetsValue && totalSheetsValue > 0 ? totalSheetsValue : counterValue;
             if (primaryCounter <= 0) continue;
 
-            // Check the last reading for this printer to avoid duplicate entries
-            const lastReading = await PageCounterReading.findOne({ printerName: counter.printerName })
+            // Check the last reading for this printer (by normalized name) to avoid duplicate entries
+            const lastReading = await PageCounterReading.findOne({ printerName: normalizedName })
                 .sort({ recordedAt: -1 });
 
             // Only store if counter has changed (new pages printed since last reading)
             if (lastReading && lastReading.counterValue === primaryCounter && 
                 (!totalSheetsValue || lastReading.totalSheets === totalSheetsValue)) {
-                results.push({ printerName: counter.printerName, status: 'unchanged', counterValue: primaryCounter });
+                results.push({ printerName: normalizedName, status: 'unchanged', counterValue: primaryCounter });
                 continue;
             }
 
             // Validate counter is >= last reading (counters only go up)
             if (lastReading && primaryCounter < lastReading.counterValue) {
                 results.push({
-                    printerName: counter.printerName,
+                    printerName: normalizedName,
                     status: 'skipped',
                     reason: `New value (${primaryCounter}) < last (${lastReading.counterValue})`,
                     counterValue: primaryCounter
@@ -2963,9 +2967,9 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 continue;
             }
 
-            // Create new reading
+            // Create new reading with normalized printer name
             const reading = await PageCounterReading.create({
-                printerName: counter.printerName,
+                printerName: normalizedName,
                 counterValue: primaryCounter,
                 colorPages: counter.colorPages || null,
                 bwPages: counter.bwPages || null,
@@ -2986,13 +2990,13 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 recordedAt: new Date()
             });
 
-            const pagesSinceLast = lastReading ? counterValue - lastReading.counterValue : 0;
-            console.log(`[PAGE COUNTER] Auto: ${counter.printerName} = ${counterValue} (+${pagesSinceLast}) via ${counter.source} from ${clientId}`);
+            const pagesSinceLast = lastReading ? primaryCounter - lastReading.counterValue : 0;
+            console.log(`[PAGE COUNTER] Auto: ${normalizedName} = ${primaryCounter}${totalSheetsValue ? ' (HW sheets)' : ' (registry)'} (+${pagesSinceLast}) via ${counter.source} from ${clientId}`);
 
             results.push({
-                printerName: counter.printerName,
+                printerName: normalizedName,
                 status: 'stored',
-                counterValue,
+                counterValue: primaryCounter,
                 pagesSinceLast,
                 readingId: reading._id
             });
