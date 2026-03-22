@@ -3141,11 +3141,8 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         let totalCounterDiff = 0;
         let totalPrintPages = 0;
 
-        // Build a regex that matches printer names flexibly:
-        // "EPSON L3250 Series (Copy 2)" should match print jobs logged as "EPSON L3250 Series"
-        // and vice versa. We extract the base model name and match on that.
+        // Build a regex that matches printer names flexibly for print job lookups
         const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Also try matching without "(Copy N)" suffix
         const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
         const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -3153,21 +3150,34 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             { 'data.printer': printerName },
             { 'data.printer': { $regex: new RegExp('^' + escName + '$', 'i') } }
         ];
-        // If base name is different, also match on it
         if (baseName !== printerName) {
             printerMatchConditions.push(
                 { 'data.printer': baseName },
                 { 'data.printer': { $regex: new RegExp('^' + escBase + '$', 'i') } },
-                // Also match "EPSON L3250 Series (Copy N)" variants
                 { 'data.printer': { $regex: new RegExp('^' + escBase + '(\\s*\\(Copy\\s*\\d+\\))?$', 'i') } }
             );
         }
 
-        // For each pair of consecutive readings, calculate the photocopy count
-        for (let i = 0; i < readings.length - 1; i++) {
-            const startReading = readings[i];
-            const endReading = readings[i + 1];
-            const counterDiff = endReading.counterValue - startReading.counterValue;
+        // GROUP readings by exact printer name so we never compare Copy 1 with Copy 2
+        const readingsByPrinter = {};
+        for (const r of readings) {
+            const key = r.printerName;
+            if (!readingsByPrinter[key]) readingsByPrinter[key] = [];
+            readingsByPrinter[key].push(r);
+        }
+
+        // For each printer variant, calculate intervals from consecutive readings
+        for (const [pName, pReadings] of Object.entries(readingsByPrinter)) {
+            // Need at least 2 readings for the same printer to form an interval
+            if (pReadings.length < 2) continue;
+
+            for (let i = 0; i < pReadings.length - 1; i++) {
+                const startReading = pReadings[i];
+                const endReading = pReadings[i + 1];
+                const counterDiff = endReading.counterValue - startReading.counterValue;
+
+                // Skip negative diffs (shouldn't happen but guard against it)
+                if (counterDiff < 0) continue;
 
             // BW/Color counter diffs (from detailed Tag 0x36 data)
             const startBW = (startReading.withBorderBW || 0) + (startReading.borderlessBW || 0);
@@ -3179,9 +3189,6 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             const hasDetailedCounters = counterDiffBW > 0 || counterDiffColor > 0;
 
             // Count print job PAGES between these two readings
-            // IMPORTANT: Use totalPages * copies, NOT totalSheets
-            // The printer counter counts PAGES (each printed side), not physical sheets
-            // Duplex prints 2 pages per sheet but the counter still increments by 2
             const printLogs = await Log.find({
                 type: 'print',
                 receivedAt: { $gte: startReading.recordedAt, $lte: endReading.recordedAt },
@@ -3192,7 +3199,6 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             let printPagesColor = 0;
             for (const log of printLogs) {
                 const d = log.data || {};
-                // Use totalPages * copies = actual pages the printer printed
                 const pages = (d.totalPages || d.pages || 1) * (d.copies || 1);
                 if (d.printType === 'color' || d.isColorPrint) {
                     printPagesColor += pages;
@@ -3212,7 +3218,6 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
                 photocopiesBW = Math.max(0, counterDiffBW - printPagesBW);
                 photocopiesColor = Math.max(0, counterDiffColor - printPagesColor);
             } else {
-                // No detailed counters — attribute all to BW as default
                 photocopiesBW = photocopies;
             }
 
@@ -3223,9 +3228,11 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             totalPhotocopiesColor += photocopiesColor;
 
             intervals.push({
+                printerName: pName,
                 startReading: {
                     id: startReading._id,
                     counterValue: startReading.counterValue,
+                    totalSheets: startReading.totalSheets,
                     withBorderBW: startReading.withBorderBW,
                     withBorderColor: startReading.withBorderColor,
                     recordedAt: startReading.recordedAt,
@@ -3235,6 +3242,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
                 endReading: {
                     id: endReading._id,
                     counterValue: endReading.counterValue,
+                    totalSheets: endReading.totalSheets,
                     withBorderBW: endReading.withBorderBW,
                     withBorderColor: endReading.withBorderColor,
                     recordedAt: endReading.recordedAt,
@@ -3255,6 +3263,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
                 photocopyRevenueColor: photocopiesColor * (currentPricing.photocopyColor || 40),
                 photocopyRevenue: (photocopiesBW * (currentPricing.photocopyBW || 8)) + (photocopiesColor * (currentPricing.photocopyColor || 40))
             });
+            }
         }
 
         res.json({
