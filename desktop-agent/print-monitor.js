@@ -3594,161 +3594,153 @@ function Click-UIElement {
 }
 
 # ============================================================
-# Get Total Sheets from "Printer and Option Information" dialog
+# Get Total Sheets from "Printer and Option Information" dialog  
+# Uses Win32 API (FindWindow/FindWindowEx) instead of UI Automation
+# because UI Automation fails when running as a service
 # ============================================================
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+try { Add-Type @"
+using System; using System.Runtime.InteropServices; using System.Threading; using System.Text;
+public class W32POI {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, int e);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll", CharSet=CharSet.Auto)]
+    public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string text);
+    [DllImport("user32.dll", CharSet=CharSet.Auto, EntryPoint="SendMessageW")]
+    public static extern int SendMsg(IntPtr h, uint m, int w, StringBuilder l);
+    [DllImport("user32.dll")]
+    public static extern int SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+    public static void DoClick(int x, int y) {
+        SetCursorPos(x, y); Thread.Sleep(200);
+        mouse_event(0x0002, 0, 0, 0, 0); Thread.Sleep(100);
+        mouse_event(0x0004, 0, 0, 0, 0); Thread.Sleep(300);
+    }
+    public static string GetText(IntPtr h) {
+        StringBuilder sb = new StringBuilder(256);
+        SendMsg(h, 0x000D, 256, sb);
+        return sb.ToString();
+    }
+}
+"@ -ErrorAction SilentlyContinue } catch {}
+
 function Get-EpsonTotalSheets {
     param([string]$PrinterName)
-
     $sheetResult = @{ TotalSheets = -1; BorderlessSheets = -1 }
-
     try {
-        $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \\\`"$PrinterName\\\`"" -PassThru -ErrorAction Stop
-
-        # Wait for Printing Preferences window
-        $mainWin = $null
-        $escapedName = [regex]::Escape($PrinterName)
-        for ($w = 0; $w -lt 20; $w++) {
-            Start-Sleep -Milliseconds 500
-            $allWins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
-                [System.Windows.Automation.Condition]::TrueCondition)
-            foreach ($wn in $allWins) {
-                if ($wn.Current.Name -match "$escapedName.*Printing Preferences") { $mainWin = $wn; break }
-            }
-            if ($mainWin) { break }
+        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"$PrinterName\`"" -PassThru -ErrorAction Stop
+        Start-Sleep -Seconds 5
+        $title = "$PrinterName Printing Preferences"
+        $hwnd = [W32POI]::FindWindow('#32770', $title)
+        if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
+        if ($hwnd -eq [IntPtr]::Zero) { try { $proc.Kill() } catch {}; return $sheetResult }
+        [W32POI]::SetForegroundWindow($hwnd) | Out-Null
+        Start-Sleep -Seconds 1
+        # Switch to Maintenance tab (Ctrl+Tab x2)
+        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+        Start-Sleep -Seconds 2
+        # Find POI label
+        $poiLabel = [IntPtr]::Zero
+        $maintPage = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
+        if ($maintPage -ne [IntPtr]::Zero) {
+            $poiLabel = [W32POI]::FindWindowEx($maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
         }
-
-        if (-not $mainWin) { try { $proc.Kill() } catch {}; return $sheetResult }
-
-        # Bring to foreground
-        $hwnd = [IntPtr]::new($mainWin.Current.NativeWindowHandle)
-        if ($hwnd -ne [IntPtr]::Zero) { [UserInput]::SetForegroundWindow($hwnd) }
-
-        # Dismiss any blocking dialog
-        $childWinCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Window)
-        $childWins = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
-        foreach ($cw in $childWins) {
-            foreach ($bn in @("Finish", "Close", "OK", "Cancel", "No")) {
-                $nc = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
-                $b = $cw.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc)
-                if ($b -and $b.Current.IsEnabled) { Click-UIElement -el $b -label $bn | Out-Null; Start-Sleep -Milliseconds 500; break }
+        if ($poiLabel -eq [IntPtr]::Zero) {
+            $poiLabel = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+        }
+        if ($poiLabel -eq [IntPtr]::Zero) {
+            $childDlg = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', $null)
+            while ($childDlg -ne [IntPtr]::Zero) {
+                $poiLabel = [W32POI]::FindWindowEx($childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+                if ($poiLabel -ne [IntPtr]::Zero) { break }
+                $childDlg = [W32POI]::FindWindowEx($hwnd, $childDlg, '#32770', $null)
             }
         }
-        Start-Sleep -Milliseconds 300
-
-        # Click Maintenance tab
-        $tabCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "Maintenance")
-        $maintTab = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
-        if ($maintTab -and $maintTab.Current.IsEnabled) { Click-UIElement -el $maintTab -label "Maintenance" | Out-Null; Start-Sleep -Milliseconds 500 }
-
-        # Click "Printer and Option Information"
-        $poiCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "Printer and Option Information")
-        $poiBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $poiCond)
-        $clicked = $false
-        if ($poiBtn -and $poiBtn.Current.IsEnabled) { $clicked = Click-UIElement -el $poiBtn -label "POI" }
-
-        if ($clicked) {
+        if ($poiLabel -eq [IntPtr]::Zero) {
+            $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+            if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+            Start-Sleep -Milliseconds 500; try { $proc.Kill() } catch {}; return $sheetResult
+        }
+        # Click icon area with retry
+        $rect = New-Object W32POI+RECT
+        [W32POI]::GetWindowRect($poiLabel, [ref]$rect) | Out-Null
+        $iconX = [int]($rect.L - 25)
+        $textX = [int](($rect.L + $rect.R) / 2)
+        $cy = [int](($rect.T + $rect.B) / 2)
+        $poiDlg = [IntPtr]::Zero
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            [W32POI]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Milliseconds 300
+            $clickX = if ($attempt -eq 1) { $iconX } else { $textX }
+            [W32POI]::DoClick($clickX, $cy)
+            for ($w = 0; $w -lt 10; $w++) {
+                Start-Sleep -Seconds 1
+                $poiDlg = [W32POI]::FindWindow('#32770', 'Printer and Option Information')
+                if ($poiDlg -ne [IntPtr]::Zero) { break }
+            }
+            if ($poiDlg -ne [IntPtr]::Zero) { break }
+        }
+        if ($poiDlg -ne [IntPtr]::Zero) {
             Start-Sleep -Seconds 5
-
-            # Find the dialog (retry a few times - printer USB communication can be slow)
-            $poiWin = $null
-            for ($attempt = 0; $attempt -lt 3; $attempt++) {
-                $childWins2 = $mainWin.FindAll([System.Windows.Automation.TreeScope]::Children, $childWinCond)
-                foreach ($cw in $childWins2) {
-                    if ($cw.Current.Name -match 'Printer and Option Information|Option') { $poiWin = $cw; break }
-                }
-                if (-not $poiWin) {
-                    $allWins2 = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
-                    foreach ($aw in $allWins2) {
-                        if ($aw.Current.Name -match 'Printer and Option Information') { $poiWin = $aw; break }
-                    }
-                }
-                if ($poiWin) { break }
-                Start-Sleep -Seconds 2
+            $numbers = @()
+            $editH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
+            while ($editH -ne [IntPtr]::Zero) {
+                $val = [W32POI]::GetText($editH)
+                if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
+                $editH = [W32POI]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
             }
-
-            if ($poiWin) {
-                # Read Edit controls (Total Sheets and Borderless Sheets values)
-                $editCond = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                    [System.Windows.Automation.ControlType]::Edit)
-                $edits = $poiWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCond)
-                $numericValues = @()
-                foreach ($edit in $edits) {
-                    try {
-                        $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                        $val = $vp.Current.Value
-                        if ($val -match '^\d+$') { $numericValues += [int]$val }
-                    } catch {
-                        $name = $edit.Current.Name
-                        if ($name -match '^\d+$') { $numericValues += [int]$name }
-                    }
-                }
-
-                # If no edits found, try all descendants
-                if ($numericValues.Count -eq 0) {
-                    $allDesc = $poiWin.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-                        [System.Windows.Automation.Condition]::TrueCondition)
-                    foreach ($d in $allDesc) {
-                        try {
-                            $vp = $d.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                            $val = $vp.Current.Value
-                            if ($val -match '^\d+$' -and [int]$val -gt 0) { $numericValues += [int]$val }
-                        } catch {}
-                    }
-                }
-
-                if ($numericValues.Count -ge 1) { $sheetResult.TotalSheets = $numericValues[0] }
-                if ($numericValues.Count -ge 2) { $sheetResult.BorderlessSheets = $numericValues[1] }
-
-                # Close dialog
-                $okBtn = $null
-                foreach ($bn in @("OK", "Close", "Cancel")) {
-                    $nc2 = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, $bn)
-                    $okBtn = $poiWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nc2)
-                    if ($okBtn) { Click-UIElement -el $okBtn -label $bn | Out-Null; break }
-                }
-                Start-Sleep -Milliseconds 500
+            $staticH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
+            while ($staticH -ne [IntPtr]::Zero) {
+                $val = [W32POI]::GetText($staticH)
+                if ($val -match '^\\d{3,}$') { $numbers += [int]$val }
+                $staticH = [W32POI]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
             }
+            $subDlg = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, '#32770', $null)
+            while ($subDlg -ne [IntPtr]::Zero) {
+                $subEdit = [W32POI]::FindWindowEx($subDlg, [IntPtr]::Zero, 'Edit', $null)
+                while ($subEdit -ne [IntPtr]::Zero) {
+                    $val = [W32POI]::GetText($subEdit)
+                    if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
+                    $subEdit = [W32POI]::FindWindowEx($subDlg, $subEdit, 'Edit', $null)
+                }
+                $subDlg = [W32POI]::FindWindowEx($poiDlg, $subDlg, '#32770', $null)
+            }
+            $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
+            if ($numbers.Count -ge 1) { $sheetResult.TotalSheets = $numbers[0] }
+            if ($numbers.Count -ge 2) { $sheetResult.BorderlessSheets = $numbers[1] }
+            $okBtn = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Button', 'OK')
+            if ($okBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+            Start-Sleep -Milliseconds 500
         }
-
-        # Close Preferences
-        $cancelCond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty, "Cancel")
-        $cancelBtn = $mainWin.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cancelCond)
-        if ($cancelBtn -and $cancelBtn.Current.IsEnabled) { Click-UIElement -el $cancelBtn -label "Cancel" | Out-Null }
+        $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+        if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
         Start-Sleep -Seconds 1
         try { $proc.Kill() } catch {}
     } catch {}
-
     return $sheetResult
 }
 
 # ============================================================
-# Read Epson counters from STM3 registry
+# Read Epson counters from STM3 registry (for color/BW breakdown)
 # ============================================================
 function Get-EpsonCountersViaRegistry {
     param([string]$PrinterName)
-
     $result = @{
         PrinterName = $PrinterName
         TotalPages = -1; ColorPages = -1; BWPages = -1; BlankPages = -1
         BorderlessColor = -1; BorderlessBW = -1; WithBorderColor = -1; WithBorderBW = -1
         FirstPrintDate = ""; Source = "none"; IsOnline = $false
     }
-
     try {
         $wmiP = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $PrinterName }
         if ($wmiP -and -not $wmiP.WorkOffline) { $result.IsOnline = $true }
     } catch {}
-
-    $stmPath = 'HKCU:\\\\SOFTWARE\\\\EPSON\\\\STM3\\\\STMData\\\\EPLTarget'
+    $stmPath = 'HKCU:\\SOFTWARE\\EPSON\\STM3\\STMData\\EPLTarget'
     if (Test-Path $stmPath) {
         $targets = Get-ChildItem $stmPath -ErrorAction SilentlyContinue
         foreach ($target in $targets) {
@@ -3833,8 +3825,6 @@ function Get-PrinterCountersViaSNMP {
 
 # ============================================================
 # MAIN: Iterate all printers and collect counters + Total Sheets
-# Consolidates printer copies (e.g. "EPSON L3250 Series (Copy 1)")
-# into a single result per physical printer to avoid conflicts.
 # ============================================================
 try {
     $printers = Get-Printer -ErrorAction Stop
@@ -3846,12 +3836,9 @@ try {
     foreach ($printer in $printers) {
         $nameLower = $printer.Name.ToLower()
         if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
-
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
-
         if ($isEpson) {
-            # Extract base name: "EPSON L3250 Series (Copy 1)" -> "EPSON L3250 Series"
-            $baseName = $printer.Name -replace '\s*\(Copy\s*\d+\)\s*$', ''
+            $baseName = $printer.Name -replace '\\s*\\(Copy\\s*\\d+\\)\\s*$', ''
             if (-not $epsonGroups.ContainsKey($baseName)) { $epsonGroups[$baseName] = @() }
             $epsonGroups[$baseName] += $printer
         } else {
@@ -3859,11 +3846,9 @@ try {
         }
     }
 
-    # Process each Epson printer GROUP (one result per physical printer)
     foreach ($group in $epsonGroups.GetEnumerator()) {
         $baseName = $group.Key
         $copies = $group.Value
-
         $printerResult = @{
             PrinterName = $baseName
             DriverName = ""
@@ -3875,7 +3860,6 @@ try {
             Timestamp = (Get-Date).ToString("o")
         }
 
-        # Check online status from any copy
         foreach ($cp in $copies) {
             try {
                 $wmi = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $cp.Name }
@@ -3883,8 +3867,7 @@ try {
             } catch {}
         }
 
-        # Read STM3 registry from all copies, pick the one with LOWEST totalPages
-        # (lowest is most likely to match the hardware counter / real usage)
+        # Read STM3 registry from all copies - pick lowest totalPages
         $bestStmData = $null
         $bestTotalPages = [int]::MaxValue
         foreach ($cp in $copies) {
@@ -3906,32 +3889,27 @@ try {
             if ($bestStmData.IsOnline) { $printerResult.IsOnline = $true }
         }
 
-        # Get Total Sheets from POI dialog — only try ONE copy with full Epson driver
-        # Prefer copies with full driver (has Maintenance tab) over V4 class driver
-        if ($printerResult.IsOnline) {
-            $poiPrinter = $null
+        # Get Total Sheets from POI dialog — try ONE copy with full Epson driver
+        $poiPrinter = $null
+        foreach ($cp in $copies) {
+            if ($cp.DriverName -notmatch 'V4 Class Driver|ESC/P-R' -and $cp.PortName -match '^USB') {
+                $poiPrinter = $cp; break
+            }
+        }
+        if (-not $poiPrinter) {
             foreach ($cp in $copies) {
-                # Full Epson driver name matches the printer model exactly (not "Epson ESC/P-R V4 Class Driver")
-                if ($cp.DriverName -notmatch 'V4 Class Driver|ESC/P-R' -and $cp.PortName -match '^USB') {
-                    $poiPrinter = $cp; break
-                }
+                if ($cp.PortName -match '^USB') { $poiPrinter = $cp; break }
             }
-            # Fallback: try any USB-connected copy
-            if (-not $poiPrinter) {
-                foreach ($cp in $copies) {
-                    if ($cp.PortName -match '^USB') { $poiPrinter = $cp; break }
-                }
-            }
-            if ($poiPrinter) {
-                $printerResult.DriverName = $poiPrinter.DriverName
-                $printerResult.PortName = $poiPrinter.PortName
-                $sheetsData = Get-EpsonTotalSheets -PrinterName $poiPrinter.Name
-                if ($sheetsData.TotalSheets -ge 0) {
-                    $printerResult.TotalSheets = $sheetsData.TotalSheets
-                    $printerResult.BorderlessSheets = $sheetsData.BorderlessSheets
-                    if ($printerResult.Source -eq "none") { $printerResult.Source = "epson_poi_dialog" }
-                    else { $printerResult.Source += "+poi_dialog" }
-                }
+        }
+        if ($poiPrinter) {
+            $printerResult.DriverName = $poiPrinter.DriverName
+            $printerResult.PortName = $poiPrinter.PortName
+            $sheetsData = Get-EpsonTotalSheets -PrinterName $poiPrinter.Name
+            if ($sheetsData.TotalSheets -ge 0) {
+                $printerResult.TotalSheets = $sheetsData.TotalSheets
+                $printerResult.BorderlessSheets = $sheetsData.BorderlessSheets
+                if ($printerResult.Source -eq "none") { $printerResult.Source = "epson_poi_dialog" }
+                else { $printerResult.Source += "+poi_dialog" }
             }
         }
 
@@ -3940,7 +3918,7 @@ try {
         }
     }
 
-    # Process non-Epson printers normally
+    # Process non-Epson printers
     foreach ($printer in $nonEpsonPrinters) {
         $printerResult = @{
             PrinterName = $printer.Name
@@ -3952,13 +3930,10 @@ try {
             FirstPrintDate = ""; Source = "none"; IsOnline = $false
             Timestamp = (Get-Date).ToString("o")
         }
-
         try {
             $wmi = Get-WmiObject Win32_Printer -ErrorAction Stop | Where-Object { $_.Name -eq $printer.Name }
             $printerResult.IsOnline = ($wmi -and -not $wmi.WorkOffline)
         } catch {}
-
-        # Try SNMP for network printers
         if ($printerResult.TotalPages -lt 0 -and $printerResult.TotalSheets -lt 0) {
             $portName = $printer.PortName
             $printerIP = ""
@@ -3966,13 +3941,12 @@ try {
                 $tcpPort = Get-WmiObject Win32_TCPIPPrinterPort -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $portName }
                 if ($tcpPort) { $printerIP = $tcpPort.HostAddress }
             } catch {}
-            if (-not $printerIP -and $portName -match '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') { $printerIP = $Matches[1] }
+            if (-not $printerIP -and $portName -match '(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})') { $printerIP = $Matches[1] }
             if ($printerIP) {
                 $snmpData = Get-PrinterCountersViaSNMP -PrinterIP $printerIP
                 if ($snmpData.TotalPages -ge 0) { $printerResult.TotalPages = $snmpData.TotalPages; $printerResult.Source = $snmpData.Source }
             }
         }
-
         if ($printerResult.TotalPages -ge 0 -or $printerResult.TotalSheets -ge 0) {
             $results += [PSCustomObject]$printerResult
         }
