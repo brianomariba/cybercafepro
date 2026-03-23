@@ -2958,13 +2958,20 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
 
             // Validate counter is >= last reading (counters only go up)
             if (lastReading && primaryCounter < lastReading.counterValue) {
-                results.push({
-                    printerName: normalizedName,
-                    status: 'skipped',
-                    reason: `New value (${primaryCounter}) < last (${lastReading.counterValue})`,
-                    counterValue: primaryCounter
-                });
-                continue;
+                // Allow if we are transitioning from a potentially inaccurate source (like STM3 tag36) 
+                // to a more accurate hardware source (like POI dialog)
+                const isTag36ToPOI = (lastReading.notes && lastReading.notes.includes('tag36')) && 
+                                     (counter.source && counter.source.includes('poi'));
+                
+                if (!isTag36ToPOI) {
+                    results.push({
+                        printerName: normalizedName,
+                        status: 'skipped',
+                        reason: `New value (${primaryCounter}) < last (${lastReading.counterValue})`,
+                        counterValue: primaryCounter
+                    });
+                    continue;
+                }
             }
 
             // Create new reading with normalized printer name
