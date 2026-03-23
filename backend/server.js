@@ -2930,18 +2930,22 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
         const results = [];
 
         for (const counter of counters) {
-            if (!counter.printerName || counter.totalPages === null || counter.totalPages === undefined) {
-                continue; // Skip printers without valid counter data
+            // Accept if either totalPages or totalSheets has valid data
+            const hasTotalPages = counter.totalPages !== null && counter.totalPages !== undefined;
+            const hasTotalSheets = counter.totalSheets !== null && counter.totalSheets !== undefined && counter.totalSheets > 0;
+            
+            if (!counter.printerName || (!hasTotalPages && !hasTotalSheets)) {
+                continue; // Skip printers without any valid counter data
             }
 
             // Normalize printer name: strip "(Copy N)" suffix so all copies
             // of the same physical printer consolidate into one reading
             const normalizedName = counter.printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
 
-            const counterValue = Math.round(counter.totalPages);
+            const counterValue = hasTotalPages ? Math.round(counter.totalPages) : 0;
             // Use totalSheets (hardware counter from "Printer and Option Information") as the primary counter
             // It includes ALL physical sheets: prints + photocopies
-            const totalSheetsValue = counter.totalSheets ? Math.round(counter.totalSheets) : null;
+            const totalSheetsValue = hasTotalSheets ? Math.round(counter.totalSheets) : null;
             const primaryCounter = totalSheetsValue && totalSheetsValue > 0 ? totalSheetsValue : counterValue;
             if (primaryCounter <= 0) continue;
 
