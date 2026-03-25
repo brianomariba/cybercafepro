@@ -3792,7 +3792,7 @@ function Get-EpsonTotalSheets {
             try {
                 # Launch rundll32 on the hidden desktop
                 $rundll32Path = "$env:SystemRoot\\System32\\rundll32.exe"
-                $rundll32Args = "printui.dll,PrintUIEntry /e /n `"$PrinterName`""
+                $rundll32Args = "printui.dll,PrintUIEntry /e /n \`"$PrinterName\`""
                 $pid = [W32POI]::LaunchOnDesktop($deskName, $rundll32Path, $rundll32Args)
                 
                 if ($pid -le 0) {
