@@ -3113,11 +3113,14 @@ app.delete('/api/v1/admin/page-counter-readings/:id', requireAdminAuth, async (r
  * GET /api/v1/admin/photocopy-data
  * Calculate photocopies between two readings by subtracting tracked print jobs.
  * 
- * Key insight: The Epson page counter counts PAGES (each side printed), not sheets.
- * So we must subtract (totalPages * copies) from the counter diff, NOT totalSheets.
- * totalSheets accounts for duplex (2 pages/sheet) but the counter doesn't.
+ * Key insight: When the counter comes from the POI dialog "Total Sheets",
+ * it counts PHYSICAL SHEETS (paper fed). So we subtract d.totalSheets from
+ * print jobs (which accounts for duplex: 2 pages on 1 sheet = 1 sheet).
+ * When the counter comes from STM3 Tag36 (page impressions), we subtract
+ * totalPages × copies instead.
  * 
- * Also provides BW vs Color breakdown using withBorderBW / withBorderColor deltas.
+ * BW/Color breakdown uses Tag36 withBorderBW/withBorderColor (page impressions),
+ * so those always subtract page impressions from print jobs.
  * 
  * Query params: printerName (required)
  * Returns: readings, print jobs in each interval, and calculated photocopy counts
@@ -3203,35 +3206,54 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             const counterDiffColor = (startColor > 0 && endColor > 0) ? endColor - startColor : 0;
             const hasDetailedCounters = counterDiffBW > 0 || counterDiffColor > 0;
 
-            // Count print job PAGES between these two readings
+            // Count print job SHEETS between these two readings
+            // IMPORTANT: When counterValue comes from "Total Sheets" (POI dialog),
+            // it counts physical sheets (paper fed). So we must subtract physical
+            // sheets from print jobs, NOT page impressions. The agent sends
+            // d.totalSheets which already accounts for duplex (2 pages = 1 sheet).
+            // If counterValue came from STM3 tag36 (page impressions), we use
+            // totalPages * copies instead.
+            const counterIsSheets = endReading.totalSheets > 0 || startReading.totalSheets > 0;
             const printLogs = await Log.find({
                 type: 'print',
                 receivedAt: { $gte: startReading.recordedAt, $lte: endReading.recordedAt },
                 $or: printerMatchConditions
             });
 
-            let printPagesBW = 0;
-            let printPagesColor = 0;
+            let printSheetsBW = 0;
+            let printSheetsColor = 0;
+            // Also track page impressions for BW/Color breakdown (Tag36 counters use pages, not sheets)
+            let printImpressionsBW = 0;
+            let printImpressionsColor = 0;
             for (const log of printLogs) {
                 const d = log.data || {};
-                const pages = (d.totalPages || d.pages || 1) * (d.copies || 1);
+                const pageImpressions = (d.totalPages || d.pages || 1) * (d.copies || 1);
+                // Use totalSheets (physical paper) when counter tracks sheets,
+                // otherwise use page impressions
+                const sheets = counterIsSheets && d.totalSheets > 0
+                    ? d.totalSheets
+                    : pageImpressions;
                 if (d.printType === 'color' || d.isColorPrint) {
-                    printPagesColor += pages;
+                    printSheetsColor += sheets;
+                    printImpressionsColor += pageImpressions;
                 } else {
-                    printPagesBW += pages;
+                    printSheetsBW += sheets;
+                    printImpressionsBW += pageImpressions;
                 }
             }
-            const printPages = printPagesBW + printPagesColor;
+            const printPages = printSheetsBW + printSheetsColor;
 
-            // Calculate photocopies = counter increase - tracked prints
+            // Calculate photocopies = counter increase - tracked print sheets
             const photocopies = Math.max(0, counterDiff - printPages);
 
             // BW/Color photocopy breakdown
+            // Tag36 counters (withBorderBW etc.) track page impressions, NOT sheets,
+            // so we must subtract page impressions here, not sheets
             let photocopiesBW = 0;
             let photocopiesColor = 0;
             if (hasDetailedCounters) {
-                photocopiesBW = Math.max(0, counterDiffBW - printPagesBW);
-                photocopiesColor = Math.max(0, counterDiffColor - printPagesColor);
+                photocopiesBW = Math.max(0, counterDiffBW - printImpressionsBW);
+                photocopiesColor = Math.max(0, counterDiffColor - printImpressionsColor);
             } else {
                 photocopiesBW = photocopies;
             }
@@ -3268,8 +3290,8 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
                 counterDiffBW,
                 counterDiffColor,
                 printPages,
-                printPagesBW,
-                printPagesColor,
+                printPagesBW: printSheetsBW,
+                printPagesColor: printSheetsColor,
                 printJobCount: printLogs.length,
                 photocopies,
                 photocopiesBW,

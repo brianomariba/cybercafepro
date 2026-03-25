@@ -3595,12 +3595,14 @@ function Click-UIElement {
 
 # ============================================================
 # Get Total Sheets from "Printer and Option Information" dialog  
-# Uses Win32 API (FindWindow/FindWindowEx) instead of UI Automation
-# because UI Automation fails when running as a service
+# STEALTH MODE: Runs on a hidden Windows desktop so the user
+# never sees any windows, mouse movements, or UI artifacts.
+# Uses Win32 CreateDesktop API to create an invisible desktop.
 # ============================================================
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 try { Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Threading; using System.Text;
+using System.Diagnostics;
 public class W32POI {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, int e);
@@ -3613,7 +3615,43 @@ public class W32POI {
     public static extern int SendMsg(IntPtr h, uint m, int w, StringBuilder l);
     [DllImport("user32.dll")]
     public static extern int SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(int dwThreadId);
+    [DllImport("user32.dll")] public static extern bool SetThreadDesktop(IntPtr hDesktop);
+    [DllImport("user32.dll", CharSet=CharSet.Auto)]
+    public static extern IntPtr CreateDesktop(string lpszDesktop, IntPtr lpszDevice, IntPtr pDevmode, int dwFlags, uint dwDesiredAccess, IntPtr lpsa);
+    [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr hDesktop);
+    [DllImport("user32.dll")] public static extern bool SwitchDesktop(IntPtr hDesktop);
+    [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+    [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
+    public const uint GENERIC_ALL = 0x10000000;
+    public const uint DESKTOP_CREATEWINDOW = 0x0002;
+    public const uint DESKTOP_WRITEOBJECTS = 0x0080;
+    public const uint DESKTOP_SWITCHDESKTOP = 0x0100;
+    public const uint DESKTOP_READOBJECTS = 0x0001;
+    public const uint DESKTOP_ALL = 0x01FF;
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
+    public struct STARTUPINFO {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess, hThread;
+        public int dwProcessId, dwThreadId;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Auto, SetLastError=true)]
+    public static extern bool CreateProcess(string app, string cmdLine, IntPtr procAttr, IntPtr threadAttr,
+        bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] public static extern uint WaitForSingleObject(IntPtr h, uint ms);
     public static void DoClick(int x, int y) {
         SetCursorPos(x, y); Thread.Sleep(200);
         mouse_event(0x0002, 0, 0, 0, 0); Thread.Sleep(100);
@@ -3624,25 +3662,45 @@ public class W32POI {
         SendMsg(h, 0x000D, 256, sb);
         return sb.ToString();
     }
+    // Launch a process on a specific desktop
+    public static int LaunchOnDesktop(string desktopName, string exePath, string args) {
+        STARTUPINFO si = new STARTUPINFO();
+        si.cb = Marshal.SizeOf(si);
+        si.lpDesktop = desktopName;
+        PROCESS_INFORMATION pi;
+        string cmdLine = "\"" + exePath + "\" " + args;
+        if (CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, null, ref si, out pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return pi.dwProcessId;
+        }
+        return -1;
+    }
 }
 "@ -ErrorAction SilentlyContinue } catch {}
 
 function Get-EpsonTotalSheets {
     param([string]$PrinterName)
     $sheetResult = @{ TotalSheets = -1; BorderlessSheets = -1 }
-    try {
-        $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"$PrinterName\`"" -PassThru -ErrorAction Stop
-        Start-Sleep -Seconds 5
-        $title = "$PrinterName Printing Preferences"
-        $hwnd = [W32POI]::FindWindow('#32770', $title)
-        if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
-        if ($hwnd -eq [IntPtr]::Zero) { try { $proc.Kill() } catch {}; return $sheetResult }
+    
+    # === Helper: Read data from POI dialog (works on any desktop) ===
+    function Read-POIData {
+        param([IntPtr]$hwnd)
+        # Switch to Maintenance tab using PostMessage (works on hidden desktops unlike SendKeys)
         [W32POI]::SetForegroundWindow($hwnd) | Out-Null
         Start-Sleep -Seconds 1
-        # Switch to Maintenance tab (Ctrl+Tab x2)
-        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+        # Send Ctrl+Tab via PostMessage - VK_TAB=0x09, VK_CONTROL=0x11, WM_KEYDOWN=0x100, WM_KEYUP=0x101
+        # Tab 1: Ctrl+Tab
+        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null  # Ctrl down
+        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null  # Tab down
+        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null  # Tab up
+        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null  # Ctrl up
         Start-Sleep -Milliseconds 500
-        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+        # Tab 2: Ctrl+Tab again
+        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null
+        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null
+        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null
+        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Seconds 2
         # Find POI label
         $poiLabel = [IntPtr]::Zero
@@ -3662,9 +3720,7 @@ function Get-EpsonTotalSheets {
             }
         }
         if ($poiLabel -eq [IntPtr]::Zero) {
-            $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
-            if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-            Start-Sleep -Milliseconds 500; try { $proc.Kill() } catch {}; return $sheetResult
+            return @{ TotalSheets = -1; BorderlessSheets = -1 }
         }
         # Click icon area with retry
         $rect = New-Object W32POI+RECT
@@ -3685,6 +3741,7 @@ function Get-EpsonTotalSheets {
             }
             if ($poiDlg -ne [IntPtr]::Zero) { break }
         }
+        $result = @{ TotalSheets = -1; BorderlessSheets = -1 }
         if ($poiDlg -ne [IntPtr]::Zero) {
             Start-Sleep -Seconds 5
             $numbers = @()
@@ -3711,17 +3768,81 @@ function Get-EpsonTotalSheets {
                 $subDlg = [W32POI]::FindWindowEx($poiDlg, $subDlg, '#32770', $null)
             }
             $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
-            if ($numbers.Count -ge 1) { $sheetResult.TotalSheets = $numbers[0] }
-            if ($numbers.Count -ge 2) { $sheetResult.BorderlessSheets = $numbers[1] }
+            if ($numbers.Count -ge 1) { $result.TotalSheets = $numbers[0] }
+            if ($numbers.Count -ge 2) { $result.BorderlessSheets = $numbers[1] }
+            # Close POI dialog
             $okBtn = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Button', 'OK')
             if ($okBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
             Start-Sleep -Milliseconds 500
         }
+        # Close Preferences
         $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
         if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-        Start-Sleep -Seconds 1
-        try { $proc.Kill() } catch {}
-    } catch {}
+        return $result
+    }
+    
+    try {
+        # === STEALTH: Create a hidden desktop ===
+        $deskName = "HawkNinePOI"
+        $hHiddenDesk = [W32POI]::CreateDesktop($deskName, [IntPtr]::Zero, [IntPtr]::Zero, 0, [W32POI]::DESKTOP_ALL, [IntPtr]::Zero)
+        $hOrigDesk = [W32POI]::GetThreadDesktop([W32POI]::GetCurrentThreadId())
+        
+        if ($hHiddenDesk -ne [IntPtr]::Zero) {
+            # === HIDDEN DESKTOP PATH (user sees nothing) ===
+            try {
+                # Launch rundll32 on the hidden desktop
+                $rundll32Path = "$env:SystemRoot\\System32\\rundll32.exe"
+                $rundll32Args = "printui.dll,PrintUIEntry /e /n `"$PrinterName`""
+                $pid = [W32POI]::LaunchOnDesktop($deskName, $rundll32Path, $rundll32Args)
+                
+                if ($pid -le 0) {
+                    # CreateProcess failed, fallback to visible
+                    throw "CreateProcess on hidden desktop failed"
+                }
+                
+                Start-Sleep -Seconds 5
+                
+                # Switch our thread to the hidden desktop so FindWindow works there
+                [W32POI]::SetThreadDesktop($hHiddenDesk) | Out-Null
+                
+                $title = "$PrinterName Printing Preferences"
+                $hwnd = [W32POI]::FindWindow('#32770', $title)
+                if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
+                
+                if ($hwnd -ne [IntPtr]::Zero) {
+                    $sheetResult = Read-POIData -hwnd $hwnd
+                }
+                
+                # Switch back to original desktop
+                [W32POI]::SetThreadDesktop($hOrigDesk) | Out-Null
+                
+                # Kill the process
+                try { Get-Process -Id $pid -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() } } catch {}
+                Start-Sleep -Milliseconds 500
+            } finally {
+                # Always restore original desktop and clean up
+                [W32POI]::SetThreadDesktop($hOrigDesk) | Out-Null
+                [W32POI]::CloseDesktop($hHiddenDesk) | Out-Null
+                Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
+            }
+        } else {
+            # === FALLBACK: Visible mode (hidden desktop creation failed) ===
+            $proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"$PrinterName\`"" -PassThru -ErrorAction Stop
+            Start-Sleep -Seconds 5
+            $title = "$PrinterName Printing Preferences"
+            $hwnd = [W32POI]::FindWindow('#32770', $title)
+            if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
+            if ($hwnd -ne [IntPtr]::Zero) {
+                $sheetResult = Read-POIData -hwnd $hwnd
+            }
+            Start-Sleep -Seconds 1
+            try { $proc.Kill() } catch {}
+            Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
+        }
+    } catch {
+        # Ensure cleanup on any error
+        Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
+    }
     return $sheetResult
 }
 

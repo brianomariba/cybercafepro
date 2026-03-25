@@ -181,7 +181,7 @@ function PhotocopyTracker({ printers }) {
             render: (v) => <Text strong>{(v || 0).toLocaleString()}</Text>
         },
         {
-            title: 'Print Pages', dataIndex: 'printPages', key: 'printPages', width: 100,
+            title: 'Tracked Printouts', dataIndex: 'printPages', key: 'printPages', width: 110,
             sorter: (a, b) => (a.printPages || 0) - (b.printPages || 0),
             render: (v) => <Text style={{ color: '#00d4ff' }}>{(v || 0).toLocaleString()}</Text>
         },
@@ -313,14 +313,14 @@ function PhotocopyTracker({ printers }) {
                             <div className="stat-icon blue"><BarChartOutlined /></div>
                             <div className="stat-value">{(filteredSummary.totalCounterDiff || 0).toLocaleString()}</div>
                         </div>
-                        <div className="stat-label">Counter Difference</div>
+                        <div className="stat-label">Sheet Counter Δ</div>
                     </div>
                     <div className="stat-card" style={{ borderLeft: '3px solid #b0b0c0' }}>
                         <div className="stat-header">
                             <div className="stat-icon" style={{ background: 'rgba(176,176,192,0.15)', color: '#b0b0c0' }}><FileTextOutlined /></div>
                             <div className="stat-value">{(filteredSummary.totalPrintJobs || 0).toLocaleString()}</div>
                         </div>
-                        <div className="stat-label">Tracked Print Pages</div>
+                        <div className="stat-label">Tracked Printouts</div>
                     </div>
                     <div className="stat-card green">
                         <div className="stat-header">
@@ -491,12 +491,12 @@ function PhotocopyTracker({ printers }) {
                     How Photocopy Tracking Works
                 </Title>
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                    1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's hardware "Total Sheets" counter every ~5 minutes
-                    from <em>Printer Properties → Maintenance → Printer and Option Information</em>.<br />
+                    1. <strong>🤖 Automatic:</strong> The desktop agent reads the printer's hardware "Total Sheets" counter every ~30 seconds
+                    from <em>Printer Properties → Maintenance → Printer and Option Information</em> (stealthily on a hidden desktop).<br />
                     2. This hardware counter includes ALL physical sheets fed through the printer (prints + photocopies).<br />
                     3. The system also tracks all print jobs sent from computers automatically.<br />
-                    4. <strong>Photocopies = Total Sheets (hardware) − Tracked Print Jobs</strong> for each interval.<br />
-                    5. This gives you an accurate count of pages used for photocopying (manual copier usage).
+                    4. <strong>Photocopies = Total Sheets (change) − Tracked Printouts</strong> for each interval.<br />
+                    5. This gives you an accurate count of sheets used for photocopying (manual copier usage).
                 </Text>
             </Card>
         </div>
