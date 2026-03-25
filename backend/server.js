@@ -2930,23 +2930,22 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
         const results = [];
 
         for (const counter of counters) {
-            // Accept if either totalPages or totalSheets has valid data
-            const hasTotalPages = counter.totalPages !== null && counter.totalPages !== undefined;
+            // ONLY accept readings with valid totalSheets from POI dialog
+            // Tag36/registry data (totalPages only) is NOT used for photocopy tracking
             const hasTotalSheets = counter.totalSheets !== null && counter.totalSheets !== undefined && counter.totalSheets > 0;
             
-            if (!counter.printerName || (!hasTotalPages && !hasTotalSheets)) {
-                continue; // Skip printers without any valid counter data
+            if (!counter.printerName || !hasTotalSheets) {
+                continue; // Skip printers without hardware sheet counter data
             }
 
             // Normalize printer name: strip "(Copy N)" suffix so all copies
             // of the same physical printer consolidate into one reading
             const normalizedName = counter.printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
 
-            const counterValue = hasTotalPages ? Math.round(counter.totalPages) : 0;
-            // Use totalSheets (hardware counter from "Printer and Option Information") as the primary counter
+            // Use totalSheets (hardware counter from "Printer and Option Information") as the ONLY counter
             // It includes ALL physical sheets: prints + photocopies
-            const totalSheetsValue = hasTotalSheets ? Math.round(counter.totalSheets) : null;
-            const primaryCounter = totalSheetsValue && totalSheetsValue > 0 ? totalSheetsValue : counterValue;
+            const totalSheetsValue = Math.round(counter.totalSheets);
+            const primaryCounter = totalSheetsValue;
             if (primaryCounter <= 0) continue;
 
             // Check the last reading for this printer (by normalized name) to avoid duplicate entries

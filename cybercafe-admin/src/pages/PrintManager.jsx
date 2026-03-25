@@ -99,6 +99,7 @@ function PhotocopyTracker({ printers }) {
     const renderSourceBadge = (reading) => {
         const source = reading.source || 'manual';
         if (source === 'manual') return <Tag color="blue" style={{ fontSize: 10 }}>👤 Manual</Tag>;
+        if (source.includes('poi_dialog')) return <Tag color="gold" style={{ fontSize: 10 }}>📄 POI Sheets</Tag>;
         if (source === 'epson_stm3_tag36') return <Tag color="green" style={{ fontSize: 10 }}>🤖 Tag36</Tag>;
         if (source === 'agent_auto' || source === 'epson_stm3_registry' || source === 'bidi') return <Tag color="green" style={{ fontSize: 10 }}>🤖 Auto</Tag>;
         if (source === 'snmp' || source === 'snmp_raw') return <Tag color="cyan" style={{ fontSize: 10 }}>📡 SNMP</Tag>;

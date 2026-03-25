@@ -3683,145 +3683,166 @@ function Get-EpsonTotalSheets {
     param([string]$PrinterName)
     $sheetResult = @{ TotalSheets = -1; BorderlessSheets = -1 }
     
-    # === Helper: Read data from POI dialog (works on any desktop) ===
-    function Read-POIData {
-        param([IntPtr]$hwnd)
-        # Switch to Maintenance tab using PostMessage (works on hidden desktops unlike SendKeys)
-        [W32POI]::SetForegroundWindow($hwnd) | Out-Null
-        Start-Sleep -Seconds 1
-        # Send Ctrl+Tab via PostMessage - VK_TAB=0x09, VK_CONTROL=0x11, WM_KEYDOWN=0x100, WM_KEYUP=0x101
-        # Tab 1: Ctrl+Tab
-        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null  # Ctrl down
-        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null  # Tab down
-        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null  # Tab up
-        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null  # Ctrl up
-        Start-Sleep -Milliseconds 500
-        # Tab 2: Ctrl+Tab again
-        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null
-        [W32POI]::PostMessage($hwnd, 0x0100, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null
-        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x09, [IntPtr]::Zero) | Out-Null
-        [W32POI]::PostMessage($hwnd, 0x0101, [IntPtr]0x11, [IntPtr]::Zero) | Out-Null
-        Start-Sleep -Seconds 2
-        # Find POI label
-        $poiLabel = [IntPtr]::Zero
-        $maintPage = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-        if ($maintPage -ne [IntPtr]::Zero) {
-            $poiLabel = [W32POI]::FindWindowEx($maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+    # Create a temp file for the child process to write results to
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    
+    # Build the self-contained child script that will run on the hidden desktop.
+    # This script does ALL the UI interaction (open dialog, navigate tabs, click, read, close).
+    # It writes the result as "TotalSheets|BorderlessSheets" to the temp file.
+    $childScript = @"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -ErrorAction SilentlyContinue @'
+using System; using System.Runtime.InteropServices; using System.Threading; using System.Text;
+public class W {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, int e);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern IntPtr FindWindowEx(IntPtr p, IntPtr a, string c, string t);
+    [DllImport("user32.dll", CharSet=CharSet.Auto, EntryPoint="SendMessageW")] public static extern int SendMsg(IntPtr h, uint m, int w, StringBuilder l);
+    [DllImport("user32.dll")] public static extern int SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+    public static void DoClick(int x, int y) { SetCursorPos(x,y); Thread.Sleep(200); mouse_event(2,0,0,0,0); Thread.Sleep(100); mouse_event(4,0,0,0,0); Thread.Sleep(300); }
+    public static string GetText(IntPtr h) { StringBuilder sb = new StringBuilder(256); SendMsg(h, 0x000D, 256, sb); return sb.ToString(); }
+}
+'@
+
+try {
+    `$pn = '$($PrinterName -replace "'","''")'
+    `$outFile = '$($tempFile -replace "\\\\","/")'
+    
+    Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"`$pn\`"" -ErrorAction Stop
+    Start-Sleep -Seconds 5
+    
+    `$title = "`$pn Printing Preferences"
+    `$hwnd = [W]::FindWindow('#32770', `$title)
+    if (`$hwnd -eq [IntPtr]::Zero) { `$hwnd = [W]::FindWindow(`$null, `$title) }
+    if (`$hwnd -eq [IntPtr]::Zero) { '-1|-1' | Out-File `$outFile; exit }
+    
+    [W]::SetForegroundWindow(`$hwnd) | Out-Null
+    Start-Sleep -Seconds 1
+    [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+    Start-Sleep -Seconds 2
+    
+    `$poiLabel = [IntPtr]::Zero
+    `$maintPage = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
+    if (`$maintPage -ne [IntPtr]::Zero) { `$poiLabel = [W]::FindWindowEx(`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+    if (`$poiLabel -eq [IntPtr]::Zero) { `$poiLabel = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+    if (`$poiLabel -eq [IntPtr]::Zero) {
+        `$childDlg = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, '#32770', `$null)
+        while (`$childDlg -ne [IntPtr]::Zero) {
+            `$poiLabel = [W]::FindWindowEx(`$childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+            if (`$poiLabel -ne [IntPtr]::Zero) { break }
+            `$childDlg = [W]::FindWindowEx(`$hwnd, `$childDlg, '#32770', `$null)
         }
-        if ($poiLabel -eq [IntPtr]::Zero) {
-            $poiLabel = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+    }
+    if (`$poiLabel -eq [IntPtr]::Zero) { '-1|-1' | Out-File `$outFile; exit }
+    
+    `$rect = New-Object W+RECT
+    [W]::GetWindowRect(`$poiLabel, [ref]`$rect) | Out-Null
+    `$iconX = [int](`$rect.L - 25)
+    `$textX = [int]((`$rect.L + `$rect.R) / 2)
+    `$cy = [int]((`$rect.T + `$rect.B) / 2)
+    `$poiDlg = [IntPtr]::Zero
+    for (`$attempt = 1; `$attempt -le 3; `$attempt++) {
+        [W]::SetForegroundWindow(`$hwnd) | Out-Null
+        Start-Sleep -Milliseconds 300
+        `$clickX = if (`$attempt -eq 1) { `$iconX } else { `$textX }
+        [W]::DoClick(`$clickX, `$cy)
+        for (`$w = 0; `$w -lt 10; `$w++) {
+            Start-Sleep -Seconds 1
+            `$poiDlg = [W]::FindWindow('#32770', 'Printer and Option Information')
+            if (`$poiDlg -ne [IntPtr]::Zero) { break }
         }
-        if ($poiLabel -eq [IntPtr]::Zero) {
-            $childDlg = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', $null)
-            while ($childDlg -ne [IntPtr]::Zero) {
-                $poiLabel = [W32POI]::FindWindowEx($childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-                if ($poiLabel -ne [IntPtr]::Zero) { break }
-                $childDlg = [W32POI]::FindWindowEx($hwnd, $childDlg, '#32770', $null)
-            }
-        }
-        if ($poiLabel -eq [IntPtr]::Zero) {
-            return @{ TotalSheets = -1; BorderlessSheets = -1 }
-        }
-        # Click icon area with retry
-        $rect = New-Object W32POI+RECT
-        [W32POI]::GetWindowRect($poiLabel, [ref]$rect) | Out-Null
-        $iconX = [int]($rect.L - 25)
-        $textX = [int](($rect.L + $rect.R) / 2)
-        $cy = [int](($rect.T + $rect.B) / 2)
-        $poiDlg = [IntPtr]::Zero
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            [W32POI]::SetForegroundWindow($hwnd) | Out-Null
-            Start-Sleep -Milliseconds 300
-            $clickX = if ($attempt -eq 1) { $iconX } else { $textX }
-            [W32POI]::DoClick($clickX, $cy)
-            for ($w = 0; $w -lt 10; $w++) {
-                Start-Sleep -Seconds 1
-                $poiDlg = [W32POI]::FindWindow('#32770', 'Printer and Option Information')
-                if ($poiDlg -ne [IntPtr]::Zero) { break }
-            }
-            if ($poiDlg -ne [IntPtr]::Zero) { break }
-        }
-        $result = @{ TotalSheets = -1; BorderlessSheets = -1 }
-        if ($poiDlg -ne [IntPtr]::Zero) {
-            Start-Sleep -Seconds 5
-            $numbers = @()
-            $editH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
-            while ($editH -ne [IntPtr]::Zero) {
-                $val = [W32POI]::GetText($editH)
-                if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
-                $editH = [W32POI]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
-            }
-            $staticH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
-            while ($staticH -ne [IntPtr]::Zero) {
-                $val = [W32POI]::GetText($staticH)
-                if ($val -match '^\\d{3,}$') { $numbers += [int]$val }
-                $staticH = [W32POI]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
-            }
-            $subDlg = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, '#32770', $null)
-            while ($subDlg -ne [IntPtr]::Zero) {
-                $subEdit = [W32POI]::FindWindowEx($subDlg, [IntPtr]::Zero, 'Edit', $null)
-                while ($subEdit -ne [IntPtr]::Zero) {
-                    $val = [W32POI]::GetText($subEdit)
-                    if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
-                    $subEdit = [W32POI]::FindWindowEx($subDlg, $subEdit, 'Edit', $null)
-                }
-                $subDlg = [W32POI]::FindWindowEx($poiDlg, $subDlg, '#32770', $null)
-            }
-            $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
-            if ($numbers.Count -ge 1) { $result.TotalSheets = $numbers[0] }
-            if ($numbers.Count -ge 2) { $result.BorderlessSheets = $numbers[1] }
-            # Close POI dialog
-            $okBtn = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Button', 'OK')
-            if ($okBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-            Start-Sleep -Milliseconds 500
-        }
-        # Close Preferences
-        $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
-        if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-        return $result
+        if (`$poiDlg -ne [IntPtr]::Zero) { break }
     }
     
+    `$ts = -1; `$bs = -1
+    if (`$poiDlg -ne [IntPtr]::Zero) {
+        Start-Sleep -Seconds 5
+        `$numbers = @()
+        `$editH = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Edit', `$null)
+        while (`$editH -ne [IntPtr]::Zero) {
+            `$val = [W]::GetText(`$editH)
+            if (`$val -match '^\d+`$' -and [int]`$val -gt 0) { `$numbers += [int]`$val }
+            `$editH = [W]::FindWindowEx(`$poiDlg, `$editH, 'Edit', `$null)
+        }
+        `$staticH = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Static', `$null)
+        while (`$staticH -ne [IntPtr]::Zero) {
+            `$val = [W]::GetText(`$staticH)
+            if (`$val -match '^\d{3,}`$') { `$numbers += [int]`$val }
+            `$staticH = [W]::FindWindowEx(`$poiDlg, `$staticH, 'Static', `$null)
+        }
+        `$subDlg = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, '#32770', `$null)
+        while (`$subDlg -ne [IntPtr]::Zero) {
+            `$subEdit = [W]::FindWindowEx(`$subDlg, [IntPtr]::Zero, 'Edit', `$null)
+            while (`$subEdit -ne [IntPtr]::Zero) {
+                `$val = [W]::GetText(`$subEdit)
+                if (`$val -match '^\d+`$' -and [int]`$val -gt 0) { `$numbers += [int]`$val }
+                `$subEdit = [W]::FindWindowEx(`$subDlg, `$subEdit, 'Edit', `$null)
+            }
+            `$subDlg = [W]::FindWindowEx(`$poiDlg, `$subDlg, '#32770', `$null)
+        }
+        `$numbers = `$numbers | Sort-Object -Descending | Where-Object { `$_ -gt 1 } | Select-Object -Unique
+        if (`$numbers.Count -ge 1) { `$ts = `$numbers[0] }
+        if (`$numbers.Count -ge 2) { `$bs = `$numbers[1] }
+        `$okBtn = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Button', 'OK')
+        if (`$okBtn -ne [IntPtr]::Zero) { [W]::SendMessage(`$okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+        Start-Sleep -Milliseconds 500
+    }
+    `$cancelBtn = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+    if (`$cancelBtn -ne [IntPtr]::Zero) { [W]::SendMessage(`$cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+    "`$ts|`$bs" | Out-File `$outFile
+} catch {
+    '-1|-1' | Out-File '$($tempFile -replace "\\\\","/")'
+} finally {
+    Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { `$_.Kill() } catch {} }
+}
+"@
+
     try {
-        # === STEALTH: Create a hidden desktop ===
+        # === STEALTH: Create a hidden desktop and run the ENTIRE script there ===
         $deskName = "HawkNinePOI"
         $hHiddenDesk = [W32POI]::CreateDesktop($deskName, [IntPtr]::Zero, [IntPtr]::Zero, 0, [W32POI]::DESKTOP_ALL, [IntPtr]::Zero)
-        $hOrigDesk = [W32POI]::GetThreadDesktop([W32POI]::GetCurrentThreadId())
         
         if ($hHiddenDesk -ne [IntPtr]::Zero) {
-            # === HIDDEN DESKTOP PATH (user sees nothing) ===
             try {
-                # Launch rundll32 on the hidden desktop
-                $rundll32Path = "$env:SystemRoot\\System32\\rundll32.exe"
-                $rundll32Args = "printui.dll,PrintUIEntry /e /n \`"$PrinterName\`""
-                $pid = [W32POI]::LaunchOnDesktop($deskName, $rundll32Path, $rundll32Args)
+                # Write child script to a temp .ps1 file
+                $scriptFile = [System.IO.Path]::GetTempFileName() + ".ps1"
+                $childScript | Out-File -FilePath $scriptFile -Encoding UTF8
                 
-                if ($pid -le 0) {
-                    # CreateProcess failed, fallback to visible
-                    throw "CreateProcess on hidden desktop failed"
+                # Launch PowerShell itself on the hidden desktop with the script
+                $psPath = "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+                $psArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$scriptFile\`""
+                $pid = [W32POI]::LaunchOnDesktop($deskName, $psPath, $psArgs)
+                
+                if ($pid -le 0) { throw "LaunchOnDesktop failed" }
+                
+                # Wait for the child process to complete (max 60 seconds)
+                for ($wait = 0; $wait -lt 60; $wait++) {
+                    Start-Sleep -Seconds 1
+                    $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                    if (-not $proc -or $proc.HasExited) { break }
                 }
                 
-                Start-Sleep -Seconds 5
-                
-                # Switch our thread to the hidden desktop so FindWindow works there
-                [W32POI]::SetThreadDesktop($hHiddenDesk) | Out-Null
-                
-                $title = "$PrinterName Printing Preferences"
-                $hwnd = [W32POI]::FindWindow('#32770', $title)
-                if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
-                
-                if ($hwnd -ne [IntPtr]::Zero) {
-                    $sheetResult = Read-POIData -hwnd $hwnd
-                }
-                
-                # Switch back to original desktop
-                [W32POI]::SetThreadDesktop($hOrigDesk) | Out-Null
-                
-                # Kill the process
+                # Kill if still running
                 try { Get-Process -Id $pid -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() } } catch {}
-                Start-Sleep -Milliseconds 500
+                
+                # Read results from temp file
+                if (Test-Path $tempFile) {
+                    $content = (Get-Content $tempFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+                    if ($content -match '^(-?\d+)\|(-?\d+)$') {
+                        $sheetResult.TotalSheets = [int]$Matches[1]
+                        $sheetResult.BorderlessSheets = [int]$Matches[2]
+                    }
+                }
+                
+                # Cleanup script file
+                try { Remove-Item $scriptFile -Force -ErrorAction SilentlyContinue } catch {}
             } finally {
-                # Always restore original desktop and clean up
-                [W32POI]::SetThreadDesktop($hOrigDesk) | Out-Null
                 [W32POI]::CloseDesktop($hHiddenDesk) | Out-Null
                 Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
             }
@@ -3833,18 +3854,73 @@ function Get-EpsonTotalSheets {
             $hwnd = [W32POI]::FindWindow('#32770', $title)
             if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [W32POI]::FindWindow($null, $title) }
             if ($hwnd -ne [IntPtr]::Zero) {
-                $sheetResult = Read-POIData -hwnd $hwnd
+                [W32POI]::SetForegroundWindow($hwnd) | Out-Null
+                Start-Sleep -Seconds 1
+                [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+                Start-Sleep -Milliseconds 500
+                [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+                Start-Sleep -Seconds 2
+                $poiLabel = [IntPtr]::Zero
+                $maintPage = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
+                if ($maintPage -ne [IntPtr]::Zero) { $poiLabel = [W32POI]::FindWindowEx($maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+                if ($poiLabel -eq [IntPtr]::Zero) { $poiLabel = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+                if ($poiLabel -ne [IntPtr]::Zero) {
+                    $rect = New-Object W32POI+RECT
+                    [W32POI]::GetWindowRect($poiLabel, [ref]$rect) | Out-Null
+                    $iconX = [int]($rect.L - 25)
+                    $textX = [int](($rect.L + $rect.R) / 2)
+                    $cy = [int](($rect.T + $rect.B) / 2)
+                    $poiDlg = [IntPtr]::Zero
+                    for ($attempt = 1; $attempt -le 3; $attempt++) {
+                        [W32POI]::SetForegroundWindow($hwnd) | Out-Null
+                        Start-Sleep -Milliseconds 300
+                        $clickX = if ($attempt -eq 1) { $iconX } else { $textX }
+                        [W32POI]::DoClick($clickX, $cy)
+                        for ($w = 0; $w -lt 10; $w++) {
+                            Start-Sleep -Seconds 1
+                            $poiDlg = [W32POI]::FindWindow('#32770', 'Printer and Option Information')
+                            if ($poiDlg -ne [IntPtr]::Zero) { break }
+                        }
+                        if ($poiDlg -ne [IntPtr]::Zero) { break }
+                    }
+                    if ($poiDlg -ne [IntPtr]::Zero) {
+                        Start-Sleep -Seconds 5
+                        $numbers = @()
+                        $editH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
+                        while ($editH -ne [IntPtr]::Zero) {
+                            $val = [W32POI]::GetText($editH)
+                            if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
+                            $editH = [W32POI]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
+                        }
+                        $staticH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
+                        while ($staticH -ne [IntPtr]::Zero) {
+                            $val = [W32POI]::GetText($staticH)
+                            if ($val -match '^\\d{3,}$') { $numbers += [int]$val }
+                            $staticH = [W32POI]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
+                        }
+                        $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
+                        if ($numbers.Count -ge 1) { $sheetResult.TotalSheets = $numbers[0] }
+                        if ($numbers.Count -ge 2) { $sheetResult.BorderlessSheets = $numbers[1] }
+                        $okBtn = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Button', 'OK')
+                        if ($okBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+                        Start-Sleep -Milliseconds 500
+                    }
+                }
+                $cancelBtn = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+                if ($cancelBtn -ne [IntPtr]::Zero) { [W32POI]::SendMessage($cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
             }
             Start-Sleep -Seconds 1
             try { $proc.Kill() } catch {}
             Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
         }
     } catch {
-        # Ensure cleanup on any error
         Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
+    } finally {
+        try { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue } catch {}
     }
     return $sheetResult
 }
+
 
 # ============================================================
 # Read Epson counters from STM3 registry (for color/BW breakdown)
