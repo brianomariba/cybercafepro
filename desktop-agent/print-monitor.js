@@ -3709,93 +3709,93 @@ public class W {
 '@
 
 try {
-    `$pn = '$($PrinterName -replace "'","''")'
-    `$outFile = '$($tempFile -replace "\\\\","/")'
+    \`$pn = '$($PrinterName -replace "'","''")'
+    \`$outFile = '$($tempFile -replace "\\\\","/")'
     
-    Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"`$pn\`"" -ErrorAction Stop
+    Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"\`$pn\`"" -ErrorAction Stop
     Start-Sleep -Seconds 5
     
-    `$title = "`$pn Printing Preferences"
-    `$hwnd = [W]::FindWindow('#32770', `$title)
-    if (`$hwnd -eq [IntPtr]::Zero) { `$hwnd = [W]::FindWindow(`$null, `$title) }
-    if (`$hwnd -eq [IntPtr]::Zero) { '-1|-1' | Out-File `$outFile; exit }
+    \`$title = "\`$pn Printing Preferences"
+    \`$hwnd = [W]::FindWindow('#32770', \`$title)
+    if (\`$hwnd -eq [IntPtr]::Zero) { \`$hwnd = [W]::FindWindow(\`$null, \`$title) }
+    if (\`$hwnd -eq [IntPtr]::Zero) { '-1|-1' | Out-File \`$outFile; exit }
     
-    [W]::SetForegroundWindow(`$hwnd) | Out-Null
+    [W]::SetForegroundWindow(\`$hwnd) | Out-Null
     Start-Sleep -Seconds 1
     [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
     Start-Sleep -Seconds 2
     
-    `$poiLabel = [IntPtr]::Zero
-    `$maintPage = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-    if (`$maintPage -ne [IntPtr]::Zero) { `$poiLabel = [W]::FindWindowEx(`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
-    if (`$poiLabel -eq [IntPtr]::Zero) { `$poiLabel = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
-    if (`$poiLabel -eq [IntPtr]::Zero) {
-        `$childDlg = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, '#32770', `$null)
-        while (`$childDlg -ne [IntPtr]::Zero) {
-            `$poiLabel = [W]::FindWindowEx(`$childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-            if (`$poiLabel -ne [IntPtr]::Zero) { break }
-            `$childDlg = [W]::FindWindowEx(`$hwnd, `$childDlg, '#32770', `$null)
+    \`$poiLabel = [IntPtr]::Zero
+    \`$maintPage = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
+    if (\`$maintPage -ne [IntPtr]::Zero) { \`$poiLabel = [W]::FindWindowEx(\`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+    if (\`$poiLabel -eq [IntPtr]::Zero) { \`$poiLabel = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+    if (\`$poiLabel -eq [IntPtr]::Zero) {
+        \`$childDlg = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', \`$null)
+        while (\`$childDlg -ne [IntPtr]::Zero) {
+            \`$poiLabel = [W]::FindWindowEx(\`$childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+            if (\`$poiLabel -ne [IntPtr]::Zero) { break }
+            \`$childDlg = [W]::FindWindowEx(\`$hwnd, \`$childDlg, '#32770', \`$null)
         }
     }
-    if (`$poiLabel -eq [IntPtr]::Zero) { '-1|-1' | Out-File `$outFile; exit }
+    if (\`$poiLabel -eq [IntPtr]::Zero) { '-1|-1' | Out-File \`$outFile; exit }
     
-    `$rect = New-Object W+RECT
-    [W]::GetWindowRect(`$poiLabel, [ref]`$rect) | Out-Null
-    `$iconX = [int](`$rect.L - 25)
-    `$textX = [int]((`$rect.L + `$rect.R) / 2)
-    `$cy = [int]((`$rect.T + `$rect.B) / 2)
-    `$poiDlg = [IntPtr]::Zero
-    for (`$attempt = 1; `$attempt -le 3; `$attempt++) {
-        [W]::SetForegroundWindow(`$hwnd) | Out-Null
+    \`$rect = New-Object W+RECT
+    [W]::GetWindowRect(\`$poiLabel, [ref]\`$rect) | Out-Null
+    \`$iconX = [int](\`$rect.L - 25)
+    \`$textX = [int]((\`$rect.L + \`$rect.R) / 2)
+    \`$cy = [int]((\`$rect.T + \`$rect.B) / 2)
+    \`$poiDlg = [IntPtr]::Zero
+    for (\`$attempt = 1; \`$attempt -le 3; \`$attempt++) {
+        [W]::SetForegroundWindow(\`$hwnd) | Out-Null
         Start-Sleep -Milliseconds 300
-        `$clickX = if (`$attempt -eq 1) { `$iconX } else { `$textX }
-        [W]::DoClick(`$clickX, `$cy)
-        for (`$w = 0; `$w -lt 10; `$w++) {
+        \`$clickX = if (\`$attempt -eq 1) { \`$iconX } else { \`$textX }
+        [W]::DoClick(\`$clickX, \`$cy)
+        for (\`$w = 0; \`$w -lt 10; \`$w++) {
             Start-Sleep -Seconds 1
-            `$poiDlg = [W]::FindWindow('#32770', 'Printer and Option Information')
-            if (`$poiDlg -ne [IntPtr]::Zero) { break }
+            \`$poiDlg = [W]::FindWindow('#32770', 'Printer and Option Information')
+            if (\`$poiDlg -ne [IntPtr]::Zero) { break }
         }
-        if (`$poiDlg -ne [IntPtr]::Zero) { break }
+        if (\`$poiDlg -ne [IntPtr]::Zero) { break }
     }
     
-    `$ts = -1; `$bs = -1
-    if (`$poiDlg -ne [IntPtr]::Zero) {
+    \`$ts = -1; \`$bs = -1
+    if (\`$poiDlg -ne [IntPtr]::Zero) {
         Start-Sleep -Seconds 5
-        `$numbers = @()
-        `$editH = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Edit', `$null)
-        while (`$editH -ne [IntPtr]::Zero) {
-            `$val = [W]::GetText(`$editH)
-            if (`$val -match '^\d+`$' -and [int]`$val -gt 0) { `$numbers += [int]`$val }
-            `$editH = [W]::FindWindowEx(`$poiDlg, `$editH, 'Edit', `$null)
+        \`$numbers = @()
+        \`$editH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Edit', \`$null)
+        while (\`$editH -ne [IntPtr]::Zero) {
+            \`$val = [W]::GetText(\`$editH)
+            if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+            \`$editH = [W]::FindWindowEx(\`$poiDlg, \`$editH, 'Edit', \`$null)
         }
-        `$staticH = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Static', `$null)
-        while (`$staticH -ne [IntPtr]::Zero) {
-            `$val = [W]::GetText(`$staticH)
-            if (`$val -match '^\d{3,}`$') { `$numbers += [int]`$val }
-            `$staticH = [W]::FindWindowEx(`$poiDlg, `$staticH, 'Static', `$null)
+        \`$staticH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Static', \`$null)
+        while (\`$staticH -ne [IntPtr]::Zero) {
+            \`$val = [W]::GetText(\`$staticH)
+            if (\`$val -match '^\d{3,}\`$') { \`$numbers += [int]\`$val }
+            \`$staticH = [W]::FindWindowEx(\`$poiDlg, \`$staticH, 'Static', \`$null)
         }
-        `$subDlg = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, '#32770', `$null)
-        while (`$subDlg -ne [IntPtr]::Zero) {
-            `$subEdit = [W]::FindWindowEx(`$subDlg, [IntPtr]::Zero, 'Edit', `$null)
-            while (`$subEdit -ne [IntPtr]::Zero) {
-                `$val = [W]::GetText(`$subEdit)
-                if (`$val -match '^\d+`$' -and [int]`$val -gt 0) { `$numbers += [int]`$val }
-                `$subEdit = [W]::FindWindowEx(`$subDlg, `$subEdit, 'Edit', `$null)
+        \`$subDlg = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, '#32770', \`$null)
+        while (\`$subDlg -ne [IntPtr]::Zero) {
+            \`$subEdit = [W]::FindWindowEx(\`$subDlg, [IntPtr]::Zero, 'Edit', \`$null)
+            while (\`$subEdit -ne [IntPtr]::Zero) {
+                \`$val = [W]::GetText(\`$subEdit)
+                if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+                \`$subEdit = [W]::FindWindowEx(\`$subDlg, \`$subEdit, 'Edit', \`$null)
             }
-            `$subDlg = [W]::FindWindowEx(`$poiDlg, `$subDlg, '#32770', `$null)
+            \`$subDlg = [W]::FindWindowEx(\`$poiDlg, \`$subDlg, '#32770', \`$null)
         }
-        `$numbers = `$numbers | Sort-Object -Descending | Where-Object { `$_ -gt 1 } | Select-Object -Unique
-        if (`$numbers.Count -ge 1) { `$ts = `$numbers[0] }
-        if (`$numbers.Count -ge 2) { `$bs = `$numbers[1] }
-        `$okBtn = [W]::FindWindowEx(`$poiDlg, [IntPtr]::Zero, 'Button', 'OK')
-        if (`$okBtn -ne [IntPtr]::Zero) { [W]::SendMessage(`$okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+        \`$numbers = \`$numbers | Sort-Object -Descending | Where-Object { \`$_ -gt 1 } | Select-Object -Unique
+        if (\`$numbers.Count -ge 1) { \`$ts = \`$numbers[0] }
+        if (\`$numbers.Count -ge 2) { \`$bs = \`$numbers[1] }
+        \`$okBtn = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Button', 'OK')
+        if (\`$okBtn -ne [IntPtr]::Zero) { [W]::SendMessage(\`$okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
         Start-Sleep -Milliseconds 500
     }
-    `$cancelBtn = [W]::FindWindowEx(`$hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
-    if (`$cancelBtn -ne [IntPtr]::Zero) { [W]::SendMessage(`$cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-    "`$ts|`$bs" | Out-File `$outFile
+    \`$cancelBtn = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+    if (\`$cancelBtn -ne [IntPtr]::Zero) { [W]::SendMessage(\`$cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+    "\`$ts|\`$bs" | Out-File \`$outFile
 } catch {
     '-1|-1' | Out-File '$($tempFile -replace "\\\\","/")'
 } finally {
