@@ -5,7 +5,7 @@ const os = require('os');
 
 // Track processed jobs to avoid duplicates
 let processedJobIds = new Set();
-// Cache printer capabilities — invalidated every 30 minutes to pick up
+// Cache printer capabilities â€” invalidated every 30 minutes to pick up
 // hardware changes (e.g., color cartridge removed, new printer installed)
 let printerCache = new Map();
 const PRINTER_CACHE_INVALIDATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -92,8 +92,8 @@ function extractDocNameFromTitle(windowTitle) {
     const extPattern = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|odt|ods|odp|csv|html|htm|xml|jpg|jpeg|png|gif|bmp|tiff|tif|svg|webp|eml|msg)/i;
 
     // Strategy 1: Find a segment that contains a file extension
-    // Split by common delimiters: " - ", " â€” ", " | ", " Â· "
-    const segments = title.split(/\s+[-â€“â€”|Â·]\s+/);
+    // Split by common delimiters: " - ", " Ã¢â‚¬â€ ", " | ", " Ã‚Â· "
+    const segments = title.split(/\s+[-Ã¢â‚¬â€œÃ¢â‚¬â€|Ã‚Â·]\s+/);
     for (const seg of segments) {
         const trimSeg = seg.trim();
         if (extPattern.test(trimSeg)) {
@@ -132,7 +132,7 @@ function extractDocNameFromTitle(windowTitle) {
         if (suffix.test(title)) {
             let docPart = title.replace(suffix, '').trim();
             // Remove common prefixes
-            docPart = docPart.replace(/^(print\s+preview\s*[-â€“â€”:]\s*)/i, '');
+            docPart = docPart.replace(/^(print\s+preview\s*[-Ã¢â‚¬â€œÃ¢â‚¬â€:]\s*)/i, '');
             if (docPart.length >= 2 && docPart.length < 200 && !/^(untitled|new\s+document|document\s*\d*|sheet\s*\d*|presentation\s*\d*)$/i.test(docPart)) {
                 return docPart;
             }
@@ -243,7 +243,7 @@ try {
 
 /**
  * Detect if a printer supports color based on name and driver keywords.
- * This is a universal heuristic fallback â€” no model-specific hardcoding.
+ * This is a universal heuristic fallback Ã¢â‚¬â€ no model-specific hardcoding.
  * The primary detection is via Windows PrintConfiguration (see getPrinterCapabilities & getInstalledPrinters).
  */
 function detectColorCapability(nameLower, driverLower) {
@@ -279,7 +279,7 @@ function detectColorCapability(nameLower, driverLower) {
 
 /**
  * Fallback paper size when no Windows data is available.
- * ZERO GUESSWORK â€” no document name analysis.
+ * ZERO GUESSWORK Ã¢â‚¬â€ no document name analysis.
  * The actual paper size is captured from PrintTicket (psk:PageMediaSize)
  * or Get-PrintConfiguration by the SpoolerWatcher. This function is only
  * called when all Windows sources failed (should be very rare).
@@ -290,7 +290,7 @@ function inferPaperSize(documentName, sizeBytes) {
 
 /**
  * Resolve media/paper type from Windows-reported driver media type string.
- * ZERO GUESSWORK â€” only trusts what the printer driver / PrintTicket reports.
+ * ZERO GUESSWORK Ã¢â‚¬â€ only trusts what the printer driver / PrintTicket reports.
  * Handles both human-readable names AND raw DEVMODE/PrintTicket values.
  * Returns 'Plain Paper' when no data (the most common real-world default).
  */
@@ -303,7 +303,7 @@ function inferMediaType(mediaTypeStr, documentName) {
         media === 'unknown' || media === 'unspecified';
 
     if (!isGenericDefault) {
-        // Driver/PrintTicket reported media types â€” trust these
+        // Driver/PrintTicket reported media types Ã¢â‚¬â€ trust these
         if (media.includes('glossy')) return 'Glossy';
         if (media.includes('matte')) return 'Matte';
         if (media.includes('photo')) return 'Photo Paper';
@@ -324,12 +324,12 @@ function inferMediaType(mediaTypeStr, documentName) {
         if (media.includes('preprinted')) return 'Pre-printed';
     }
 
-    // No guessing from document names â€” default to Plain Paper
+    // No guessing from document names Ã¢â‚¬â€ default to Plain Paper
     return 'Plain Paper';
 }
 
 /**
- * Fallback print quality â€” defaults to Normal.
+ * Fallback print quality Ã¢â‚¬â€ defaults to Normal.
  * Actual quality is captured from PrintTicket when available.
  */
 function inferPrintQuality(documentName, driverName) {
@@ -339,22 +339,22 @@ function inferPrintQuality(documentName, driverName) {
 /**
  * Detect if the print job is color or B&W.
  * 
- * ZERO GUESSWORK â€” only trusts Windows-reported per-job color settings.
+ * ZERO GUESSWORK Ã¢â‚¬â€ only trusts Windows-reported per-job color settings.
  * No filename heuristics, no document name guessing.
  * 
  * Data sources (in priority order):
- *   1. job.JobColor â€” per-job DEVMODE/PrintTicket (from SpoolerWatcher or WMI)
+ *   1. job.JobColor Ã¢â‚¬â€ per-job DEVMODE/PrintTicket (from SpoolerWatcher or WMI)
  *      Values: 'Color', 'Monochrome', 'Grayscale', 1 (mono), 2 (color)
- *   2. job.Color â€” printer-level config (ONLY used to check if printer can do color)
- *      Values: true/false, 'True'/'False' â€” this is NOT per-job!
+ *   2. job.Color Ã¢â‚¬â€ printer-level config (ONLY used to check if printer can do color)
+ *      Values: true/false, 'True'/'False' Ã¢â‚¬â€ this is NOT per-job!
  * 
  * Logic:
- *   - If we have per-job color data â†’ use it (definitive, no guessing)
- *   - If printer is NOT color-capable â†’ B&W (can't print color regardless)
- *   - If no per-job data available â†’ B&W (safe default for billing)
+ *   - If we have per-job color data Ã¢â€ â€™ use it (definitive, no guessing)
+ *   - If printer is NOT color-capable Ã¢â€ â€™ B&W (can't print color regardless)
+ *   - If no per-job data available Ã¢â€ â€™ B&W (safe default for billing)
  */
 function detectPrintType(job) {
-    // 1. Per-job color setting â€” the DEFINITIVE answer
+    // 1. Per-job color setting Ã¢â‚¬â€ the DEFINITIVE answer
     // Comes from: PrintTicket XML (psk:PageOutputColor), WMI Win32_PrintJob.Color,
     //             Get-PrintJob per-job Color, or DEVMODE dmColor
     if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown' && job.JobColor !== '') {
@@ -393,7 +393,7 @@ function detectPrintType(job) {
     if (!isColorPrinter) return 'bw';
 
     // 3. Printer CAN do color, but we have NO per-job color data.
-    // Default to B&W â€” without proof from Windows that the user selected color,
+    // Default to B&W Ã¢â‚¬â€ without proof from Windows that the user selected color,
     // we don't assume it. The SpoolerWatcher should capture this for every job;
     // if it didn't, B&W is the safe billing default.
     return 'bw';
@@ -677,7 +677,7 @@ function enablePrintLogging() {
     execFile('wevtutil', ['sl', 'Microsoft-Windows-PrintService/Operational', '/e:true'], (err) => {
         if (err) {
             console.log('[PrintMonitor] Direct enable failed, trying with elevation...');
-            // Try with PowerShell elevation — this shows a UAC prompt if needed
+            // Try with PowerShell elevation â€” this shows a UAC prompt if needed
             const { exec } = require('child_process');
             exec('powershell -NoProfile -Command "Start-Process wevtutil -ArgumentList \'sl\',\'Microsoft-Windows-PrintService/Operational\',\'/e:true\' -Verb RunAs -Wait -WindowStyle Hidden"',
                 { timeout: 15000 },
@@ -711,11 +711,11 @@ try {
     const status = result.trim();
 
     if (status === 'ENABLED') {
-        console.log('[PrintMonitor] ✅ Print Service Operational log is ENABLED');
+        console.log('[PrintMonitor] âœ… Print Service Operational log is ENABLED');
         return true;
     }
 
-    console.error('[PrintMonitor] ⚠️ Print Service Operational log is NOT enabled! Print tracking will NOT work.');
+    console.error('[PrintMonitor] âš ï¸ Print Service Operational log is NOT enabled! Print tracking will NOT work.');
 
     // Retry enabling
     enablePrintLogging();
@@ -726,13 +726,13 @@ try {
         retryCount++;
         if (retryCount > 10) {
             clearInterval(retryInterval);
-            console.error('[PrintMonitor] ❌ Failed to enable print logging after 10 retries. Print tracking is DISABLED.');
+            console.error('[PrintMonitor] âŒ Failed to enable print logging after 10 retries. Print tracking is DISABLED.');
             return;
         }
 
         const retryResult = await runPS(checkScript, 10000);
         if (retryResult.trim() === 'ENABLED') {
-            console.log('[PrintMonitor] ✅ Print Service Operational log is now ENABLED (after retry)');
+            console.log('[PrintMonitor] âœ… Print Service Operational log is now ENABLED (after retry)');
             clearInterval(retryInterval);
         } else {
             console.log(`[PrintMonitor] Retry ${retryCount}/10: Still not enabled, retrying...`);
@@ -811,7 +811,7 @@ try {
         # CANCELED JOB CHECK: Skip this job if it appears in the canceled/deleted set
         if ($id -and $canceledJobIds.ContainsKey([string]$id)) { continue }
 
-        # ALWAYS parse message text â€” some EPSON drivers (L3250, L3210) report Param8=1
+        # ALWAYS parse message text Ã¢â‚¬â€ some EPSON drivers (L3250, L3210) report Param8=1
         # for ALL jobs, but the formatted message text may contain the real page count.
         $msg = $evt.Message
         if ($msg) {
@@ -1000,12 +1000,12 @@ try {
         # CANCELED JOB CHECK: Skip this job if it appears in the canceled/deleted set
         if ($id -and $canceledJobIds.ContainsKey([string]$id)) { continue }
 
-        # ALWAYS parse message text â€” some EPSON drivers (L3250, L3210) report Param8=1
+        # ALWAYS parse message text Ã¢â‚¬â€ some EPSON drivers (L3250, L3210) report Param8=1
         # for ALL jobs, but the formatted message text may contain the real page count.
         # We take the MAX of Param8 and message-parsed count to ensure accuracy.
         $msg = $evt.Message
         if ($msg) {
-            # Parse page count from message â€” try multiple patterns
+            # Parse page count from message Ã¢â‚¬â€ try multiple patterns
             $msgPages = 0
             if ($msg -match 'printed\s+(\d+)\s+page') { $msgPages = [int]$Matches[1] }
             elseif ($msg -match '(\d+)\s+page') { $msgPages = [int]$Matches[1] }
@@ -1043,7 +1043,7 @@ try {
             }
         } catch {}
 
-        # 2. Try WMI for this specific job â€” get DEVMODE-level per-job settings
+        # 2. Try WMI for this specific job Ã¢â‚¬â€ get DEVMODE-level per-job settings
         # This is KEY: per-job DEVMODE has the actual paper size, media type, and page count
         $wmiTotalPages = 0
         $wmiMediaType = ""
@@ -1096,7 +1096,7 @@ try {
             $wmiJobName2 = "$printer, $id"
             $wmiJob2 = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName2'" -ErrorAction Stop
             if ($wmiJob2) {
-                # CRITICAL: Get per-job Color from WMI â€” this is the DEVMODE dmColor
+                # CRITICAL: Get per-job Color from WMI Ã¢â‚¬â€ this is the DEVMODE dmColor
                 # NOT the printer default. Values: 'Color' or 'Monochrome'
                 if ($wmiJob2.Color) { $jobColorMode = [string]$wmiJob2.Color }
                 # Check for paper size in Parameters string
@@ -1866,7 +1866,7 @@ if ($bestPages -gt 0 -or $bestCopies -gt 1) {
 
 
 /**
- * AGGRESSIVE page count query â€” used when Event 307 fires but we have
+ * AGGRESSIVE page count query Ã¢â‚¬â€ used when Event 307 fires but we have
  * a suspicious page count (0 or 1) from both the cache and Event Log.
  * 
  * This function tries EVERY available source with retries.
@@ -1876,7 +1876,7 @@ if ($bestPages -gt 0 -or $bestCopies -gt 1) {
  * Returns: { totalPages, pagesPrinted, copies } or null
  */
 async function queryJobPageCountAggressive(printerName, jobId) {
-    // Try up to 3 rapid queries â€” the job may still be briefly in spooler
+    // Try up to 3 rapid queries Ã¢â‚¬â€ the job may still be briefly in spooler
     for (let attempt = 0; attempt < 3; attempt++) {
         const script = `
 $totalPages = 0
@@ -2023,7 +2023,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     (!existing.duplexMode && job.duplexMode) ||
                     (!existing.colorMode && job.colorMode)
                 )) {
-                    // Found a higher page count â€” update the cache
+                    // Found a higher page count Ã¢â‚¬â€ update the cache
                     existing.totalPages = Math.max(job.totalPages || 0, existing.totalPages || 0);
                     if (job.pagesPrinted > (existing.pagesPrinted || 0)) {
                         existing.pagesPrinted = job.pagesPrinted;
@@ -2045,13 +2045,13 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     existing.cachedAt = Date.now();
                     spoolerCache.set(job.jobKey, existing);
 
-                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} â€” now ${existing.totalPages} pages`);
+                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} Ã¢â‚¬â€ now ${existing.totalPages} pages`);
 
                     if (typeof onUpdate === 'function') {
                         onUpdate(job.jobKey, existing);
                     }
                 } else if (!existing && job.totalPages > 0) {
-                    // Job wasn't in cache â€” add it (watcher might have missed it)
+                    // Job wasn't in cache Ã¢â‚¬â€ add it (watcher might have missed it)
                     spoolerCache.set(job.jobKey, {
                         totalPages: job.totalPages,
                         pagesPrinted: job.pagesPrinted || 0,
@@ -2066,7 +2066,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                         cachedAt: Date.now()
                     });
 
-                    console.log(`[PrintUpdater] New job cached: "${job.document}" @ ${job.printer} â€” ${job.totalPages} pages`);
+                    console.log(`[PrintUpdater] New job cached: "${job.document}" @ ${job.printer} Ã¢â‚¬â€ ${job.totalPages} pages`);
 
                     if (typeof onUpdate === 'function') {
                         onUpdate(job.jobKey, spoolerCache.get(job.jobKey));
@@ -2074,7 +2074,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                 }
             }
         } catch (e) {
-            // Silently fail â€” this is a best-effort background updater
+            // Silently fail Ã¢â‚¬â€ this is a best-effort background updater
         }
 
         running = false;
@@ -2103,7 +2103,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
  * to get INSTANT notification when a print job enters the spooler.
  * 
  * Unlike polling (which checks every 1.5s), this fires within milliseconds
- * of the job appearing â€” giving us time to read the full DEVMODE before
+ * of the job appearing Ã¢â‚¬â€ giving us time to read the full DEVMODE before
  * the job completes and the settings are lost.
  * 
  * The watcher emits JSON lines to stdout, one per detected job.
@@ -2123,7 +2123,7 @@ function startSpoolerWatcher(onJob) {
 # + Foreground window title capture for real document names
 #
 # PrintTicket is the XML representation of what the user picked
-# in the print dialog. It contains EVERY setting â€” not filtered
+# in the print dialog. It contains EVERY setting Ã¢â‚¬â€ not filtered
 # by the driver, not defaults. The actual selections.
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -2189,7 +2189,7 @@ public class PrintJobApi {
                 if (pDevMode == IntPtr.Zero) return null;
                 // DEVMODE struct (after 64-byte dmDeviceName):
                 //   dmOrientation at 76 (64+12), dmPaperSize at 78 (64+14)
-                //   dmCopies at 86 (64+22) ← CRITICAL for EPSON copies!
+                //   dmCopies at 86 (64+22) â† CRITICAL for EPSON copies!
                 //   dmColor at 92 (64+28), dmDuplex at 94 (64+30)
                 //   dmMediaType at offset 196 (standard Windows DEVMODE field)
                 short dmColor = Marshal.ReadInt16(pDevMode, 92);      // 64+28
@@ -2278,7 +2278,7 @@ $dialogMonitorHandle = $dialogMonitorPS.BeginInvoke()
 $query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_PrintJob'"
 $deleteQuery = "SELECT * FROM __InstanceDeletionEvent WITHIN 2 WHERE TargetInstance ISA 'Win32_PrintJob'"
 
-# Deletion watcher â€" runs in a background runspace to detect canceled jobs
+# Deletion watcher Ã¢â‚¬" runs in a background runspace to detect canceled jobs
 $deleteRunspace = [runspacefactory]::CreateRunspace()
 $deleteRunspace.Open()
 $deletePS = [powershell]::Create()
@@ -2345,7 +2345,7 @@ try {
             $sizeBytes = [long]$job.Size
             $owner = [string]$job.Owner
 
-            # Capture the foreground window title â€” this often contains the real document name
+            # Capture the foreground window title Ã¢â‚¬â€ this often contains the real document name
             # when the application submits a generic name like "Print Document"
             $windowTitle = ""
             try {
@@ -2366,7 +2366,7 @@ try {
             $duplexMode = ""
             $colorMode = ""
 
-            # ===== READ PRINTTICKET â€” the EXACT user-selected settings =====
+            # ===== READ PRINTTICKET Ã¢â‚¬â€ the EXACT user-selected settings =====
             # System.Printing gives us the PrintTicket XML which is the
             # definitive record of what the user chose in the print dialog.
             try {
@@ -2577,7 +2577,7 @@ try {
                 for ($retry = 0; $retry -lt 15; $retry++) {
                     Start-Sleep -Milliseconds 500
                     try {
-                        # Try multiple sources for page count â€” critical for accuracy
+                        # Try multiple sources for page count Ã¢â‚¬â€ critical for accuracy
                         # Use -le 1 threshold because EPSON L3250 falsely reports 1 page
                         if ($totalPages -le 1) {
                             # Source 1: WMI Win32_PrintJob (fastest)
@@ -2700,7 +2700,7 @@ try {
                 }
             }
 
-            # ===== ENSURE colorMode IS CAPTURED â€” no guesswork allowed =====
+            # ===== ENSURE colorMode IS CAPTURED Ã¢â‚¬â€ no guesswork allowed =====
             # If PrintTicket didn't give us colorMode, try other Windows sources.
             if ($colorMode -eq '') {
                 # Fallback 1: Get-PrintJob per-job Color property
@@ -2827,7 +2827,7 @@ try {
             '-NonInteractive',
             '-ExecutionPolicy', 'Bypass',
             '-File', tmpFile
-        ], { maxBuffer: 1024 * 1024 * 10, timeout: 0 }); // No timeout â€” runs forever
+        ], { maxBuffer: 1024 * 1024 * 10, timeout: 0 }); // No timeout Ã¢â‚¬â€ runs forever
 
         psProcess.stdout.on('data', (chunk) => {
             buffer += chunk.toString();
@@ -2844,7 +2844,7 @@ try {
 
                     // Handle status messages
                     if (data.__status === 'ready') {
-                        console.log('[SpoolerWatcher] ✅ Real-time watcher is active');
+                        console.log('[SpoolerWatcher] âœ… Real-time watcher is active');
                         continue;
                     }
                     if (data.__error) {
@@ -2859,7 +2859,7 @@ try {
                     // Handle canceled/deleted job notifications from the deletion watcher
                     if (data.__canceled && data.Printer && data.JobId) {
                         const cancelKey = generatePrintJobKey(data.Printer, data.JobId, data.Document, null);
-                        console.log(`[SpoolerWatcher] ❌ Job CANCELED/DELETED: "${data.Document || 'Unknown'}" @ ${data.Printer} (jobId=${data.JobId})`);
+                        console.log(`[SpoolerWatcher] âŒ Job CANCELED/DELETED: "${data.Document || 'Unknown'}" @ ${data.Printer} (jobId=${data.JobId})`);
                         if (typeof onJob === 'function') {
                             onJob({
                                 jobKey: cancelKey,
@@ -2906,7 +2906,7 @@ try {
                             source: 'wmi_event_realtime'
                         };
 
-                        console.log(`[SpoolerWatcher] ðŸ–¨ï¸ Instant capture: "${jobData.document}"(raw: "${data.Document}", window: "${(data.WindowTitle || '').substring(0, 80)}") - ${jobData.totalPages} pages, ${jobData.copies} copies, paper = ${jobData.paperSize || 'default'}, media = ${jobData.mediaType || 'default'}, color = ${jobData.colorMode || 'unknown'} `);
+                        console.log(`[SpoolerWatcher] Ã°Å¸â€“Â¨Ã¯Â¸Â Instant capture: "${jobData.document}"(raw: "${data.Document}", window: "${(data.WindowTitle || '').substring(0, 80)}") - ${jobData.totalPages} pages, ${jobData.copies} copies, paper = ${jobData.paperSize || 'default'}, media = ${jobData.mediaType || 'default'}, color = ${jobData.colorMode || 'unknown'} `);
 
                         if (typeof onJob === 'function') {
                             onJob(jobData);
@@ -3712,7 +3712,7 @@ try {
     \`$pn = '$($PrinterName -replace "'","''")'
     \`$outFile = '$($tempFile -replace "\\\\","/")'
     
-    Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`"\`$pn\`"" -ErrorAction Stop
+    \`$proc = Start-Process "rundll32.exe" -ArgumentList "printui.dll,PrintUIEntry /e /n \`\"\`$pn\`\"" -PassThru -ErrorAction Stop
     Start-Sleep -Seconds 5
     
     \`$title = "\`$pn Printing Preferences"
@@ -3722,15 +3722,22 @@ try {
     
     [W]::SetForegroundWindow(\`$hwnd) | Out-Null
     Start-Sleep -Seconds 1
+    
+    # Switch to Maintenance tab (same as working run_sheets.ps1)
     [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
     Start-Sleep -Seconds 2
     
-    \`$poiLabel = [IntPtr]::Zero
+    # Find Maintenance tab page
     \`$maintPage = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-    if (\`$maintPage -ne [IntPtr]::Zero) { \`$poiLabel = [W]::FindWindowEx(\`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
-    if (\`$poiLabel -eq [IntPtr]::Zero) { \`$poiLabel = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+    if (\`$maintPage -eq [IntPtr]::Zero) { \`$maintPage = \`$hwnd }
+    
+    # Find "Printer and Option Information" label
+    \`$poiLabel = [W]::FindWindowEx(\`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+    if (\`$poiLabel -eq [IntPtr]::Zero) {
+        \`$poiLabel = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+    }
     if (\`$poiLabel -eq [IntPtr]::Zero) {
         \`$childDlg = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', \`$null)
         while (\`$childDlg -ne [IntPtr]::Zero) {
@@ -3743,39 +3750,57 @@ try {
     
     \`$rect = New-Object W+RECT
     [W]::GetWindowRect(\`$poiLabel, [ref]\`$rect) | Out-Null
-    \`$iconX = [int](\`$rect.L - 25)
-    \`$textX = [int]((\`$rect.L + \`$rect.R) / 2)
-    \`$cy = [int]((\`$rect.T + \`$rect.B) / 2)
+    \`$bx = [int](\`$rect.L - 25)
+    \`$by = [int]((\`$rect.T + \`$rect.B) / 2)
+    
     \`$poiDlg = [IntPtr]::Zero
     for (\`$attempt = 1; \`$attempt -le 3; \`$attempt++) {
         [W]::SetForegroundWindow(\`$hwnd) | Out-Null
         Start-Sleep -Milliseconds 300
-        \`$clickX = if (\`$attempt -eq 1) { \`$iconX } else { \`$textX }
-        [W]::DoClick(\`$clickX, \`$cy)
+        [W]::DoClick(\`$bx, \`$by)
+        
         for (\`$w = 0; \`$w -lt 10; \`$w++) {
             Start-Sleep -Seconds 1
             \`$poiDlg = [W]::FindWindow('#32770', 'Printer and Option Information')
             if (\`$poiDlg -ne [IntPtr]::Zero) { break }
         }
         if (\`$poiDlg -ne [IntPtr]::Zero) { break }
+        
+        # Adjust click position on retry (same as working script)
+        if (\`$attempt -eq 1) {
+            \`$bx = [int]((\`$rect.L + \`$rect.R) / 2)
+            \`$by = [int]((\`$rect.T + \`$rect.B) / 2)
+        }
+        if (\`$attempt -eq 2) {
+            \`$bx = [int](\`$rect.L - 25)
+            [W]::DoClick(\`$bx, \`$by)
+            Start-Sleep -Milliseconds 200
+            [W]::DoClick(\`$bx, \`$by)
+        }
     }
     
     \`$ts = -1; \`$bs = -1
     if (\`$poiDlg -ne [IntPtr]::Zero) {
         Start-Sleep -Seconds 5
         \`$numbers = @()
+        
+        # Read Edit controls
         \`$editH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Edit', \`$null)
         while (\`$editH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$editH)
             if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
             \`$editH = [W]::FindWindowEx(\`$poiDlg, \`$editH, 'Edit', \`$null)
         }
+        
+        # Read Static controls (3+ digits)
         \`$staticH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Static', \`$null)
         while (\`$staticH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$staticH)
             if (\`$val -match '^\d{3,}\`$') { \`$numbers += [int]\`$val }
             \`$staticH = [W]::FindWindowEx(\`$poiDlg, \`$staticH, 'Static', \`$null)
         }
+        
+        # Read sub-dialog Edit controls
         \`$subDlg = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, '#32770', \`$null)
         while (\`$subDlg -ne [IntPtr]::Zero) {
             \`$subEdit = [W]::FindWindowEx(\`$subDlg, [IntPtr]::Zero, 'Edit', \`$null)
@@ -3786,20 +3811,26 @@ try {
             }
             \`$subDlg = [W]::FindWindowEx(\`$poiDlg, \`$subDlg, '#32770', \`$null)
         }
-        \`$numbers = \`$numbers | Sort-Object -Descending | Where-Object { \`$_ -gt 1 } | Select-Object -Unique
+        
+        \`$numbers = \`$numbers | Sort-Object -Descending | Select-Object -Unique
         if (\`$numbers.Count -ge 1) { \`$ts = \`$numbers[0] }
         if (\`$numbers.Count -ge 2) { \`$bs = \`$numbers[1] }
+        
+        # Close POI dialog
         \`$okBtn = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Button', 'OK')
         if (\`$okBtn -ne [IntPtr]::Zero) { [W]::SendMessage(\`$okBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Seconds 1
     }
+    
+    # Close Preferences
     \`$cancelBtn = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
     if (\`$cancelBtn -ne [IntPtr]::Zero) { [W]::SendMessage(\`$cancelBtn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }
+    Start-Sleep -Seconds 1
     "\`$ts|\`$bs" | Out-File \`$outFile
 } catch {
     '-1|-1' | Out-File '$($tempFile -replace "\\\\","/")'
 } finally {
-    Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { `$_.Kill() } catch {} }
+    Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { \`$_.Kill() } catch {} }
 }
 "@
 
@@ -4086,7 +4117,7 @@ try {
             if ($bestStmData.IsOnline) { $printerResult.IsOnline = $true }
         }
 
-        # Get Total Sheets from POI dialog — try ONE copy with full Epson driver
+        # Get Total Sheets from POI dialog â€” try ONE copy with full Epson driver
         $poiPrinter = $null
         foreach ($cp in $copies) {
             if ($cp.DriverName -notmatch 'V4 Class Driver|ESC/P-R' -and $cp.PortName -match '^USB') {

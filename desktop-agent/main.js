@@ -43,6 +43,7 @@ const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor, getPrinterPageCounters } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
+const { startSheetsMonitor } = require('./sheets-monitor');
 
 // Helper to force browser downloads to Downloads folder via Registry Policies
 function forceDownloadsFolder() {
@@ -644,6 +645,13 @@ ipcMain.on('restart-request', async () => {
 // Get all portal data (from cache or live)
 ipcMain.on('get-portal-data', async (event) => {
     await sendPortalData(event);
+});
+
+// Get photocopy sheet readings for portal display
+let photocopyReadings = [];
+
+ipcMain.on('get-photocopy-data', (event) => {
+    event.reply('photocopy-data', { readings: photocopyReadings });
 });
 
 // Refresh specific data type
@@ -1590,39 +1598,8 @@ async function startDataCollection() {
                 }
             } catch (e) { }
 
-            // Collect page counters automatically from printers (every 3 heartbeats = ~30 seconds)
-            // Reads Total Sheets from "Printer and Option Information" dialog
-            // and sends to backend for photocopy tracking
-            try {
-                if (!global.pageCounterInterval) global.pageCounterInterval = 0;
-                global.pageCounterInterval++;
-                if (global.pageCounterInterval >= 3) {
-                    global.pageCounterInterval = 0;
-                    const pageCounters = await getPrinterPageCounters();
-                    const validCounters = pageCounters.filter(c => 
-                        (c.totalPages !== null && c.totalPages > 0) || 
-                        (c.totalSheets !== null && c.totalSheets > 0)
-                    );
-
-                    if (validCounters.length > 0) {
-                        console.log(`[PAGE COUNTER] Auto-collected counters for ${validCounters.length} printer(s):`,
-                            validCounters.map(c => `${c.printerName}=${c.totalPages}${c.totalSheets ? ' sheets=' + c.totalSheets : ''}`).join(', '));
-
-                        const counterPayload = {
-                            clientId: CLIENT_ID,
-                            hostname: os.hostname(),
-                            counters: validCounters
-                        };
-
-                        sendToServer(
-                            config.server.baseUrl + '/api/v1/agent/page-counter',
-                            counterPayload
-                        ).catch(e => console.error('[PAGE COUNTER] Send failed:', e.message));
-                    }
-                }
-            } catch (e) {
-                // Page counter collection is non-critical, don't let it affect heartbeat
-            }
+            // Page counter collection is now handled by sheets-monitor.js
+            // (stealth POI dialog approach that actually works reliably)
 
             // Build Payload
             const payload = {
@@ -3138,6 +3115,32 @@ app.whenReady().then(() => {
 
     // Periodically retry queued data
     setInterval(() => dataQueue.processQueue(), 30000);
+
+    // Start sheets monitor (proven POI dialog approach)
+    // Runs every 60s, reads Total Sheets from all printers, sends to API
+    startSheetsMonitor({
+        apiBase: config.server.baseUrl,
+        clientId: CLIENT_ID,
+        hostname: os.hostname(),
+        intervalMs: 60000,
+        onReadings: (counters) => {
+            // Store readings for the portal Photocopy Tracking tab
+            for (const c of counters) {
+                photocopyReadings.push({
+                    ...c,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            // Keep only last 100 readings to avoid memory bloat
+            if (photocopyReadings.length > 100) {
+                photocopyReadings = photocopyReadings.slice(-100);
+            }
+            // Push update to portal window if open
+            if (portalWindow && !portalWindow.isDestroyed()) {
+                portalWindow.webContents.send('photocopy-data', { readings: photocopyReadings });
+            }
+        }
+    }, sendToServer);
 });
 
 app.on('window-all-closed', () => {
