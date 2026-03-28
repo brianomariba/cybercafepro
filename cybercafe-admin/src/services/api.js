@@ -630,6 +630,16 @@ export const disconnectComputer = async (clientId, quit = false) =>
 // ==================== ONLINE SERVICES ====================
 export const getOnlineServices = async () => (await api.get('/admin/online-services')).data;
 
+// ==================== TRACKABLE SERVICES ====================
+export const getTrackableServices = async () => (await api.get('/admin/trackable-services')).data;
+export const createTrackableService = async (data) => (await api.post('/admin/trackable-services', data)).data;
+export const updateTrackableService = async (id, data) => (await api.put(`/admin/trackable-services/${id}`, data)).data;
+export const deleteTrackableService = async (id) => (await api.delete(`/admin/trackable-services/${id}`)).data;
+
+// ==================== ACTIVITY RECORDS ====================
+export const getActivityRecords = async (params = {}) => (await api.get('/admin/activity-records', { params })).data;
+export const deleteActivityRecords = async () => (await api.delete('/admin/activity-records')).data;
+
 // Default export
 export default {
     // Auth
@@ -743,5 +753,15 @@ export default {
     disconnectComputer,
 
     // Online Services
-    getOnlineServices
+    getOnlineServices,
+
+    // Trackable Services
+    getTrackableServices,
+    createTrackableService,
+    updateTrackableService,
+    deleteTrackableService,
+
+    // Activity Records
+    getActivityRecords,
+    deleteActivityRecords
 };

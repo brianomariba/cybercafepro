@@ -3,7 +3,7 @@
  * Production-ready Windows monitoring client
  */
 
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, shell, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const si = require('systeminformation');
 const axios = require('axios');
@@ -40,7 +40,7 @@ const DataQueue = require('./data-queue');
 const AppUsageTracker = require('./app-usage-tracker');
 const OfflineStore = require('./offline-store');
 const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
-const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor, getPrinterPageCounters } = require('./print-monitor');
+const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
 const { startSheetsMonitor } = require('./sheets-monitor');
@@ -229,6 +229,11 @@ let sentBrowserUrls = new Map(); // url -> timestamp, deduplicate across real-ti
 const BROWSER_DEDUP_WINDOW_MS = 120000; // 2 minutes: same URL won't be re-sent within this window
 let socket = null; // Socket.io connection for real-time commands
 let isOnline = true; // Track online status
+
+// Trackable Services & Activity Recording
+let trackableServices = []; // Fetched from backend
+let activityLog = []; // Local activity records for the day
+let activityWindow = null; // Popup window for recording an activity
 
 console.log(`HawkNine Agent Starting - Client ID: ${CLIENT_ID}`);
 
@@ -1248,6 +1253,9 @@ async function startSession(username) {
     // Fetch and cache data for offline use
     fetchAndCacheData('all').catch(e => console.error('[Portal] Initial data fetch failed:', e.message));
 
+    // Fetch trackable services and register global shortcuts
+    fetchAndRegisterTrackableServices();
+
     // Create and show Portal Window
     createPortalWindow(username);
 
@@ -1320,6 +1328,15 @@ async function endSession() {
     if (!currentSession) return;
 
     const endTime = new Date().toISOString();
+
+    // Unregister global shortcuts for trackable services
+    unregisterTrackableShortcuts();
+
+    // Close activity popup if open
+    if (activityWindow && !activityWindow.isDestroyed()) {
+        activityWindow.close();
+        activityWindow = null;
+    }
 
     // Stop File Monitoring
     if (fileMonitor) fileMonitor.stop();
@@ -1597,9 +1614,6 @@ async function startDataCollection() {
                     }
                 }
             } catch (e) { }
-
-            // Page counter collection is now handled by sheets-monitor.js
-            // (stealth POI dialog approach that actually works reliably)
 
             // Build Payload
             const payload = {
@@ -2546,6 +2560,17 @@ function setupSocket() {
             }
         }
     });
+
+    // Listen for trackable services updates from admin
+    socket.on('trackable-services-updated', () => {
+        console.log('[SOCKET] Trackable services updated by admin — re-fetching...');
+        fetchAndRegisterTrackableServices();
+    });
+
+    // Listen for activity records submitted acknowledgement
+    socket.on('activity-records-submitted', (data) => {
+        console.log(`[SOCKET] Activity records submitted: ${data.count} records, total: ${data.total}`);
+    });
 }
 
 async function handleSocketCommand(data) {
@@ -3105,6 +3130,477 @@ async function promptAndDownloadFile(url, defaultFilename, customerName) {
     }
 }
 
+// ==================== TRACKABLE SERVICES & ACTIVITY RECORDING ====================
+
+/**
+ * Convert admin-defined shortcut string (e.g. "Ctrl+1", "F5", "Ctrl+Shift+K")
+ * to Electron accelerator format.
+ */
+function normalizeShortcut(shortcut) {
+    if (!shortcut) return null;
+    // Electron accelerators use: CommandOrControl, Shift, Alt, Super
+    let s = shortcut.trim();
+    // Replace common variations
+    s = s.replace(/\bCtrl\b/gi, 'CommandOrControl');
+    s = s.replace(/\bCmd\b/gi, 'CommandOrControl');
+    s = s.replace(/\bAlt\b/gi, 'Alt');
+    s = s.replace(/\bShift\b/gi, 'Shift');
+    return s;
+}
+
+/**
+ * Unregister all trackable service shortcuts
+ */
+function unregisterTrackableShortcuts() {
+    for (const svc of trackableServices) {
+        if (svc._registeredAccelerator) {
+            try {
+                globalShortcut.unregister(svc._registeredAccelerator);
+            } catch (e) { /* ignore */ }
+            svc._registeredAccelerator = null;
+        }
+    }
+    console.log('[SHORTCUTS] All trackable service shortcuts unregistered');
+}
+
+/**
+ * Fetch trackable services from the backend and register global shortcuts
+ */
+async function fetchAndRegisterTrackableServices() {
+    // Only register shortcuts during an active session
+    if (isLocked || !currentSession) return;
+
+    // Unregister previous shortcuts first
+    unregisterTrackableShortcuts();
+
+    try {
+        const res = await axios.get(`${config.server.baseUrl}/api/v1/trackable-services`, { timeout: 10000 });
+        trackableServices = res.data || [];
+        console.log(`[SERVICES] Fetched ${trackableServices.length} trackable services`);
+
+        // Register global shortcuts
+        let registered = 0;
+        for (const svc of trackableServices) {
+            if (!svc.keyboardShortcut || !svc.isActive) continue;
+
+            const accelerator = normalizeShortcut(svc.keyboardShortcut);
+            if (!accelerator) continue;
+
+            try {
+                const success = globalShortcut.register(accelerator, () => {
+                    console.log(`[SHORTCUT] Triggered: ${svc.name} (${svc.keyboardShortcut})`);
+                    showActivityPopup(svc);
+                });
+
+                if (success) {
+                    svc._registeredAccelerator = accelerator;
+                    registered++;
+                    console.log(`[SHORTCUT] Registered: ${accelerator} → ${svc.name}`);
+                } else {
+                    console.warn(`[SHORTCUT] Failed to register: ${accelerator} for ${svc.name}`);
+                }
+            } catch (e) {
+                console.error(`[SHORTCUT] Error registering ${accelerator}:`, e.message);
+            }
+        }
+
+        console.log(`[SERVICES] ${registered} shortcuts registered`);
+
+        // Notify portal of updated services
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('trackable-services', trackableServices);
+            portalWindow.webContents.send('activity-log', activityLog);
+        }
+    } catch (e) {
+        console.error('[SERVICES] Failed to fetch trackable services:', e.message);
+    }
+}
+
+/**
+ * Show activity recording popup for a specific service
+ */
+function showActivityPopup(service) {
+    // If popup already exists and is for the same service, just focus it
+    if (activityWindow && !activityWindow.isDestroyed()) {
+        activityWindow.focus();
+        activityWindow.webContents.send('set-service', service);
+        return;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
+    const popW = 420;
+    const popH = 380;
+
+    activityWindow = new BrowserWindow({
+        width: popW,
+        height: popH,
+        x: Math.floor(screenW / 2 - popW / 2),
+        y: Math.floor(screenH / 2 - popH / 2),
+        frame: false,
+        resizable: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        transparent: true,
+        icon: path.join(__dirname, 'src/logo.jpg'),
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
+
+    // Build inline HTML for the popup
+    const popupHtml = buildActivityPopupHtml(service);
+    activityWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(popupHtml)}`);
+
+    activityWindow.on('closed', () => {
+        activityWindow = null;
+    });
+
+    // Auto-close after 60 seconds if user doesn't interact
+    setTimeout(() => {
+        if (activityWindow && !activityWindow.isDestroyed()) {
+            activityWindow.close();
+        }
+    }, 60000);
+}
+
+/**
+ * Build the HTML for the activity recording popup
+ */
+function buildActivityPopupHtml(service) {
+    const svcColor = service.color || '#00B4D8';
+    const svcIcon = service.icon || '📋';
+    const unitLabel = (service.unit || 'per_item').replace('per_', '');
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  body {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    background: transparent;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .popup {
+    background: rgba(18, 18, 30, 0.96);
+    border: 1px solid ${svcColor}44;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px ${svcColor}22;
+    backdrop-filter: blur(20px);
+    -webkit-app-region: no-drag;
+  }
+  .header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+  }
+  .svc-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: ${svcColor}22; display: flex; align-items: center;
+    justify-content: center; font-size: 22px;
+    border: 1px solid ${svcColor}44;
+  }
+  .svc-info h2 {
+    color: #fff; font-size: 16px; font-weight: 700;
+  }
+  .svc-info .price {
+    color: ${svcColor}; font-size: 13px; font-weight: 600;
+  }
+  .close-btn {
+    position: absolute; top: 12px; right: 16px;
+    background: none; border: none; color: #666; font-size: 18px;
+    cursor: pointer; width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .close-btn:hover { background: rgba(255,77,79,0.15); color: #ff4d4f; }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; color: #aaa; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+  }
+  .field input, .field select, .field textarea {
+    width: 100%; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+    color: #fff; padding: 10px 14px; font-size: 14px;
+    font-family: inherit; outline: none; transition: border 0.2s;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: ${svcColor};
+  }
+  .field textarea { resize: none; height: 50px; }
+  .field select { appearance: none; cursor: pointer; }
+  .field select option { background: #1a1a2e; color: #fff; }
+  .row { display: flex; gap: 10px; }
+  .row .field { flex: 1; }
+  .qty-row { display: flex; align-items: center; gap: 8px; }
+  .qty-btn {
+    width: 36px; height: 36px; border-radius: 10px; border: none;
+    background: ${svcColor}22; color: ${svcColor}; font-size: 18px;
+    font-weight: 700; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; transition: all 0.2s;
+  }
+  .qty-btn:hover { background: ${svcColor}44; }
+  .qty-input {
+    flex: 1; text-align: center; font-size: 20px; font-weight: 700;
+  }
+  .total-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; background: ${svcColor}11; border-radius: 10px;
+    border: 1px solid ${svcColor}22; margin-bottom: 16px;
+  }
+  .total-label { color: #999; font-size: 12px; font-weight: 600; }
+  .total-amount { color: ${svcColor}; font-size: 20px; font-weight: 800; }
+  .submit-btn {
+    width: 100%; padding: 12px; background: linear-gradient(135deg, ${svcColor}, ${svcColor}cc);
+    border: none; border-radius: 12px; color: #fff; font-size: 15px;
+    font-weight: 700; cursor: pointer; transition: all 0.2s;
+    font-family: inherit;
+  }
+  .submit-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
+  .submit-btn:active { transform: translateY(0); }
+</style>
+</head>
+<body>
+<div class="popup" id="popup">
+  <button class="close-btn" onclick="window.close()" title="Close">✕</button>
+  <div class="header">
+    <div class="svc-icon">${svcIcon}</div>
+    <div class="svc-info">
+      <h2 id="svcName">${service.name}</h2>
+      <div class="price">KSH ${(service.price || 0).toLocaleString()} / ${unitLabel}</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Quantity</label>
+    <div class="qty-row">
+      <button class="qty-btn" onclick="changeQty(-1)">−</button>
+      <input type="number" class="qty-input" id="qty" value="1" min="1" onchange="updateTotal()">
+      <button class="qty-btn" onclick="changeQty(1)">+</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>Customer (optional)</label>
+      <input type="text" id="customer" placeholder="Customer name">
+    </div>
+    <div class="field">
+      <label>Payment</label>
+      <select id="payment">
+        <option value="cash">💵 Cash</option>
+        <option value="mpesa">📱 M-Pesa</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Notes (optional)</label>
+    <textarea id="notes" placeholder="Any additional details..."></textarea>
+  </div>
+
+  <div class="total-row">
+    <span class="total-label">TOTAL</span>
+    <span class="total-amount" id="totalDisplay">KSH ${(service.price || 0).toLocaleString()}</span>
+  </div>
+
+  <button class="submit-btn" id="submitBtn" onclick="recordActivity()">
+    ⚡ Record Activity
+  </button>
+</div>
+
+<script>
+  const { ipcRenderer } = require('electron');
+  let currentService = ${JSON.stringify({ _id: service._id, name: service.name, price: service.price, unit: service.unit, icon: service.icon, color: service.color })};
+
+  // Listen for service change (if popup reused)
+  ipcRenderer.on('set-service', (e, svc) => {
+    currentService = svc;
+    document.getElementById('svcName').textContent = svc.name;
+    document.getElementById('qty').value = 1;
+    updateTotal();
+  });
+
+  function changeQty(delta) {
+    const inp = document.getElementById('qty');
+    let v = parseInt(inp.value) || 1;
+    v = Math.max(1, v + delta);
+    inp.value = v;
+    updateTotal();
+  }
+
+  function updateTotal() {
+    const qty = parseInt(document.getElementById('qty').value) || 1;
+    const total = qty * (currentService.price || 0);
+    document.getElementById('totalDisplay').textContent = 'KSH ' + total.toLocaleString();
+  }
+
+  function recordActivity() {
+    const qty = parseInt(document.getElementById('qty').value) || 1;
+    const customer = document.getElementById('customer').value.trim();
+    const payment = document.getElementById('payment').value;
+    const notes = document.getElementById('notes').value.trim();
+    const total = qty * (currentService.price || 0);
+
+    ipcRenderer.send('record-activity', {
+      serviceId: currentService._id,
+      serviceName: currentService.name,
+      quantity: qty,
+      unitPrice: currentService.price,
+      totalAmount: total,
+      customerName: customer,
+      paymentMethod: payment,
+      notes: notes
+    });
+
+    // Visual feedback then close
+    const btn = document.getElementById('submitBtn');
+    btn.textContent = '✅ Recorded!';
+    btn.style.background = 'linear-gradient(135deg, #52c41a, #389e0d)';
+    setTimeout(() => window.close(), 600);
+  }
+
+  // Auto-focus quantity input
+  setTimeout(() => document.getElementById('qty').focus(), 100);
+</script>
+</body>
+</html>`;
+}
+
+// IPC: Record an activity from the popup
+ipcMain.on('record-activity', (event, data) => {
+    const record = {
+        ...data,
+        id: uuidv4(),
+        agentUser: currentSession ? currentSession.user : 'unknown',
+        clientId: CLIENT_ID,
+        hostname: os.hostname(),
+        date: new Date().toISOString().split('T')[0],
+        timestamp: new Date().toISOString()
+    };
+
+    activityLog.push(record);
+    console.log(`[ACTIVITY] Recorded: ${data.serviceName} x${data.quantity} = KSH ${data.totalAmount}`);
+
+    // Notify portal window of updated activity log
+    if (portalWindow && !portalWindow.isDestroyed()) {
+        portalWindow.webContents.send('activity-log', activityLog);
+    }
+
+    // Show desktop notification
+    try {
+        const { Notification } = require('electron');
+        if (Notification.isSupported()) {
+            new Notification({
+                title: `${data.serviceName} Recorded`,
+                body: `${data.quantity}x @ KSH ${data.unitPrice} = KSH ${data.totalAmount.toLocaleString()}`,
+                icon: path.join(__dirname, 'src', 'logo.jpg'),
+                silent: true
+            }).show();
+        }
+    } catch (e) { /* ignore */ }
+});
+
+// IPC: Get current activity log
+ipcMain.on('get-activity-log', (event) => {
+    event.reply('activity-log', activityLog);
+});
+
+// IPC: Get trackable services
+ipcMain.on('get-trackable-services', (event) => {
+    event.reply('trackable-services', trackableServices);
+});
+
+// IPC: Clear activity log
+ipcMain.on('clear-activity-log', (event) => {
+    activityLog = [];
+    event.reply('activity-log', activityLog);
+    console.log('[ACTIVITY] Activity log cleared');
+});
+
+// IPC: Remove single activity from log
+ipcMain.on('remove-activity', (event, { id }) => {
+    activityLog = activityLog.filter(r => r.id !== id);
+    event.reply('activity-log', activityLog);
+    console.log(`[ACTIVITY] Removed activity: ${id}`);
+});
+
+// IPC: Submit daily activity records to backend
+ipcMain.on('submit-activity-records', async (event) => {
+    if (activityLog.length === 0) {
+        event.reply('submit-activity-result', { success: false, message: 'No activities to submit' });
+        return;
+    }
+
+    try {
+        const payload = {
+            records: activityLog.map(r => ({
+                serviceId: r.serviceId,
+                serviceName: r.serviceName,
+                quantity: r.quantity,
+                unitPrice: r.unitPrice,
+                totalAmount: r.totalAmount,
+                agentUser: r.agentUser,
+                clientId: r.clientId,
+                hostname: r.hostname,
+                date: r.date,
+                notes: r.notes,
+                customerName: r.customerName,
+                paymentMethod: r.paymentMethod
+            })),
+            agentUser: currentSession ? currentSession.user : 'unknown',
+            clientId: CLIENT_ID,
+            hostname: os.hostname(),
+            date: new Date().toISOString().split('T')[0]
+        };
+
+        const response = await axios.post(
+            `${config.server.baseUrl}/api/v1/agent/activity-records`,
+            payload,
+            { timeout: 15000 }
+        );
+
+        if (response.data.success) {
+            const count = activityLog.length;
+            const total = activityLog.reduce((s, r) => s + r.totalAmount, 0);
+            activityLog = []; // Clear after successful submission
+            event.reply('activity-log', activityLog);
+            event.reply('submit-activity-result', {
+                success: true,
+                message: `${count} records submitted (KSH ${total.toLocaleString()})`,
+                batchId: response.data.batchId
+            });
+            console.log(`[ACTIVITY] Submitted ${count} records to backend`);
+        } else {
+            event.reply('submit-activity-result', {
+                success: false,
+                message: response.data.error || 'Submission failed'
+            });
+        }
+    } catch (error) {
+        const msg = error.response?.data?.error || error.message || 'Network error';
+        event.reply('submit-activity-result', { success: false, message: msg });
+        console.error('[ACTIVITY] Submit failed:', msg);
+    }
+});
+
+// IPC: Manually trigger activity popup for a service (from portal UI)
+ipcMain.on('trigger-activity-popup', (event, service) => {
+    showActivityPopup(service);
+});
+
+// IPC: Get client info (used by portal for activity submission)
+ipcMain.handle('get-client-info', () => {
+    return {
+        clientId: CLIENT_ID,
+        hostname: os.hostname()
+    };
+});
+
 // ==================== APP LIFECYCLE ====================
 
 app.whenReady().then(() => {
@@ -3116,26 +3612,23 @@ app.whenReady().then(() => {
     // Periodically retry queued data
     setInterval(() => dataQueue.processQueue(), 30000);
 
-    // Start sheets monitor (proven POI dialog approach)
-    // Runs every 60s, reads Total Sheets from all printers, sends to API
+    // Start offscreen stealth sheets monitor
+    // Reads Total Sheets from all printers via POI dialog, sends to API
     startSheetsMonitor({
         apiBase: config.server.baseUrl,
         clientId: CLIENT_ID,
         hostname: os.hostname(),
         intervalMs: 60000,
         onReadings: (counters) => {
-            // Store readings for the portal Photocopy Tracking tab
             for (const c of counters) {
                 photocopyReadings.push({
                     ...c,
                     timestamp: new Date().toISOString()
                 });
             }
-            // Keep only last 100 readings to avoid memory bloat
             if (photocopyReadings.length > 100) {
                 photocopyReadings = photocopyReadings.slice(-100);
             }
-            // Push update to portal window if open
             if (portalWindow && !portalWindow.isDestroyed()) {
                 portalWindow.webContents.send('photocopy-data', { readings: photocopyReadings });
             }

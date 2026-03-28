@@ -1,16 +1,15 @@
 /**
- * Sheets Monitor - STEALTH Total Sheets reader for all connected printers.
+ * Sheets Monitor - Offscreen Stealth POI Dialog
  * 
- * TRUE STEALTH: Windows are moved off-screen immediately after creation.
- * All interactions use Win32 SendMessage (message-based) instead of real
- * mouse clicks. This means:
- *   - No visible windows on screen
- *   - No cursor movement
- *   - No keyboard stealing
- *   - Data still loads correctly (EPSON driver communicates via USB/network)
+ * Runs a PowerShell script that:
+ * 1. Opens printer preferences dialog (rundll32 printui.dll)
+ * 2. Moves the window to (-8000,-8000) immediately (offscreen)
+ * 3. Navigates to Maintenance tab via Win32 TCM_SETCURSEL messages
+ * 4. Clicks "Printer and Option Information" via BM_CLICK / SendMessage
+ * 5. Reads the "Total Sheets" counter from the POI dialog
+ * 6. Closes all dialogs via BM_CLICK on OK/Cancel buttons
  * 
- * Key technique: SendMessage(WM_LBUTTONDOWN/UP) with client-relative coordinates
- * works on off-screen windows, unlike SetCursorPos which requires valid screen coords.
+ * No cursor movement. No focus stealing. Completely invisible to the user.
  */
 
 const { execFile } = require('child_process');
@@ -22,59 +21,69 @@ let lastSheets = {};
 let isRunning = false;
 let intervalHandle = null;
 
+/**
+ * Build the PowerShell script that performs offscreen stealth POI reading.
+ * The script returns JSON: [{ printerName, totalPages, totalSheets, isOnline, source }]
+ */
 function buildScript() {
     return `
-# === Stealth Sheets Monitor (message-based, no visible windows) ===
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-Add-Type @"
+Add-Type -ErrorAction SilentlyContinue @"
 using System; using System.Runtime.InteropServices; using System.Threading; using System.Text;
-public class SW {
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, int e);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+public class W6 {
     [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int X, int Y, int W, int H, bool repaint);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
     [DllImport("user32.dll", CharSet=CharSet.Auto)]
     public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string text);
     [DllImport("user32.dll", CharSet=CharSet.Auto, EntryPoint="SendMessageW")]
     public static extern int SendMessageText(IntPtr h, uint m, int w, StringBuilder l);
     [DllImport("user32.dll")]
-    public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
-    [DllImport("user32.dll")]
-    public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    public static extern int SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int X, int Y, int W, int H, bool repaint);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
+
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
-    public const int SW_HIDE = 0;
-    public const int SW_MINIMIZE = 6;
-    public const int SW_SHOWMINNOACTIVE = 7;
-    public const uint WM_LBUTTONDOWN = 0x0201;
-    public const uint WM_LBUTTONUP = 0x0202;
-    public const uint BM_CLICK = 0x00F5;
-    public const uint WM_KEYDOWN = 0x0100;
-    public const uint WM_KEYUP = 0x0101;
-    public const int MK_LBUTTON = 0x0001;
+    [StructLayout(LayoutKind.Sequential)] public struct NMHDR { public IntPtr hwndFrom; public IntPtr idFrom; public int code; }
 
-    // Click via SendMessage (works on hidden/off-screen windows!)
-    // x, y are in SCREEN coordinates — we convert to client coords
-    public static void MsgClick(IntPtr parent, int screenX, int screenY) {
-        POINT pt;
-        pt.X = screenX; pt.Y = screenY;
-        ScreenToClient(parent, ref pt);
-        IntPtr lParam = (IntPtr)((pt.Y << 16) | (pt.X & 0xFFFF));
-        SendMessage(parent, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam);
-        Thread.Sleep(100);
-        SendMessage(parent, WM_LBUTTONUP, IntPtr.Zero, lParam);
+    public const uint BM_CLICK  = 0x00F5;
+    public const uint WM_CLOSE  = 0x0010;
+    public const uint WM_NOTIFY = 0x004E;
+    public const uint WM_LBUTTONDOWN = 0x0201;
+    public const uint WM_LBUTTONUP   = 0x0202;
+    public const uint TCM_SETCURSEL    = 0x130C;
+    public const uint TCM_GETITEMCOUNT = 0x1304;
+
+    public static void MoveOffscreen(IntPtr hwnd) {
+        RECT r; GetWindowRect(hwnd, out r);
+        MoveWindow(hwnd, -8000, -8000, r.R - r.L, r.B - r.T, false);
+    }
+
+    public static void ClickAt(IntPtr hwnd, int screenX, int screenY) {
+        POINT pt; pt.X = screenX; pt.Y = screenY;
+        ScreenToClient(hwnd, ref pt);
+        int lp = (pt.X & 0xFFFF) | ((pt.Y & 0xFFFF) << 16);
+        SendMessage(hwnd, WM_LBUTTONDOWN, (IntPtr)1, (IntPtr)lp);
+        Thread.Sleep(150);
+        SendMessage(hwnd, WM_LBUTTONUP, IntPtr.Zero, (IntPtr)lp);
         Thread.Sleep(300);
     }
 
-    // Real mouse click (fallback)
-    public static void DoClick(int x, int y) {
-        SetCursorPos(x, y); Thread.Sleep(200);
-        mouse_event(0x0002, 0, 0, 0, 0); Thread.Sleep(100);
-        mouse_event(0x0004, 0, 0, 0, 0); Thread.Sleep(300);
+    public static void SelectTab(IntPtr parentDlg, IntPtr tabCtrl, int tabIndex) {
+        SendMessage(tabCtrl, TCM_SETCURSEL, (IntPtr)tabIndex, IntPtr.Zero);
+        IntPtr pNm = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(NMHDR)));
+        try {
+            NMHDR nm = new NMHDR();
+            nm.hwndFrom = tabCtrl; nm.idFrom = (IntPtr)GetDlgCtrlID(tabCtrl);
+            nm.code = -552; // TCN_SELCHANGING
+            Marshal.StructureToPtr(nm, pNm, false);
+            SendMessage(parentDlg, WM_NOTIFY, nm.idFrom, pNm);
+            nm.code = -551; // TCN_SELCHANGE
+            Marshal.StructureToPtr(nm, pNm, false);
+            SendMessage(parentDlg, WM_NOTIFY, nm.idFrom, pNm);
+        } finally { Marshal.FreeHGlobal(pNm); }
     }
 
     public static string GetText(IntPtr h) {
@@ -82,287 +91,233 @@ public class SW {
         SendMessageText(h, 0x000D, 256, sb);
         return sb.ToString();
     }
-
-    public static void HideOffScreen(IntPtr h) {
-        if (h == IntPtr.Zero) return;
-        MoveWindow(h, -4000, -4000, 800, 600, false);
-    }
-
-    // Send Ctrl+Tab via PostMessage
-    public static void SendCtrlTab(IntPtr h) {
-        PostMessage(h, WM_KEYDOWN, (IntPtr)0x11, IntPtr.Zero); // VK_CONTROL down
-        Thread.Sleep(50);
-        PostMessage(h, WM_KEYDOWN, (IntPtr)0x09, IntPtr.Zero); // VK_TAB down
-        Thread.Sleep(50);
-        PostMessage(h, WM_KEYUP, (IntPtr)0x09, IntPtr.Zero);   // VK_TAB up
-        Thread.Sleep(50);
-        PostMessage(h, WM_KEYUP, (IntPtr)0x11, IntPtr.Zero);   // VK_CONTROL up
-        Thread.Sleep(300);
-    }
 }
 "@
 
 function Get-ConnectedPrinters {
-    $excluded = 'Microsoft|OneNote|PDF|XPS|Fax|Send To|Snagit|Adobe|Remote'
-    $list = @()
-    try { $list = @(Get-Printer | Where-Object { $_.Name -notmatch $excluded }) } catch {}
-    if ($list.Count -eq 0) {
+    \\$excluded = 'Microsoft|OneNote|PDF|XPS|Fax|Send To|Snagit|Adobe|Remote'
+    \\$list = @()
+    try { \\$list = @(Get-Printer | Where-Object { \\$_.Name -notmatch \\$excluded }) } catch {}
+    if (\\$list.Count -eq 0) {
         try {
-            $list = @(Get-WmiObject Win32_Printer |
-                Where-Object { $_.Name -notmatch $excluded } |
-                Select-Object @{N='Name';E={$_.Name}})
+            \\$list = @(Get-WmiObject Win32_Printer |
+                Where-Object { \\$_.Name -notmatch \\$excluded } |
+                Select-Object @{N='Name';E={\\$_.Name}})
         } catch {}
     }
-    return $list
+    return \\$list
 }
 
 function Read-TotalSheets {
-    param([string]$printerName)
+    param([string]\\$printerName)
 
-    $proc = Start-Process rundll32.exe -ArgumentList "printui.dll,PrintUIEntry /e /n \`"$printerName\`"" -PassThru -WindowStyle Hidden
-    Start-Sleep -Seconds 4
+    \\$proc = Start-Process rundll32.exe -ArgumentList "printui.dll,PrintUIEntry /e /n \`"\\$printerName\`"" -PassThru
 
-    $title = "$printerName Printing Preferences"
-    $hwnd = [SW]::FindWindow('#32770', $title)
-    if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [SW]::FindWindow($null, $title) }
-    if ($hwnd -eq [IntPtr]::Zero) { return @{ TotalSheets = -1; BorderlessSheets = -1 } }
-
-    # === STEALTH: Move window off-screen immediately ===
-    [SW]::HideOffScreen($hwnd)
-
-    # Try message-based tab switching first (Ctrl+Tab x2 to get to Maintenance)
-    [SW]::SetForegroundWindow($hwnd) | Out-Null
-    Start-Sleep -Milliseconds 300
-    [SW]::SendCtrlTab($hwnd)
-    Start-Sleep -Milliseconds 500
-    [SW]::SendCtrlTab($hwnd)
-    Start-Sleep -Seconds 2
-
-    # If message-based tabs didn't work, try SendKeys as fallback
-    $maintPage = [SW]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-    if ($maintPage -eq [IntPtr]::Zero) {
-        # Fallback: bring briefly to foreground for SendKeys
-        [SW]::MoveWindow($hwnd, 0, 0, 800, 600, $false) | Out-Null
-        [SW]::SetForegroundWindow($hwnd) | Out-Null
-        Start-Sleep -Milliseconds 200
-        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
-        Start-Sleep -Milliseconds 300
-        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
-        Start-Sleep -Seconds 1
-        [SW]::HideOffScreen($hwnd)
-        Start-Sleep -Seconds 1
-        $maintPage = [SW]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-    }
-
-    if ($maintPage -eq [IntPtr]::Zero) { $maintPage = $hwnd }
-
-    # Find "Printer and Option Information" label
-    $poiLabel = [SW]::FindWindowEx($maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-    if ($poiLabel -eq [IntPtr]::Zero) {
-        $poiLabel = [SW]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-    }
-    if ($poiLabel -eq [IntPtr]::Zero) {
-        $childDlg = [SW]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', $null)
-        while ($childDlg -ne [IntPtr]::Zero) {
-            $poiLabel = [SW]::FindWindowEx($childDlg, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-            if ($poiLabel -ne [IntPtr]::Zero) { break }
-            $childDlg = [SW]::FindWindowEx($hwnd, $childDlg, '#32770', $null)
+    \\$hwnd = [IntPtr]::Zero
+    for (\\$i = 0; \\$i -lt 80; \\$i++) {
+        Start-Sleep -Milliseconds 100
+        \\$hwnd = [W6]::FindWindow('#32770', "\\$printerName Printing Preferences")
+        if (\\$hwnd -eq [IntPtr]::Zero) { \\$hwnd = [W6]::FindWindow(\\$null, "\\$printerName Printing Preferences") }
+        if (\\$hwnd -ne [IntPtr]::Zero) {
+            [void][W6]::MoveOffscreen(\\$hwnd)
+            break
         }
     }
+    if (\\$hwnd -eq [IntPtr]::Zero) { return -1 }
 
-    if ($poiLabel -eq [IntPtr]::Zero) {
-        Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
-        return @{ TotalSheets = -1; BorderlessSheets = -1 }
-    }
-
-    # Get POI label's screen coordinates (off-screen since window is moved)
-    $rect = New-Object SW+RECT
-    [SW]::GetWindowRect($poiLabel, [ref]$rect) | Out-Null
-
-    # Click target: icon to the left of the label, or the label text itself
-    $iconX = [int]($rect.L - 25)
-    $labelCenterX = [int](($rect.L + $rect.R) / 2)
-    $cy = [int](($rect.T + $rect.B) / 2)
-
-    # Determine the correct parent to send the click message to
-    $clickTarget = $maintPage
-    if ($clickTarget -eq $hwnd) { $clickTarget = $hwnd }
-
-    $poiDlg = [IntPtr]::Zero
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        $clickX = if ($attempt -eq 1) { $iconX } elseif ($attempt -eq 2) { $labelCenterX } else { $iconX }
-
-        # Use message-based click (works off-screen!)
-        [SW]::MsgClick($clickTarget, $clickX, $cy)
-
-        # Also try clicking on parent window
-        if ($attempt -ge 2) {
-            [SW]::MsgClick($hwnd, $clickX, $cy)
-        }
-
-        for ($w = 0; $w -lt 10; $w++) {
-            Start-Sleep -Seconds 1
-            $poiDlg = [SW]::FindWindow('#32770', 'Printer and Option Information')
-            if ($poiDlg -ne [IntPtr]::Zero) {
-                # STEALTH: Hide POI dialog off-screen immediately
-                [SW]::HideOffScreen($poiDlg)
-                break
-            }
-        }
-        if ($poiDlg -ne [IntPtr]::Zero) { break }
-
-        # If message-based click failed, try real click as last resort
-        if ($attempt -eq 3) {
-            # Briefly move window on-screen for real click
-            [SW]::MoveWindow($hwnd, -10, -10, 800, 700, $false) | Out-Null
-            Start-Sleep -Milliseconds 300
-            $rect2 = New-Object SW+RECT
-            [SW]::GetWindowRect($poiLabel, [ref]$rect2) | Out-Null
-            $rx = [int]($rect2.L - 25)
-            $ry = [int](($rect2.T + $rect2.B) / 2)
-            if ($rx -gt 0 -and $ry -gt 0) {
-                [SW]::DoClick($rx, $ry)
-            }
-            Start-Sleep -Milliseconds 500
-            # Alternative: click the center of the label
-            $rxC = [int](($rect2.L + $rect2.R) / 2)
-            if ($rxC -gt 0) { [SW]::DoClick($rxC, $ry) }
-
-            for ($w2 = 0; $w2 -lt 8; $w2++) {
-                Start-Sleep -Seconds 1
-                $poiDlg = [SW]::FindWindow('#32770', 'Printer and Option Information')
-                if ($poiDlg -ne [IntPtr]::Zero) { break }
-            }
-            # Hide everything again
-            [SW]::HideOffScreen($hwnd)
-            if ($poiDlg -ne [IntPtr]::Zero) { [SW]::HideOffScreen($poiDlg) }
-        }
-    }
-
-    if ($poiDlg -eq [IntPtr]::Zero) {
-        Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
-        return @{ TotalSheets = -1; BorderlessSheets = -1 }
-    }
-
-    # Wait for EPSON driver to load data from printer
-    Start-Sleep -Seconds 5
-
-    # === TARGETED VALUE EXTRACTION (Total Sheets label → adjacent Edit) ===
-    $totalSheetsVal = -1
-    $borderlessSheetsVal = -1
-    $totalSheetsLabel = [IntPtr]::Zero
-    $borderlessLabel = [IntPtr]::Zero
-
-    $staticH = [SW]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
-    while ($staticH -ne [IntPtr]::Zero) {
-        $labelText = [SW]::GetText($staticH)
-        if ($labelText -eq 'Total Sheets') { $totalSheetsLabel = $staticH }
-        if ($labelText -match 'Borderless') { $borderlessLabel = $staticH }
-        $staticH = [SW]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
-    }
-
-    $subDlg = [SW]::FindWindowEx($poiDlg, [IntPtr]::Zero, '#32770', $null)
-    while ($subDlg -ne [IntPtr]::Zero) {
-        $ss = [SW]::FindWindowEx($subDlg, [IntPtr]::Zero, 'Static', $null)
-        while ($ss -ne [IntPtr]::Zero) {
-            $lt = [SW]::GetText($ss)
-            if ($lt -eq 'Total Sheets') { $totalSheetsLabel = $ss }
-            if ($lt -match 'Borderless') { $borderlessLabel = $ss }
-            $ss = [SW]::FindWindowEx($subDlg, $ss, 'Static', $null)
-        }
-        $subDlg = [SW]::FindWindowEx($poiDlg, $subDlg, '#32770', $null)
-    }
-
-    if ($totalSheetsLabel -ne [IntPtr]::Zero) {
-        $editAfter = [SW]::FindWindowEx($poiDlg, $totalSheetsLabel, 'Edit', $null)
-        if ($editAfter -ne [IntPtr]::Zero) {
-            $val = [SW]::GetText($editAfter)
-            if ($val -match '^\\d+$' -and [int]$val -gt 0) { $totalSheetsVal = [int]$val }
-        }
-    }
-
-    if ($borderlessLabel -ne [IntPtr]::Zero) {
-        $editAfter = [SW]::FindWindowEx($poiDlg, $borderlessLabel, 'Edit', $null)
-        if ($editAfter -ne [IntPtr]::Zero) {
-            $val = [SW]::GetText($editAfter)
-            if ($val -match '^\\d+$' -and [int]$val -gt 0) { $borderlessSheetsVal = [int]$val }
-        }
-    }
-
-    # Fallback: scan all Edit controls but only accept values >= 100
-    if ($totalSheetsVal -le 0) {
-        $numbers = @()
-        $editH = [SW]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
-        while ($editH -ne [IntPtr]::Zero) {
-            $val = [SW]::GetText($editH)
-            if ($val -match '^\\d+$' -and [int]$val -ge 100) { $numbers += [int]$val }
-            $editH = [SW]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
-        }
-        $numbers = $numbers | Sort-Object -Descending | Select-Object -Unique
-        if ($numbers.Count -ge 1) { $totalSheetsVal = $numbers[0] }
-        if ($numbers.Count -ge 2) { $borderlessSheetsVal = $numbers[1] }
-    }
-
-    # Close POI dialog via SendMessage BM_CLICK (works off-screen)
-    $okBtn = [SW]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Button', 'OK')
-    if ($okBtn -ne [IntPtr]::Zero) {
-        [SW]::SendMessage($okBtn, [SW]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-    }
     Start-Sleep -Seconds 1
 
-    $cancelBtn = [SW]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
-    if ($cancelBtn -ne [IntPtr]::Zero) {
-        [SW]::SendMessage($cancelBtn, [SW]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-    }
-    Start-Sleep -Seconds 1
-    Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
-
-    return @{ TotalSheets = $totalSheetsVal; BorderlessSheets = $borderlessSheetsVal }
-}
-
-# === MAIN ===
-$printers = @(Get-ConnectedPrinters)
-$results = @()
-
-foreach ($printer in $printers) {
-    $name = $printer.Name
-    $reading = Read-TotalSheets -printerName $name
-
-    $isOnline = $false
-    try {
-        $wmi = Get-WmiObject Win32_Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $name }
-        if ($wmi -and -not $wmi.WorkOffline) { $isOnline = $true }
-    } catch {}
-
-    $ts = $reading.TotalSheets
-    $bs = $reading.BorderlessSheets
-
-    if ($ts -gt 0) {
-        $results += @{
-            printerName      = $name
-            totalPages       = $ts
-            totalSheets      = $ts
-            borderlessSheets = if ($bs -gt 0) { $bs } else { $null }
-            isOnline         = $isOnline
-            source           = "poi_dialog"
+    # Navigate to Maintenance tab
+    \\$tabCtrl = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, "SysTabControl32", \\$null)
+    if (\\$tabCtrl -ne [IntPtr]::Zero) {
+        \\$tabCount = [int][W6]::SendMessage(\\$tabCtrl, [W6]::TCM_GETITEMCOUNT, [IntPtr]::Zero, [IntPtr]::Zero)
+        if (\\$tabCount -gt 0) {
+            [void][W6]::SelectTab(\\$hwnd, \\$tabCtrl, \\$tabCount - 1)
         }
     } else {
-        $results += @{
-            printerName      = $name
-            totalPages       = $null
-            totalSheets      = $null
-            borderlessSheets = $null
-            isOnline         = $isOnline
-            source           = "poi_dialog_no_data"
-            noData           = $true
+        [void][W6]::SetForegroundWindow(\\$hwnd)
+        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+    }
+
+    Start-Sleep -Seconds 2
+
+    \\$maintPage = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
+    if (\\$maintPage -eq [IntPtr]::Zero) { \\$maintPage = \\$hwnd }
+
+    # Find POI - try Button first, then Static label
+    \\$poiBtn = [IntPtr]::Zero
+    \\$poiLabel = [IntPtr]::Zero
+
+    \\$btn = [W6]::FindWindowEx(\\$maintPage, [IntPtr]::Zero, 'Button', \\$null)
+    while (\\$btn -ne [IntPtr]::Zero) {
+        \\$t = [W6]::GetText(\\$btn)
+        if (\\$t -match 'Printer and Option|Information') { \\$poiBtn = \\$btn; break }
+        \\$btn = [W6]::FindWindowEx(\\$maintPage, \\$btn, 'Button', \\$null)
+    }
+    if (\\$poiBtn -eq [IntPtr]::Zero) {
+        \\$cd = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, '#32770', \\$null)
+        while (\\$cd -ne [IntPtr]::Zero) {
+            \\$btn = [W6]::FindWindowEx(\\$cd, [IntPtr]::Zero, 'Button', \\$null)
+            while (\\$btn -ne [IntPtr]::Zero) {
+                \\$t = [W6]::GetText(\\$btn)
+                if (\\$t -match 'Printer and Option|Information') { \\$poiBtn = \\$btn; break }
+                \\$btn = [W6]::FindWindowEx(\\$cd, \\$btn, 'Button', \\$null)
+            }
+            if (\\$poiBtn -ne [IntPtr]::Zero) { break }
+            \\$cd = [W6]::FindWindowEx(\\$hwnd, \\$cd, '#32770', \\$null)
         }
     }
 
-    Start-Sleep -Seconds 3
+    if (\\$poiBtn -eq [IntPtr]::Zero) {
+        \\$poiLabel = [W6]::FindWindowEx(\\$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+        if (\\$poiLabel -eq [IntPtr]::Zero) { \\$poiLabel = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
+        if (\\$poiLabel -eq [IntPtr]::Zero) {
+            \\$cd = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, '#32770', \\$null)
+            while (\\$cd -ne [IntPtr]::Zero) {
+                \\$poiLabel = [W6]::FindWindowEx(\\$cd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
+                if (\\$poiLabel -ne [IntPtr]::Zero) { break }
+                \\$cd = [W6]::FindWindowEx(\\$hwnd, \\$cd, '#32770', \\$null)
+            }
+        }
+    }
+
+    if (\\$poiBtn -eq [IntPtr]::Zero -and \\$poiLabel -eq [IntPtr]::Zero) {
+        Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { \\$_.Kill() } catch {} }
+        return -1
+    }
+
+    # Open POI dialog
+    \\$poiDlg = [IntPtr]::Zero
+
+    if (\\$poiBtn -ne [IntPtr]::Zero) {
+        for (\\$a = 1; \\$a -le 3; \\$a++) {
+            [void][W6]::SendMessage(\\$poiBtn, [W6]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero)
+            for (\\$w = 0; \\$w -lt 15; \\$w++) {
+                Start-Sleep -Milliseconds 500
+                \\$poiDlg = [W6]::FindWindow('#32770', 'Printer and Option Information')
+                if (\\$poiDlg -ne [IntPtr]::Zero) { break }
+            }
+            if (\\$poiDlg -ne [IntPtr]::Zero) { break }
+        }
+    }
+
+    if (\\$poiDlg -eq [IntPtr]::Zero -and \\$poiLabel -ne [IntPtr]::Zero) {
+        \\$rect = New-Object W6+RECT
+        [void][W6]::GetWindowRect(\\$poiLabel, [ref]\\$rect)
+        \\$bx = [int](\\$rect.L - 25); \\$by = [int]((\\$rect.T + \\$rect.B) / 2)
+        \\$target = if (\\$maintPage -ne \\$hwnd) { \\$maintPage } else { \\$hwnd }
+
+        for (\\$a = 1; \\$a -le 3; \\$a++) {
+            [void][W6]::ClickAt(\\$target, \\$bx, \\$by)
+            for (\\$w = 0; \\$w -lt 15; \\$w++) {
+                Start-Sleep -Milliseconds 500
+                \\$poiDlg = [W6]::FindWindow('#32770', 'Printer and Option Information')
+                if (\\$poiDlg -ne [IntPtr]::Zero) { break }
+            }
+            if (\\$poiDlg -ne [IntPtr]::Zero) { break }
+            if (\\$a -eq 1) { \\$bx = [int]((\\$rect.L + \\$rect.R) / 2); \\$by = [int]((\\$rect.T + \\$rect.B) / 2) }
+            if (\\$a -eq 2) { \\$bx = [int](\\$rect.L - 25); [void][W6]::ClickAt(\\$target, \\$bx, \\$by); Start-Sleep -Milliseconds 200; [void][W6]::ClickAt(\\$target, \\$bx, \\$by) }
+        }
+    }
+
+    if (\\$poiDlg -eq [IntPtr]::Zero) {
+        Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { \\$_.Kill() } catch {} }
+        return -1
+    }
+
+    [void][W6]::MoveOffscreen(\\$poiDlg)
+    Start-Sleep -Seconds 5
+
+    # Read Total Sheets
+    \\$totalSheetsVal = -1
+    \\$tsLabel = [IntPtr]::Zero
+
+    \\$s = [W6]::FindWindowEx(\\$poiDlg, [IntPtr]::Zero, 'Static', \\$null)
+    while (\\$s -ne [IntPtr]::Zero) {
+        if ([W6]::GetText(\\$s) -eq 'Total Sheets') { \\$tsLabel = \\$s }
+        \\$s = [W6]::FindWindowEx(\\$poiDlg, \\$s, 'Static', \\$null)
+    }
+    \\$sd = [W6]::FindWindowEx(\\$poiDlg, [IntPtr]::Zero, '#32770', \\$null)
+    while (\\$sd -ne [IntPtr]::Zero) {
+        \\$ss = [W6]::FindWindowEx(\\$sd, [IntPtr]::Zero, 'Static', \\$null)
+        while (\\$ss -ne [IntPtr]::Zero) {
+            if ([W6]::GetText(\\$ss) -eq 'Total Sheets') { \\$tsLabel = \\$ss }
+            \\$ss = [W6]::FindWindowEx(\\$sd, \\$ss, 'Static', \\$null)
+        }
+        \\$sd = [W6]::FindWindowEx(\\$poiDlg, \\$sd, '#32770', \\$null)
+    }
+
+    if (\\$tsLabel -ne [IntPtr]::Zero) {
+        \\$ed = [W6]::FindWindowEx(\\$poiDlg, \\$tsLabel, 'Edit', \\$null)
+        if (\\$ed -ne [IntPtr]::Zero) {
+            \\$val = [W6]::GetText(\\$ed)
+            if (\\$val -match '^\\d+$' -and [int]\\$val -gt 0) { \\$totalSheetsVal = [int]\\$val }
+        }
+    } else {
+        \\$numbers = @()
+        \\$e = [W6]::FindWindowEx(\\$poiDlg, [IntPtr]::Zero, 'Edit', \\$null)
+        while (\\$e -ne [IntPtr]::Zero) {
+            \\$val = [W6]::GetText(\\$e)
+            if (\\$val -match '^\\d+$' -and [int]\\$val -ge 100) { \\$numbers += [int]\\$val }
+            \\$e = [W6]::FindWindowEx(\\$poiDlg, \\$e, 'Edit', \\$null)
+        }
+        \\$numbers = \\$numbers | Sort-Object -Descending | Select-Object -Unique
+        if (\\$numbers.Count -ge 1) { \\$totalSheetsVal = \\$numbers[0] }
+    }
+
+    # Close dialogs
+    \\$ok = [W6]::FindWindowEx(\\$poiDlg, [IntPtr]::Zero, 'Button', 'OK')
+    if (\\$ok -ne [IntPtr]::Zero) { [void][W6]::SendMessage(\\$ok, [W6]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) }
+    Start-Sleep -Seconds 1
+    \\$cancel = [W6]::FindWindowEx(\\$hwnd, [IntPtr]::Zero, 'Button', 'Cancel')
+    if (\\$cancel -ne [IntPtr]::Zero) { [void][W6]::SendMessage(\\$cancel, [W6]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) }
+    Start-Sleep -Seconds 1
+    Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { \\$_.Kill() } catch {} }
+
+    if (\\$totalSheetsVal -gt 0) { return \\$totalSheetsVal }
+    return -1
 }
 
-if ($results.Count -eq 0) { "[]" }
-else { $results | ConvertTo-Json -Depth 3 }
+# === MAIN: Single cycle, output JSON ===
+Get-Process rundll32 -ErrorAction SilentlyContinue | ForEach-Object { try { \\$_.Kill() } catch {} }
+\\$printers = @(Get-ConnectedPrinters)
+\\$results = @()
+
+foreach (\\$printer in \\$printers) {
+    \\$name = \\$printer.Name
+    \\$ts = Read-TotalSheets -printerName \\$name
+
+    \\$isOnline = \\$false
+    try {
+        \\$wmi = Get-WmiObject Win32_Printer -ErrorAction SilentlyContinue | Where-Object { \\$_.Name -eq \\$name }
+        if (\\$wmi -and -not \\$wmi.WorkOffline) { \\$isOnline = \\$true }
+    } catch {}
+
+    if (\\$ts -gt 0) {
+        \\$results += @{
+            printerName      = \\$name
+            totalPages       = \\$ts
+            totalSheets      = \\$ts
+            isOnline         = \\$isOnline
+            source           = "poi_dialog_offscreen"
+        }
+    } else {
+        \\$results += @{
+            printerName      = \\$name
+            totalPages       = \\$null
+            totalSheets      = \\$null
+            isOnline         = \\$isOnline
+            source           = "poi_dialog_no_data"
+            noData           = \\$true
+        }
+    }
+    Start-Sleep -Seconds 2
+}
+
+if (\\$results.Count -eq 0) { "[]" }
+else { \\$results | ConvertTo-Json -Depth 3 }
 `;
 }
 
@@ -376,12 +331,11 @@ function runSheetsCycle() {
         isRunning = true;
 
         const script = buildScript();
-        const tmpFile = path.join(os.tmpdir(), `hawknine_sheets_${Date.now()}.ps1`);
+        const tmpFile = path.join(os.tmpdir(), `hawknine_sheets_offscreen_${Date.now()}.ps1`);
 
         try {
             fs.writeFileSync(tmpFile, script, 'utf8');
         } catch (e) {
-            console.error('[SHEETS] Failed to write temp script:', e.message);
             isRunning = false;
             resolve([]);
             return;
@@ -394,30 +348,16 @@ function runSheetsCycle() {
             '-WindowStyle', 'Hidden',
             '-File', tmpFile
         ], { timeout: 180000, maxBuffer: 1024 * 1024 * 5, windowsHide: true }, (error, stdout, stderr) => {
-            try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+            try { fs.unlinkSync(tmpFile); } catch (e) {}
             isRunning = false;
 
-            if (error) {
-                if (error.killed) {
-                    console.error('[SHEETS] Script timed out');
-                } else if (stderr && stderr.trim()) {
-                    console.error('[SHEETS] PS error:', stderr.trim().substring(0, 300));
-                }
-                resolve([]);
-                return;
-            }
-
-            if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') {
-                console.log('[SHEETS] No readings returned');
-                resolve([]);
-                return;
-            }
+            if (error) { resolve([]); return; }
+            if (!stdout || stdout.trim() === '' || stdout.trim() === '[]') { resolve([]); return; }
 
             try {
                 const parsed = JSON.parse(stdout);
                 const counters = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
                 const valid = counters.filter(c => c && c.totalSheets > 0 && !c.noData);
-                const noData = counters.filter(c => c && c.noData);
 
                 for (const c of valid) {
                     const prev = lastSheets[c.printerName];
@@ -428,14 +368,9 @@ function runSheetsCycle() {
                     }
                     lastSheets[c.printerName] = c.totalSheets;
                 }
-
-                for (const c of noData) {
-                    console.log(`[SHEETS] ${c.printerName}: No data available`);
-                }
-
                 resolve(valid);
             } catch (e) {
-                console.error('[SHEETS] Parse error:', e.message, 'Raw:', stdout.substring(0, 200));
+                console.error('[SHEETS] Parse error:', e.message);
                 resolve([]);
             }
         });
@@ -451,37 +386,26 @@ function startSheetsMonitor(opts, sendToServer) {
         onReadings = null
     } = opts;
 
-    console.log(`[SHEETS] Starting stealth sheets monitor (interval: ${intervalMs / 1000}s)`);
+    console.log(`[SHEETS] Starting offscreen stealth monitor (interval: ${intervalMs / 1000}s)`);
 
     async function cycle() {
         try {
             const counters = await runSheetsCycle();
             if (counters.length > 0) {
-                console.log(`[SHEETS] Got readings for ${counters.length} printer(s):`,
-                    counters.map(c => `${c.printerName}=${c.totalSheets}`).join(', '));
+                console.log(`[SHEETS] Got readings for ${counters.length} printer(s)`);
+                if (onReadings) { try { onReadings(counters); } catch (e) {} }
 
-                // Notify main.js for portal display
-                if (onReadings) {
-                    try { onReadings(counters); } catch (e) { /* ignore */ }
-                }
-
-                // ALWAYS send to API (even if unchanged — dashboard tracks changes)
                 const payload = { clientId, hostname, counters };
-
                 try {
                     await sendToServer(`${apiBase}/api/v1/agent/page-counter`, payload);
-                    console.log('[SHEETS] Sent to API successfully');
-                } catch (e) {
-                    console.error('[SHEETS] API send failed:', e.message);
-                }
+                } catch (e) {}
             }
         } catch (e) {
             console.error('[SHEETS] Cycle error:', e.message);
         }
     }
 
-    // Run first cycle immediately after launch (5s init delay)
-    setTimeout(cycle, 5000);
+    setTimeout(cycle, 10000); // First run after 10s
     intervalHandle = setInterval(cycle, intervalMs);
 
     return {

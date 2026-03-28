@@ -6,9 +6,10 @@ import {
     InboxOutlined, HistoryOutlined, UserOutlined, ArrowRightOutlined, ClockCircleOutlined,
     BarChartOutlined, SearchOutlined, ExportOutlined, EyeOutlined, RiseOutlined,
     FallOutlined, LineChartOutlined, FilterOutlined, DownloadOutlined, LockOutlined,
-    TeamOutlined, EyeInvisibleOutlined, StopOutlined, MobileOutlined
+    TeamOutlined, EyeInvisibleOutlined, StopOutlined, MobileOutlined, ThunderboltOutlined
 } from '@ant-design/icons';
 import { getInventory, addInventoryItem, updateInventoryItem, deleteInventoryItem, getInventorySettings, updateInventorySettings, sellInventoryItem, connectSocket, getTransactions, updateInventoryAccessControl, getPortalUsers, getAgentUsers, clearAllInventory, clearSalesHistory } from '../services/api';
+import ServicesTab from './ServicesTab';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import jsPDF from 'jspdf';
@@ -869,6 +870,9 @@ function Inventory() {
                             </Card>
                         </div>
                     )
+                },
+                {
+                    key: 'services', label: <span><ThunderboltOutlined style={{ marginRight: 6 }} />Agent Services</span>, children: <ServicesTab />
                 }
             ]} />
 

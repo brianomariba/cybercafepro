@@ -70,6 +70,8 @@ const DocumentRequest = require('./models/DocumentRequest');
 const Client = require('./models/Client');
 const OnlineService = require('./models/OnlineService');
 const PageCounterReading = require('./models/PageCounterReading');
+const TrackableService = require('./models/TrackableService');
+const ActivityRecord = require('./models/ActivityRecord');
 
 const app = express();
 const server = http.createServer(app);
@@ -3412,6 +3414,194 @@ app.get('/api/v1/admin/online-services', async (req, res) => {
         res.json(services);
     } catch (error) {
         res.status(500).json({ error: 'Failed' });
+    }
+});
+
+// ==================== TRACKABLE SERVICES (Admin-defined services with shortcuts) ====================
+
+/**
+ * GET /api/v1/admin/trackable-services
+ * Admin fetches all trackable services
+ */
+app.get('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const services = await TrackableService.find().sort({ createdAt: -1 });
+        res.json(services);
+    } catch (error) {
+        console.error('Get trackable services error:', error);
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/trackable-services
+ * Admin creates a new trackable service
+ */
+app.post('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, unit, keyboardShortcut, icon, category, color, isActive } = req.body;
+        if (!name || price === undefined) {
+            return res.status(400).json({ error: 'Name and price are required' });
+        }
+        // Check for duplicate shortcut
+        if (keyboardShortcut) {
+            const existing = await TrackableService.findOne({ keyboardShortcut, isActive: true });
+            if (existing) {
+                return res.status(400).json({ error: `Shortcut "${keyboardShortcut}" is already assigned to "${existing.name}"` });
+            }
+        }
+        const service = await TrackableService.create({
+            name, description, price, unit: unit || 'per_item',
+            keyboardShortcut: keyboardShortcut || '', icon: icon || '📋',
+            category: category || 'General', color: color || '#00B4D8',
+            isActive: isActive !== false
+        });
+        // Broadcast to agents so they pick up the new shortcut
+        io.emit('trackable-services-updated');
+        res.json({ success: true, service });
+    } catch (error) {
+        console.error('Create trackable service error:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/trackable-services/:id
+ * Admin updates a trackable service
+ */
+app.put('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        // Check for duplicate shortcut (exclude self)
+        if (updates.keyboardShortcut) {
+            const existing = await TrackableService.findOne({
+                keyboardShortcut: updates.keyboardShortcut, isActive: true, _id: { $ne: id }
+            });
+            if (existing) {
+                return res.status(400).json({ error: `Shortcut "${updates.keyboardShortcut}" is already assigned to "${existing.name}"` });
+            }
+        }
+        updates.updatedAt = new Date();
+        const service = await TrackableService.findByIdAndUpdate(id, updates, { new: true });
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        io.emit('trackable-services-updated');
+        res.json({ success: true, service });
+    } catch (error) {
+        console.error('Update trackable service error:', error);
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/trackable-services/:id
+ * Admin deletes a trackable service
+ */
+app.delete('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await TrackableService.findByIdAndDelete(id);
+        io.emit('trackable-services-updated');
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete trackable service error:', error);
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+/**
+ * GET /api/v1/trackable-services
+ * Agent-facing: fetch active trackable services (no admin auth required)
+ */
+app.get('/api/v1/trackable-services', async (req, res) => {
+    try {
+        const services = await TrackableService.find({ isActive: true }).sort({ name: 1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+// ==================== ACTIVITY RECORDS (Agent daily submissions) ====================
+
+/**
+ * POST /api/v1/agent/activity-records
+ * Agent submits a batch of daily activity records
+ */
+app.post('/api/v1/agent/activity-records', async (req, res) => {
+    try {
+        const { records, agentUser, clientId, hostname, date } = req.body;
+        if (!records || !Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({ error: 'No records provided' });
+        }
+        const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const recordDate = date || new Date().toISOString().split('T')[0];
+        const docs = records.map(r => ({
+            serviceId: r.serviceId || null,
+            serviceName: r.serviceName,
+            quantity: r.quantity || 1,
+            unitPrice: r.unitPrice || 0,
+            totalAmount: r.totalAmount || (r.quantity * r.unitPrice),
+            agentUser: r.agentUser || agentUser || 'unknown',
+            clientId: r.clientId || clientId || '',
+            hostname: r.hostname || hostname || '',
+            date: r.date || recordDate,
+            notes: r.notes || '',
+            customerName: r.customerName || '',
+            paymentMethod: r.paymentMethod || 'cash',
+            batchId
+        }));
+        const saved = await ActivityRecord.insertMany(docs);
+        console.log(`[ACTIVITY] ${saved.length} records submitted by ${agentUser} from ${clientId}`);
+        // Notify admin dashboard
+        io.emit('activity-records-submitted', {
+            agentUser, clientId, hostname, date: recordDate,
+            count: saved.length,
+            total: docs.reduce((s, r) => s + r.totalAmount, 0)
+        });
+        res.json({ success: true, count: saved.length, batchId });
+    } catch (error) {
+        console.error('Submit activity records error:', error);
+        res.status(500).json({ error: 'Failed to submit records' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/activity-records
+ * Admin fetches activity records with filtering
+ */
+app.get('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const { limit = 500, agentUser, date, clientId, startDate, endDate } = req.query;
+        const query = {};
+        if (agentUser) query.agentUser = agentUser;
+        if (date) query.date = date;
+        if (clientId) query.clientId = clientId;
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = startDate;
+            if (endDate) query.date.$lte = endDate;
+        }
+        const records = await ActivityRecord.find(query)
+            .sort({ submittedAt: -1 })
+            .limit(parseInt(limit));
+        res.json(records);
+    } catch (error) {
+        console.error('Get activity records error:', error);
+        res.status(500).json({ error: 'Failed to fetch records' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/activity-records
+ * Admin clears all activity records
+ */
+app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await ActivityRecord.deleteMany({});
+        res.json({ success: true, deleted: result.deletedCount });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear records' });
     }
 });
 
@@ -7671,6 +7861,184 @@ app.delete('/api/v1/agent/submissions/:id', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
+
+// ==================== TRACKABLE SERVICES & ACTIVITY RECORDS ====================
+
+/**
+ * POST /api/v1/admin/trackable-services
+ * Admin creates a new trackable service
+ */
+app.post('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, unit, keyboardShortcut, icon, category, color, isActive } = req.body;
+        if (!name || price == null) {
+            return res.status(400).json({ error: 'Name and price are required' });
+        }
+        const service = await TrackableService.create({
+            name, description, price, unit, keyboardShortcut, icon, category, color,
+            isActive: isActive !== false
+        });
+        // Broadcast to all connected agents so they re-fetch
+        io.emit('trackable-services-updated');
+        res.status(201).json(service);
+    } catch (error) {
+        console.error('Create trackable service error:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/trackable-services
+ * Admin lists all trackable services
+ */
+app.get('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const services = await TrackableService.find().sort({ createdAt: -1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/trackable-services/:id
+ * Admin updates a trackable service
+ */
+app.put('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const updates = req.body;
+        updates.updatedAt = new Date();
+        const service = await TrackableService.findByIdAndUpdate(req.params.id, updates, { new: true });
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        // Broadcast update to agents
+        io.emit('trackable-services-updated');
+        res.json(service);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/trackable-services/:id
+ * Admin deletes a trackable service
+ */
+app.delete('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await TrackableService.findByIdAndDelete(req.params.id);
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        // Broadcast update to agents
+        io.emit('trackable-services-updated');
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+/**
+ * GET /api/v1/trackable-services
+ * Agent-facing: list active trackable services (no admin auth required)
+ */
+app.get('/api/v1/trackable-services', async (req, res) => {
+    try {
+        const services = await TrackableService.find({ isActive: true }).sort({ name: 1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/activity-records
+ * Agent submits a batch of daily activity records
+ */
+app.post('/api/v1/agent/activity-records', async (req, res) => {
+    try {
+        const { records, agentUser, clientId, hostname, date } = req.body;
+        if (!records || !Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({ error: 'No records provided' });
+        }
+        if (!agentUser) {
+            return res.status(400).json({ error: 'Agent user is required' });
+        }
+
+        const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const docs = records.map(r => ({
+            serviceId: r.serviceId || null,
+            serviceName: r.serviceName,
+            quantity: r.quantity,
+            unitPrice: r.unitPrice,
+            totalAmount: r.totalAmount,
+            agentUser: agentUser,
+            clientId: clientId || '',
+            hostname: hostname || '',
+            date: r.date || date || new Date().toISOString().split('T')[0],
+            notes: r.notes || '',
+            customerName: r.customerName || '',
+            paymentMethod: r.paymentMethod || 'cash',
+            batchId: batchId,
+            submittedAt: new Date()
+        }));
+
+        const inserted = await ActivityRecord.insertMany(docs);
+        console.log(`[ACTIVITY] ${inserted.length} records submitted by ${agentUser} (batch: ${batchId})`);
+
+        // Notify admin dashboards
+        io.emit('activity-records-updated', {
+            agentUser, count: inserted.length, date: date || new Date().toISOString().split('T')[0],
+            totalAmount: docs.reduce((s, r) => s + r.totalAmount, 0)
+        });
+
+        res.json({ success: true, count: inserted.length, batchId });
+    } catch (error) {
+        console.error('Activity record submission error:', error);
+        res.status(500).json({ error: 'Failed to submit records' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/activity-records
+ * Admin views activity records with optional filters
+ */
+app.get('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const { startDate, endDate, agentUser, limit } = req.query;
+        const filter = {};
+
+        if (startDate && endDate) {
+            filter.date = { $gte: startDate, $lte: endDate };
+        } else if (startDate) {
+            filter.date = { $gte: startDate };
+        } else if (endDate) {
+            filter.date = { $lte: endDate };
+        }
+
+        if (agentUser) {
+            filter.agentUser = agentUser;
+        }
+
+        const records = await ActivityRecord.find(filter)
+            .sort({ submittedAt: -1 })
+            .limit(parseInt(limit) || 500);
+
+        res.json(records);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch activity records' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/activity-records
+ * Admin clears all activity records
+ */
+app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await ActivityRecord.deleteMany({});
+        console.log(`[ACTIVITY] Admin cleared ${result.deletedCount} activity records`);
+        res.json({ success: true, deleted: result.deletedCount });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear records' });
     }
 });
 

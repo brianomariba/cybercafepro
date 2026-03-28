@@ -839,6 +839,285 @@
             align-items: center;
             flex-wrap: wrap;
         }
+
+        /* Activity Tracker Styles */
+        .activity-log-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            transition: all 0.2s;
+            animation: fadeIn 0.3s ease;
+        }
+        .activity-log-item:hover {
+            border-color: rgba(0,180,216,0.3);
+            background: rgba(0,180,216,0.04);
+        }
+        .activity-log-left {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+        }
+        .activity-log-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .activity-log-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .activity-log-amount {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--success);
+            min-width: 90px;
+            text-align: right;
+        }
+        .activity-log-remove {
+            background: none;
+            border: none;
+            color: var(--danger);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+        }
+        .activity-log-remove:hover {
+            opacity: 1;
+            background: rgba(239,68,68,0.1);
+        }
+        .daily-total-bar {
+            background: linear-gradient(135deg, rgba(0,200,83,0.15), rgba(0,180,216,0.15));
+            border: 1px solid rgba(0,200,83,0.3);
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .daily-total-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .daily-total-value {
+            font-size: 28px;
+            font-weight: 800;
+            color: var(--success);
+        }
+        .daily-total-count {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .shortcut-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(114,46,209,0.15);
+            border: 1px solid rgba(114,46,209,0.3);
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 11px;
+            font-weight: 600;
+            color: #b388ff;
+        }
+        .activity-service-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .activity-service-btn {
+            padding: 12px;
+            background: var(--card-bg);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+            color: var(--text);
+        }
+        .activity-service-btn:hover {
+            border-color: var(--primary);
+            transform: translateY(-1px);
+            background: rgba(0,180,216,0.06);
+        }
+
+        /* Help & Shortcuts Tab Styles */
+        .help-hero {
+            background: linear-gradient(135deg, rgba(0,180,216,0.12), rgba(114,46,209,0.12));
+            border: 1px solid rgba(0,180,216,0.2);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .help-hero h2 {
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 6px;
+            background: linear-gradient(90deg, var(--primary), #b388ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .help-hero p {
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .help-shortcut-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all 0.25s;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        .help-shortcut-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+            border-radius: 4px 0 0 4px;
+            transition: background 0.2s;
+        }
+        .help-shortcut-card:hover {
+            border-color: rgba(0,180,216,0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .help-svc-icon {
+            width: 52px; height: 52px;
+            border-radius: 14px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 26px;
+            flex-shrink: 0;
+        }
+        .help-svc-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .help-svc-name {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+        .help-svc-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .help-svc-price {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--success);
+        }
+        .help-svc-unit {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+        .help-shortcut-key {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .help-shortcut-key .key-combo {
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+        }
+        .help-shortcut-key .key {
+            display: inline-block;
+            padding: 6px 12px;
+            background: rgba(114,46,209,0.15);
+            border: 1px solid rgba(114,46,209,0.35);
+            border-radius: 8px;
+            font-family: 'Segoe UI', monospace;
+            font-size: 13px;
+            font-weight: 700;
+            color: #d4b5ff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+            text-transform: capitalize;
+            min-width: 32px;
+            text-align: center;
+        }
+        .help-shortcut-key .key-plus {
+            color: rgba(114,46,209,0.6);
+            font-weight: 800;
+            font-size: 14px;
+        }
+        .help-shortcut-key .key-label {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .help-no-shortcut {
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.04);
+            border: 1px dashed rgba(255,255,255,0.15);
+            border-radius: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .help-grid {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+        .help-tips-card {
+            background: rgba(0,200,83,0.06);
+            border: 1px solid rgba(0,200,83,0.2);
+            border-radius: 14px;
+            padding: 20px 24px;
+        }
+        .help-tips-card h3 {
+            font-size: 15px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--success);
+        }
+        .help-tip-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .help-tip-item .tip-num {
+            width: 24px; height: 24px;
+            background: rgba(0,200,83,0.15);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 700;
+            color: var(--success);
+            flex-shrink: 0;
+        }
+        .help-category-label {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
     </style>
 </head>
 
@@ -877,6 +1156,8 @@
         <button class="nav-tab" data-section="printers" style="display:none">🖨️ My Printers</button>
         <button class="nav-tab" data-section="photocopy">📋 Photocopy Tracking</button>
         <button class="nav-tab" data-section="submissions">📤 Submissions</button>
+        <button class="nav-tab" data-section="activity">⚡ Activity Tracker <span class="badge" id="activityBadge" style="display:none">0</span></button>
+        <button class="nav-tab" data-section="help">❓ Help & Shortcuts</button>
         <button class="nav-tab" data-section="pending" id="pendingTab" style="display:none">⏳ Pending <span
                 class="badge" id="pendingBadge" style="display:none">0</span></button>
     </div>
@@ -1113,6 +1394,121 @@
             </div>
         </div>
 
+        <!-- Activity Tracker Section -->
+        <div class="page-section" id="section-activity">
+            <!-- Daily Total Bar -->
+            <div class="daily-total-bar">
+                <div>
+                    <div class="daily-total-label">📅 Today's Activity Total</div>
+                    <div class="daily-total-count" id="activityCount">0 records</div>
+                </div>
+                <div class="daily-total-value" id="activityTotal">KSH 0</div>
+            </div>
+
+            <!-- Quick Add Buttons -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">⚡ Quick Record Activity</h2>
+                    <button class="btn btn-small btn-secondary" onclick="fetchTrackableServices()">↻ Refresh</button>
+                </div>
+                <div class="activity-service-grid" id="activityServiceGrid">
+                    <div class="empty-state" style="grid-column: 1/-1;">
+                        <div class="empty-icon">⚡</div>
+                        <p>Loading services...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Daily Activity Log -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📝 Today's Activity Log</h2>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-small btn-primary" onclick="showSubmitDayModal()" id="submitDayBtn" style="display:none">📤 Submit & Close Day</button>
+                        <button class="btn btn-small btn-danger" onclick="clearDailyLog()" id="clearLogBtn" style="display:none">🗑️ Clear</button>
+                    </div>
+                </div>
+                <div id="activityLogContainer">
+                    <div class="empty-state">
+                        <div class="empty-icon">📝</div>
+                        <p>No activities recorded today.<br>Press a keyboard shortcut or click a service above to start recording.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Help & Shortcuts Section -->
+        <div class="page-section" id="section-help">
+            <div class="help-hero">
+                <h2>⌨️ Keyboard Shortcuts & Activity Guide</h2>
+                <p>Use these keyboard shortcuts anywhere on the desktop to quickly record activities. No need to open this portal!</p>
+            </div>
+
+            <!-- How It Works -->
+            <div class="help-tips-card" style="margin-bottom: 20px;">
+                <h3>💡 How It Works</h3>
+                <div class="help-tip-item">
+                    <span class="tip-num">1</span>
+                    <span>Your admin has configured <strong>trackable services</strong> (like KRA, Printing, Photocopies) with keyboard shortcuts.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">2</span>
+                    <span>Press a keyboard shortcut <strong>anywhere on the desktop</strong> (even outside this window) and a recording popup will appear.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">3</span>
+                    <span>Fill in the quantity, customer name (optional), and notes, then click <strong>Record Activity</strong>.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">4</span>
+                    <span>At the end of the day, go to <strong>⚡ Activity Tracker</strong> tab and click <strong>📤 Submit & Close Day</strong> to send your records to the backend.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">5</span>
+                    <span>You can also click on a service card in the Activity Tracker tab to record without using a shortcut.</span>
+                </div>
+            </div>
+
+            <!-- Shortcuts List -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">⌨️ Available Shortcuts</h2>
+                    <button class="btn btn-small btn-secondary" onclick="fetchTrackableServices(); renderHelpShortcuts();">↻ Refresh</button>
+                </div>
+                <div class="help-grid" id="helpShortcutsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">⌨️</div>
+                        <p>Loading shortcuts...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Tips -->
+            <div class="help-tips-card">
+                <h3>🚀 Pro Tips</h3>
+                <div class="help-tip-item">
+                    <span class="tip-num">💡</span>
+                    <span>When the popup appears, the <strong>quantity field is auto-focused</strong> so you can type a number immediately.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">⏎</span>
+                    <span>Press <strong>Enter</strong> in the notes field to quickly submit the record.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">⏰</span>
+                    <span>The popup will <strong>auto-close after 60 seconds</strong> if you don't interact with it.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">🔄</span>
+                    <span>If the admin adds new services or changes shortcuts, they will be <strong>automatically updated</strong> on your agent.</span>
+                </div>
+                <div class="help-tip-item">
+                    <span class="tip-num">💾</span>
+                    <span>Your daily activity log is <strong>saved locally</strong> even if the app restarts. Just remember to submit before the day ends.</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Footer -->
         <div class="footer">
             <div>HawkNine Desktop Portal • Last sync: <span id="lastSyncTime">Never</span></div>
@@ -1262,6 +1658,76 @@
         </div>
     </div>
 
+    <!-- Activity Recording Popup Modal -->
+    <div class="modal-overlay" id="activityModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="activityModalTitle">⚡ Record Activity</h3>
+                <button class="modal-close" onclick="closeActivityModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 16px;">
+                    <div style="font-size: 36px; margin-bottom: 4px;" id="activityModalIcon">📋</div>
+                    <div style="font-size: 18px; font-weight: 700;" id="activityModalName">Service</div>
+                    <div style="font-size: 14px; color: var(--text-secondary);" id="activityModalPrice">KSH 0 / item</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Quantity</label>
+                    <div class="quantity-selector">
+                        <button class="qty-btn" onclick="adjustActivityQty(-1)">−</button>
+                        <input type="number" class="qty-value" id="activityQty" value="1" min="1" max="9999" oninput="updateActivityTotal()">
+                        <button class="qty-btn" onclick="adjustActivityQty(1)">+</button>
+                    </div>
+                </div>
+
+                <div style="background: rgba(0,200,83,0.1); padding: 14px; border-radius: 8px; text-align: center; margin: 12px 0;">
+                    <div style="font-size: 12px; color: var(--text-secondary);">Line Total</div>
+                    <div style="font-size: 26px; font-weight: 700; color: var(--success);" id="activityLineTotal">KSH 0</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Customer Name (optional)</label>
+                    <input type="text" class="form-input" id="activityCustomer" placeholder="e.g. John">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Notes (optional)</label>
+                    <input type="text" class="form-input" id="activityNotes" placeholder="e.g. KRA PIN filing">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeActivityModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addActivityRecord()" style="background: linear-gradient(135deg, #00C853, #00B4D8);">➕ Add Record</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Submit Day Confirmation Modal -->
+    <div class="modal-overlay" id="submitDayModal">
+        <div class="modal" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 class="modal-title">📤 Submit Daily Activity</h3>
+                <button class="modal-close" onclick="closeSubmitDayModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 16px;">
+                    <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 4px;">Total Records</div>
+                    <div style="font-size: 36px; font-weight: 800; color: var(--primary);" id="submitDayCount">0</div>
+                </div>
+                <div style="background: rgba(0,200,83,0.1); padding: 16px; border-radius: 10px; text-align: center; margin-bottom: 16px;">
+                    <div style="font-size: 13px; color: var(--text-secondary);">Grand Total</div>
+                    <div style="font-size: 32px; font-weight: 800; color: var(--success);" id="submitDayTotal">KSH 0</div>
+                </div>
+                <div id="submitDaySummary" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px;"></div>
+                <p style="font-size: 12px; color: var(--text-secondary); text-align: center;">This will send all today's activity records to the admin dashboard.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSubmitDayModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitDailyActivity()" style="background: linear-gradient(135deg, #00C853, #00B4D8);">📤 Submit Records</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const { ipcRenderer } = require('electron');
 
@@ -1276,11 +1742,18 @@
         let correctionTarget = null; // { transactionId, itemName, qty, amount }
         let correctionTimerInterval = null;
 
+        // Activity Tracker State
+        let trackableServices = [];
+        let dailyActivityLog = []; // Array of { id, serviceId, serviceName, icon, quantity, unitPrice, totalAmount, customerName, notes, timestamp }
+        let activeActivityService = null; // The service being recorded in the modal
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             setupNavigation();
             loadAllData();
             updatePendingCount();
+            fetchTrackableServices();
+            loadDailyLogFromStorage();
 
             // Check online status
             setInterval(checkOnlineStatus, 5000);
@@ -2007,6 +2480,9 @@
             if (sectionId === 'photocopy') {
                 loadPhotocopyData();
             }
+            if (sectionId === 'help') {
+                renderHelpShortcuts();
+            }
         }
 
         // ==================== PHOTOCOPY TRACKING ====================
@@ -2327,6 +2803,378 @@
                 const downloadUrl = 'https://admin.hawkninegroup.com'; // Or specific download link
                 ipcRenderer.send('open-external-link', downloadUrl);
             }
+        }
+
+        // ==================== ACTIVITY TRACKER ====================
+
+        const ACTIVITY_API = (typeof API_BASE !== 'undefined' ? API_BASE : 'https://api.hawkninegroup.com/api/v1');
+        const DAILY_LOG_KEY = 'hawknine_daily_activity_log';
+        const DAILY_LOG_DATE_KEY = 'hawknine_daily_activity_date';
+
+        // Fetch trackable services from backend
+        async function fetchTrackableServices() {
+            try {
+                const resp = await fetch(`${ACTIVITY_API}/trackable-services`);
+                if (resp.ok) {
+                    trackableServices = await resp.json();
+                    renderActivityServiceGrid();
+                    renderHelpShortcuts();
+                }
+            } catch (e) {
+                console.log('[Activity] Failed to fetch services:', e.message);
+            }
+        }
+
+        // Render service quick-add buttons
+        function renderActivityServiceGrid() {
+            const grid = document.getElementById('activityServiceGrid');
+            if (!trackableServices.length) {
+                grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><div class="empty-icon">⚡</div><p>No services configured yet.<br>Ask your admin to add trackable services.</p></div>`;
+                return;
+            }
+            grid.innerHTML = trackableServices.map(svc => `
+                <button class="activity-service-btn" onclick="openActivityModal('${svc._id}')">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-size:22px;">${svc.icon || '📋'}</span>
+                        ${svc.keyboardShortcut ? `<span class="shortcut-badge">${svc.keyboardShortcut}</span>` : ''}
+                    </div>
+                    <div style="font-weight:600; font-size:14px;">${svc.name}</div>
+                    <div style="color:var(--success); font-weight:700; font-size:13px;">KSH ${(svc.price||0).toLocaleString()} <span style="color:var(--text-secondary);font-size:10px;">/${(svc.unit||'item').replace('per_','')}</span></div>
+                </button>
+            `).join('');
+        }
+
+        // Open activity recording popup
+        function openActivityModal(serviceId) {
+            const svc = trackableServices.find(s => s._id === serviceId);
+            if (!svc) return;
+            activeActivityService = svc;
+            document.getElementById('activityModalIcon').textContent = svc.icon || '📋';
+            document.getElementById('activityModalName').textContent = svc.name;
+            document.getElementById('activityModalPrice').textContent = `KSH ${(svc.price||0).toLocaleString()} / ${(svc.unit||'item').replace('per_','')}`;
+            document.getElementById('activityQty').value = 1;
+            document.getElementById('activityCustomer').value = '';
+            document.getElementById('activityNotes').value = '';
+            updateActivityTotal();
+            document.getElementById('activityModal').classList.add('active');
+            // Auto-focus quantity
+            setTimeout(() => document.getElementById('activityQty').focus(), 100);
+        }
+
+        function closeActivityModal() {
+            document.getElementById('activityModal').classList.remove('active');
+            activeActivityService = null;
+        }
+
+        function adjustActivityQty(delta) {
+            const el = document.getElementById('activityQty');
+            let val = parseInt(el.value) || 1;
+            val = Math.max(1, val + delta);
+            el.value = val;
+            updateActivityTotal();
+        }
+
+        function updateActivityTotal() {
+            if (!activeActivityService) return;
+            const qty = parseInt(document.getElementById('activityQty').value) || 1;
+            const total = qty * (activeActivityService.price || 0);
+            document.getElementById('activityLineTotal').textContent = `KSH ${total.toLocaleString()}`;
+        }
+
+        // Add record to daily log
+        function addActivityRecord() {
+            if (!activeActivityService) return;
+            const qty = parseInt(document.getElementById('activityQty').value) || 1;
+            const unitPrice = activeActivityService.price || 0;
+            const record = {
+                id: Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+                serviceId: activeActivityService._id,
+                serviceName: activeActivityService.name,
+                icon: activeActivityService.icon || '📋',
+                quantity: qty,
+                unitPrice: unitPrice,
+                totalAmount: qty * unitPrice,
+                customerName: document.getElementById('activityCustomer').value.trim(),
+                notes: document.getElementById('activityNotes').value.trim(),
+                timestamp: new Date().toISOString()
+            };
+            dailyActivityLog.push(record);
+            saveDailyLogToStorage();
+            renderDailyActivityLog();
+            closeActivityModal();
+            showToast(`✅ Added: ${record.serviceName} x${qty} = KSH ${record.totalAmount.toLocaleString()}`, 'success');
+        }
+
+        // Remove record from daily log
+        function removeActivityRecord(recordId) {
+            dailyActivityLog = dailyActivityLog.filter(r => r.id !== recordId);
+            saveDailyLogToStorage();
+            renderDailyActivityLog();
+        }
+
+        // Clear entire daily log
+        function clearDailyLog() {
+            if (!confirm('Clear all today\'s activity records?')) return;
+            dailyActivityLog = [];
+            saveDailyLogToStorage();
+            renderDailyActivityLog();
+            showToast('Daily log cleared', 'success');
+        }
+
+        // Render the daily activity log list + totals
+        function renderDailyActivityLog() {
+            const container = document.getElementById('activityLogContainer');
+            const grandTotal = dailyActivityLog.reduce((s, r) => s + r.totalAmount, 0);
+            const count = dailyActivityLog.length;
+
+            // Update totals
+            document.getElementById('activityTotal').textContent = `KSH ${grandTotal.toLocaleString()}`;
+            document.getElementById('activityCount').textContent = `${count} record${count !== 1 ? 's' : ''}`;
+
+            // Update badge
+            const badge = document.getElementById('activityBadge');
+            if (count > 0) {
+                badge.textContent = count;
+                badge.style.display = 'inline';
+                document.getElementById('submitDayBtn').style.display = '';
+                document.getElementById('clearLogBtn').style.display = '';
+            } else {
+                badge.style.display = 'none';
+                document.getElementById('submitDayBtn').style.display = 'none';
+                document.getElementById('clearLogBtn').style.display = 'none';
+            }
+
+            if (count === 0) {
+                container.innerHTML = `<div class="empty-state"><div class="empty-icon">📝</div><p>No activities recorded today.<br>Press a keyboard shortcut or click a service above to start recording.</p></div>`;
+                return;
+            }
+
+            container.innerHTML = dailyActivityLog.slice().reverse().map(r => {
+                const time = new Date(r.timestamp).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+                return `
+                    <div class="activity-log-item">
+                        <div style="font-size:22px; margin-right:10px;">${r.icon}</div>
+                        <div class="activity-log-left">
+                            <div class="activity-log-name">${r.serviceName}</div>
+                            <div class="activity-log-meta">
+                                ${r.quantity}x @ KSH ${r.unitPrice.toLocaleString()} • ${time}
+                                ${r.customerName ? ` • 👤 ${r.customerName}` : ''}
+                                ${r.notes ? ` • ${r.notes}` : ''}
+                            </div>
+                        </div>
+                        <div class="activity-log-amount">KSH ${r.totalAmount.toLocaleString()}</div>
+                        <button class="activity-log-remove" onclick="removeActivityRecord('${r.id}')" title="Remove">✕</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Persist daily log to localStorage
+        function saveDailyLogToStorage() {
+            const today = new Date().toISOString().split('T')[0];
+            localStorage.setItem(DAILY_LOG_KEY, JSON.stringify(dailyActivityLog));
+            localStorage.setItem(DAILY_LOG_DATE_KEY, today);
+        }
+
+        function loadDailyLogFromStorage() {
+            const today = new Date().toISOString().split('T')[0];
+            const savedDate = localStorage.getItem(DAILY_LOG_DATE_KEY);
+            if (savedDate === today) {
+                try { dailyActivityLog = JSON.parse(localStorage.getItem(DAILY_LOG_KEY) || '[]'); } catch { dailyActivityLog = []; }
+            } else {
+                // New day — clear old log
+                dailyActivityLog = [];
+                localStorage.removeItem(DAILY_LOG_KEY);
+            }
+            renderDailyActivityLog();
+        }
+
+        // Submit Day modal
+        function showSubmitDayModal() {
+            if (dailyActivityLog.length === 0) return;
+            const total = dailyActivityLog.reduce((s, r) => s + r.totalAmount, 0);
+            document.getElementById('submitDayCount').textContent = dailyActivityLog.length;
+            document.getElementById('submitDayTotal').textContent = `KSH ${total.toLocaleString()}`;
+
+            // Build summary by service
+            const byService = {};
+            dailyActivityLog.forEach(r => {
+                if (!byService[r.serviceName]) byService[r.serviceName] = { qty: 0, total: 0, icon: r.icon };
+                byService[r.serviceName].qty += r.quantity;
+                byService[r.serviceName].total += r.totalAmount;
+            });
+            const summaryHtml = Object.entries(byService).map(([name, data]) => `
+                <div style="display:flex; justify-content:space-between; padding:8px 12px; background:rgba(255,255,255,0.03); border-radius:6px; margin-bottom:4px;">
+                    <span>${data.icon} ${name} (x${data.qty})</span>
+                    <strong style="color:var(--success);">KSH ${data.total.toLocaleString()}</strong>
+                </div>
+            `).join('');
+            document.getElementById('submitDaySummary').innerHTML = summaryHtml;
+            document.getElementById('submitDayModal').classList.add('active');
+        }
+
+        function closeSubmitDayModal() {
+            document.getElementById('submitDayModal').classList.remove('active');
+        }
+
+        // Submit daily activity to backend
+        async function submitDailyActivity() {
+            if (dailyActivityLog.length === 0) return;
+            const today = new Date().toISOString().split('T')[0];
+            const payload = {
+                records: dailyActivityLog.map(r => ({
+                    serviceId: r.serviceId,
+                    serviceName: r.serviceName,
+                    quantity: r.quantity,
+                    unitPrice: r.unitPrice,
+                    totalAmount: r.totalAmount,
+                    customerName: r.customerName || '',
+                    notes: r.notes || '',
+                    date: today
+                })),
+                agentUser: currentUser || 'unknown',
+                clientId: '', // Will be set by main process
+                hostname: '',
+                date: today
+            };
+            // Try to get clientId from main process
+            try {
+                const info = await ipcRenderer.invoke('get-client-info');
+                if (info) {
+                    payload.clientId = info.clientId || '';
+                    payload.hostname = info.hostname || '';
+                }
+            } catch { }
+
+            try {
+                const resp = await fetch(`${ACTIVITY_API}/agent/activity-records`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (resp.ok) {
+                    const result = await resp.json();
+                    showToast(`📤 ${result.count} records submitted successfully!`, 'success');
+                    dailyActivityLog = [];
+                    saveDailyLogToStorage();
+                    renderDailyActivityLog();
+                    closeSubmitDayModal();
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast(`❌ Submission failed: ${err.error || 'Unknown error'}`, 'error');
+                }
+            } catch (e) {
+                showToast('❌ Network error. Records saved locally.', 'error');
+            }
+        }
+
+        // Listen for keyboard shortcut triggers from main process
+        ipcRenderer.on('activity-shortcut-triggered', (event, serviceId) => {
+            openActivityModal(serviceId);
+        });
+
+        // Listen for trackable services update broadcast
+        ipcRenderer.on('trackable-services-updated', () => {
+            fetchTrackableServices();
+        });
+
+        // Allow Enter key to submit in the activity modal
+        document.getElementById('activityNotes').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { addActivityRecord(); }
+        });
+        document.getElementById('activityCustomer').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { document.getElementById('activityNotes').focus(); }
+        });
+
+        // ==================== HELP & SHORTCUTS TAB ====================
+
+        function renderHelpShortcuts() {
+            const container = document.getElementById('helpShortcutsList');
+            if (!container) return;
+
+            if (!trackableServices || trackableServices.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">⌨️</div>
+                        <p>No services configured yet.<br>Ask your admin to add trackable services with keyboard shortcuts.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Group by category
+            const categories = {};
+            trackableServices.forEach(svc => {
+                const cat = svc.category || 'General';
+                if (!categories[cat]) categories[cat] = [];
+                categories[cat].push(svc);
+            });
+
+            let html = '';
+            // Services with shortcuts first, then without
+            const sortedCategories = Object.entries(categories).sort(([a], [b]) => a.localeCompare(b));
+
+            sortedCategories.forEach(([category, services]) => {
+                // Sort: services with shortcuts first
+                services.sort((a, b) => {
+                    if (a.keyboardShortcut && !b.keyboardShortcut) return -1;
+                    if (!a.keyboardShortcut && b.keyboardShortcut) return 1;
+                    return a.name.localeCompare(b.name);
+                });
+
+                html += `<div class="help-category-label">${category}</div>`;
+
+                services.forEach(svc => {
+                    const svcColor = svc.color || '#00B4D8';
+                    const unitLabel = (svc.unit || 'per_item').replace('per_', '');
+
+                    // Build keyboard key visual
+                    let shortcutHtml;
+                    if (svc.keyboardShortcut) {
+                        const keys = svc.keyboardShortcut.split('+').map(k => k.trim());
+                        const keysHtml = keys.map((k, i) => {
+                            return (i > 0 ? '<span class="key-plus">+</span>' : '') + `<span class="key">${k}</span>`;
+                        }).join('');
+                        shortcutHtml = `
+                            <div class="help-shortcut-key">
+                                <div class="key-combo">${keysHtml}</div>
+                                <span class="key-label">Shortcut</span>
+                            </div>
+                        `;
+                    } else {
+                        shortcutHtml = `<div class="help-no-shortcut">No shortcut</div>`;
+                    }
+
+                    html += `
+                        <div class="help-shortcut-card" onclick="showSection('activity'); openActivityModal('${svc._id}')" style="" onmouseenter="this.querySelector('.help-svc-icon').style.transform='scale(1.1)'" onmouseleave="this.querySelector('.help-svc-icon').style.transform='scale(1)'">
+                            <div style="position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:4px 0 0 4px;background:${svcColor};"></div>
+                            <div class="help-svc-icon" style="background:${svcColor}18; border:1px solid ${svcColor}33; transition:transform 0.2s;">
+                                ${svc.icon || '📋'}
+                            </div>
+                            <div class="help-svc-info">
+                                <div class="help-svc-name">${svc.name}</div>
+                                ${svc.description ? `<div class="help-svc-desc">${svc.description}</div>` : ''}
+                                <div class="help-svc-price">KSH ${(svc.price || 0).toLocaleString()} <span class="help-svc-unit">/ ${unitLabel}</span></div>
+                            </div>
+                            ${shortcutHtml}
+                        </div>
+                    `;
+                });
+            });
+
+            // Summary stats at bottom
+            const withShortcuts = trackableServices.filter(s => s.keyboardShortcut).length;
+            const total = trackableServices.length;
+            html += `
+                <div style="text-align:center; padding:16px; color:var(--text-secondary); font-size:12px; border-top:1px solid rgba(255,255,255,0.05); margin-top:8px;">
+                    ${total} service${total !== 1 ? 's' : ''} configured • ${withShortcuts} with keyboard shortcut${withShortcuts !== 1 ? 's' : ''}
+                    <br><span style="font-size:11px; opacity:0.7;">Click any service card above to record activity directly</span>
+                </div>
+            `;
+
+            container.innerHTML = html;
+
+            // Also update the nav-tab for help to show active shortcuts count
         }
     </script>
 </body>
