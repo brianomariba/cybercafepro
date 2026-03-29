@@ -655,7 +655,28 @@ ipcMain.on('get-portal-data', async (event) => {
 // Get photocopy sheet readings for portal display
 let photocopyReadings = [];
 
-ipcMain.on('get-photocopy-data', (event) => {
+ipcMain.on('get-photocopy-data', async (event) => {
+    // If we have local in-memory readings from the sheets monitor, use those
+    if (photocopyReadings.length > 0) {
+        event.reply('photocopy-data', { readings: photocopyReadings });
+        return;
+    }
+
+    // Otherwise, fetch from the backend API (historical data from previous sessions)
+    try {
+        const response = await axios.get(`${config.server.baseUrl}/api/v1/agent/page-counter-readings`, {
+            params: { clientId: CLIENT_ID, limit: 100 },
+            timeout: 10000
+        });
+
+        if (response.data && response.data.success && Array.isArray(response.data.readings)) {
+            photocopyReadings = response.data.readings;
+            console.log(`[Portal] Fetched ${photocopyReadings.length} page counter readings from API`);
+        }
+    } catch (e) {
+        console.error('[Portal] Failed to fetch page counter readings from API:', e.message);
+    }
+
     event.reply('photocopy-data', { readings: photocopyReadings });
 });
 

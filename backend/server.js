@@ -3021,6 +3021,42 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/v1/agent/page-counter-readings
+ * Agent fetches its own page counter readings (no admin auth required).
+ * Query params: clientId (required), limit (optional, default 100)
+ * Returns recent readings for display in the portal's photocopy tab.
+ */
+app.get('/api/v1/agent/page-counter-readings', async (req, res) => {
+    try {
+        const { clientId, limit = 100 } = req.query;
+
+        if (!clientId) {
+            return res.status(400).json({ error: 'clientId is required' });
+        }
+
+        const readings = await PageCounterReading.find({ clientId })
+            .sort({ recordedAt: -1 })
+            .limit(parseInt(limit));
+
+        // Transform to the format the portal expects
+        const transformed = readings.map(r => ({
+            printerName: r.printerName,
+            totalSheets: r.totalSheets || r.counterValue,
+            totalPages: r.counterValue,
+            borderlessSheets: r.borderlessSheets || null,
+            isOnline: r.printerOnline !== false,
+            source: r.source || 'api',
+            timestamp: r.recordedAt || r.createdAt
+        }));
+
+        res.json({ success: true, readings: transformed });
+    } catch (error) {
+        console.error('Agent Page Counter Readings Error:', error);
+        res.status(500).json({ error: 'Failed to fetch page counter readings' });
+    }
+});
+
 // ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
 
 /**
