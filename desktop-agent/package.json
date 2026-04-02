@@ -1,34 +1,19 @@
 {
   "name": "desktop-agent",
-  "version": "1.7.0",
-  "description": "Desktop agent for HawkNine Cybercafe Management System",
+  "version": "1.8.0",
+  "description": "HawkNine Desktop Tracking Agent for HawkNine Cybercafe Management System",
   "main": "main.js",
-  "scripts": {
-    "start": "electron .",
-    "build": "electron-builder",
-    "postinstall": "electron-builder install-app-deps",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "build": {
-    "appId": "com.hawkninegroup.agent",
-    "productName": "HawkNine Agent",
-    "win": {
-      "target": "nsis",
-      "icon": "src/logo.jpg"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "HawkNine Agent"
-    }
-  },
-  "keywords": [],
   "author": "HawkNine Group",
   "license": "ISC",
   "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
   "dependencies": {
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3",
+    "ref-struct-di": "^1.1.1",
     "active-win": "6.3.0",
     "auto-launch": "^5.0.5",
     "axios": "1.7.9",
@@ -43,7 +28,25 @@
     "systeminformation": "5.30.1"
   },
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^28.3.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.hawknine.agent",
+    "productName": "HawkNine Agent",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "HackniNeLogo_Icon-Photoroom.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true
+    }
   }
 }

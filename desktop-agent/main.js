@@ -43,7 +43,7 @@ const { getUsbDevices, resetDeviceTracking } = require('./usb-monitor');
 const { getRecentPrintJobs, getRecentCompletedJobs, getInstalledPrinters, getPrintHistory, enablePrintLogging, verifyPrintLogging, getAllPrinterData, detectPrintType, generatePrintJobKey, computeTotalSheets, getSpoolerJobsFast, getJobPageCount, queryJobPageCountAggressive, startPageCountUpdater, startSpoolerWatcher, getRenderedPageCount, startPrintDialogMonitor } = require('./print-monitor');
 const { LiveUrlTracker, getActiveTabUrl, getAllBrowserUrls, getBrowserHistoryFromDB, categorizeUrl: categorizeBrowserUrl } = require('./browser-history');
 const { scanPdfForService } = require('./pdf-scanner');
-const { startSheetsMonitor } = require('./sheets-monitor');
+const { startSheetsMonitor, runSheetsCycle } = require('./sheets-monitor');
 
 // Helper to force browser downloads to Downloads folder via Registry Policies
 function forceDownloadsFolder() {
@@ -655,6 +655,61 @@ ipcMain.on('get-portal-data', async (event) => {
 // Get photocopy sheet readings for portal display
 let photocopyReadings = [];
 
+/**
+ * Trigger an on-demand photocopy sheet reading.
+ * Called at specific interaction points instead of periodic polling.
+ * This replaces the old 60-second interval to avoid unnecessary flicker.
+ * 
+ * Trigger points:
+ *   - login-baseline: When user logs in (capture starting sheet count)
+ *   - session-end: When session ends via logout/admin disconnect/lock/disable
+ *   - after-sale: After every successful sale
+ *   - submit-activity: After submitting daily activity records
+ * 
+ * @param {string} reason - Why the collection was triggered (for logging & API)
+ */
+async function triggerPhotocopyCollection(reason) {
+    console.log(`[PHOTOCOPY] Triggered: ${reason}`);
+    try {
+        const counters = await runSheetsCycle();
+        if (counters.length > 0) {
+            console.log(`[PHOTOCOPY] Got readings for ${counters.length} printer(s) [trigger: ${reason}]`);
+
+            // Update local readings cache
+            for (const c of counters) {
+                photocopyReadings.push({
+                    ...c,
+                    timestamp: new Date().toISOString(),
+                    trigger: reason
+                });
+            }
+            if (photocopyReadings.length > 100) {
+                photocopyReadings = photocopyReadings.slice(-100);
+            }
+
+            // Update portal UI if open
+            if (portalWindow && !portalWindow.isDestroyed()) {
+                portalWindow.webContents.send('photocopy-data', { readings: photocopyReadings });
+            }
+
+            // Send to API
+            const payload = {
+                clientId: CLIENT_ID,
+                hostname: os.hostname(),
+                counters,
+                trigger: reason,
+                sessionUser: currentSession?.user || null
+            };
+            await sendToServer(`${config.server.baseUrl}/api/v1/agent/page-counter`, payload);
+            console.log(`[PHOTOCOPY] Sent readings to API [trigger: ${reason}]`);
+        } else {
+            console.log(`[PHOTOCOPY] No readings returned [trigger: ${reason}]`);
+        }
+    } catch (e) {
+        console.error(`[PHOTOCOPY] Collection failed [trigger: ${reason}]:`, e.message);
+    }
+}
+
 ipcMain.on('get-photocopy-data', async (event) => {
     // If we have local in-memory readings from the sheets monitor, use those
     if (photocopyReadings.length > 0) {
@@ -713,6 +768,10 @@ ipcMain.on('record-sale', async (event, saleData) => {
                     message: `Sold ${quantity}x ${itemName} for KSH ${total.toLocaleString()}`
                 });
                 console.log(`[Portal] Sale recorded: ${quantity}x ${itemName}`);
+                // Trigger photocopy reading after sale (fire-and-forget)
+                triggerPhotocopyCollection('after-sale').catch(e =>
+                    console.error('[PHOTOCOPY] Post-sale capture failed:', e.message)
+                );
             } else {
                 event.reply('sale-result', { success: false, message: response.data.error || 'Sale failed' });
             }
@@ -725,6 +784,10 @@ ipcMain.on('record-sale', async (event, saleData) => {
                 success: true,
                 message: `Sold ${quantity}x ${itemName} (will sync when online)`
             });
+            // Trigger photocopy reading after sale (fire-and-forget)
+            triggerPhotocopyCollection('after-sale').catch(e =>
+                console.error('[PHOTOCOPY] Post-sale capture failed:', e.message)
+            );
         }
     } else {
         // Offline mode - queue the action
@@ -735,6 +798,10 @@ ipcMain.on('record-sale', async (event, saleData) => {
             message: `Sold ${quantity}x ${itemName} (offline - will sync later)`
         });
         console.log(`[Portal] Offline sale queued: ${quantity}x ${itemName}`);
+        // Trigger photocopy reading after sale (fire-and-forget)
+        triggerPhotocopyCollection('after-sale').catch(e =>
+            console.error('[PHOTOCOPY] Post-sale capture failed:', e.message)
+        );
     }
 });
 
@@ -1281,6 +1348,11 @@ async function startSession(username) {
     createPortalWindow(username);
 
     console.log(`Session Started: ${username} (${currentSession.id})`);
+
+    // Capture baseline photocopy reading at session start (fire-and-forget)
+    triggerPhotocopyCollection('login-baseline').catch(e =>
+        console.error('[PHOTOCOPY] Login baseline failed:', e.message)
+    );
 }
 
 // Create Portal Window
@@ -1347,6 +1419,14 @@ function createPortalWindow(username) {
 
 async function endSession() {
     if (!currentSession) return;
+
+    // Capture final photocopy reading before session cleanup
+    // This covers: logout, admin disconnect, admin lock, user disabled
+    try {
+        await triggerPhotocopyCollection('session-end');
+    } catch (e) {
+        console.error('[PHOTOCOPY] Session-end capture failed:', e.message);
+    }
 
     const endTime = new Date().toISOString();
 
@@ -3596,6 +3676,10 @@ ipcMain.on('submit-activity-records', async (event) => {
                 batchId: response.data.batchId
             });
             console.log(`[ACTIVITY] Submitted ${count} records to backend`);
+            // Trigger photocopy reading after activity submission (fire-and-forget)
+            triggerPhotocopyCollection('submit-activity').catch(e =>
+                console.error('[PHOTOCOPY] Post-submit capture failed:', e.message)
+            );
         } else {
             event.reply('submit-activity-result', {
                 success: false,
@@ -3633,28 +3717,10 @@ app.whenReady().then(() => {
     // Periodically retry queued data
     setInterval(() => dataQueue.processQueue(), 30000);
 
-    // Start offscreen stealth sheets monitor
-    // Reads Total Sheets from all printers via POI dialog, sends to API
-    startSheetsMonitor({
-        apiBase: config.server.baseUrl,
-        clientId: CLIENT_ID,
-        hostname: os.hostname(),
-        intervalMs: 60000,
-        onReadings: (counters) => {
-            for (const c of counters) {
-                photocopyReadings.push({
-                    ...c,
-                    timestamp: new Date().toISOString()
-                });
-            }
-            if (photocopyReadings.length > 100) {
-                photocopyReadings = photocopyReadings.slice(-100);
-            }
-            if (portalWindow && !portalWindow.isDestroyed()) {
-                portalWindow.webContents.send('photocopy-data', { readings: photocopyReadings });
-            }
-        }
-    }, sendToServer);
+    // Photocopy sheet readings are now triggered ON-DEMAND instead of periodic polling.
+    // Triggers: login-baseline, session-end, after-sale, submit-activity
+    // See triggerPhotocopyCollection() for implementation.
+    // This eliminates the 60-second flicker from the old startSheetsMonitor interval.
 });
 
 app.on('window-all-closed', () => {
