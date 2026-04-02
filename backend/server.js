@@ -2923,7 +2923,7 @@ app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
  */
 app.post('/api/v1/agent/page-counter', async (req, res) => {
     try {
-        const { clientId, hostname, counters } = req.body;
+        const { clientId, hostname, counters, trigger } = req.body;
 
         if (!clientId || !counters || !Array.isArray(counters)) {
             return res.status(400).json({ error: 'clientId and counters array are required' });
@@ -2979,7 +2979,7 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 }
             }
 
-            // Create new reading with normalized printer name
+            const activeTrigger = trigger || counter.source || 'auto';
             const reading = await PageCounterReading.create({
                 printerName: normalizedName,
                 counterValue: primaryCounter,
@@ -2993,17 +2993,17 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
                 totalSheets: totalSheetsValue,
                 borderlessSheets: counter.borderlessSheets || null,
                 firstPrintDate: counter.firstPrintDate || null,
-                source: counter.source || 'agent_auto',
+                source: activeTrigger,
                 clientId: clientId,
                 hostname: hostname,
                 printerOnline: counter.isOnline === true,
-                notes: `Auto-collected by agent (${counter.source || 'auto'})${totalSheetsValue ? ' [HW sheets: ' + totalSheetsValue + ']' : ''}`,
+                notes: `Auto-collected by agent (${activeTrigger})${totalSheetsValue ? ' [HW sheets: ' + totalSheetsValue + ']' : ''}`,
                 recordedBy: 'agent',
                 recordedAt: new Date()
             });
 
             const pagesSinceLast = lastReading ? primaryCounter - lastReading.counterValue : 0;
-            console.log(`[PAGE COUNTER] Auto: ${normalizedName} = ${primaryCounter}${totalSheetsValue ? ' (HW sheets)' : ' (registry)'} (+${pagesSinceLast}) via ${counter.source} from ${clientId}`);
+            console.log(`[PAGE COUNTER] Auto: ${normalizedName} = ${primaryCounter}${totalSheetsValue ? ' (HW sheets)' : ' (registry)'} (+${pagesSinceLast}) via ${activeTrigger} from ${clientId}`);
 
             results.push({
                 printerName: normalizedName,
@@ -3014,6 +3014,7 @@ app.post('/api/v1/agent/page-counter', async (req, res) => {
             });
         }
 
+        io.emit('new-log', { type: 'photocopy' });
         res.json({ success: true, results });
     } catch (error) {
         console.error('Agent Page Counter Error:', error);
@@ -6504,7 +6505,7 @@ app.put('/api/v1/admin/inventory/:id/access-control', requireAdminAuth, async (r
  */
 app.post('/api/v1/inventory/:id/sell', async (req, res) => {
     try {
-        const { quantity = 1, reason, clientId, paymentMethod } = req.body;
+        const { quantity = 1, reason, clientId, paymentMethod, sessionUser } = req.body;
         const item = await InventoryItem.findById(req.params.id);
 
         if (!item) {
@@ -6515,8 +6516,8 @@ app.post('/api/v1/inventory/:id/sell', async (req, res) => {
             return res.status(400).json({ error: 'Insufficient stock' });
         }
 
-        // Try to identify the seller from auth token
-        let sellerName = clientId || 'admin';
+        // Try to identify the seller from auth token, fallback to explicit sessionUser, then clientId
+        let sellerName = sessionUser || clientId || 'admin';
         let sellerType = 'unknown';
         try {
             const authHeader = req.headers.authorization;
@@ -7867,6 +7868,32 @@ app.get('/api/v1/agent/submissions', async (req, res) => {
         res.json(submissions);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/sales-history
+ * Get sales history for the agent portal (inventory sales)
+ */
+app.get('/api/v1/agent/sales-history', async (req, res) => {
+    try {
+        const { seller, clientId, limit = 200 } = req.query;
+        let query = {};
+        
+        if (seller) {
+            query.seller = seller;
+        } else if (clientId) {
+            query.clientId = clientId;
+        }
+
+        const sales = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+            
+        res.json(sales);
+    } catch (error) {
+        console.error('[AGENT] Failed to fetch sales history:', error);
+        res.status(500).json({ error: 'Failed to fetch sales history' });
     }
 });
 

@@ -24,7 +24,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData, getPageCounterReadings, deletePageCounterReading, getPhotocopyData } from '../services/api';
+import { getPrintJobs, getPrinters, connectSocket, removeConnectedPrinters, removeSinglePrinter, deleteAllPrinterData, getPageCounterReadings, deletePageCounterReading, getPhotocopyData, getActivityRecords } from '../services/api';
 
 dayjs.extend(relativeTime);
 
@@ -36,7 +36,7 @@ const { RangePicker } = DatePicker;
 const formatKSH = (amount) => `KSH ${Number(amount || 0).toLocaleString()}`;
 
 // ==================== PHOTOCOPY TAB COMPONENT ====================
-function PhotocopyTracker({ printers }) {
+function PhotocopyTracker({ printers, refreshTrigger }) {
     const [readings, setReadings] = useState([]);
     const [photocopyData, setPhotocopyData] = useState(null);
     const [selectedPrinter, setSelectedPrinter] = useState(null);
@@ -83,7 +83,7 @@ function PhotocopyTracker({ printers }) {
 
     useEffect(() => {
         fetchPhotocopyInfo();
-    }, [selectedPrinter]);
+    }, [selectedPrinter, refreshTrigger]);
 
     const handleDeleteReading = async (id) => {
         try {
@@ -505,6 +505,169 @@ function PhotocopyTracker({ printers }) {
 }
 // ==================== END PHOTOCOPY TRACKER ====================
 
+// ==================== PHOTOCOPY AUDIT TAB ====================
+function PhotocopyAudit({ printers, refreshTrigger }) {
+    const [loading, setLoading] = useState(false);
+    const [dateRange, setDateRange] = useState([dayjs().startOf('week'), dayjs().endOf('day')]);
+    const [machineData, setMachineData] = useState(0);
+    const [submittedData, setSubmittedData] = useState(0);
+    const [agentBreakdown, setAgentBreakdown] = useState([]);
+
+    const allPrinterNames = useMemo(() => {
+        const names = new Set();
+        (printers || []).forEach(client => {
+            (client.printers || []).forEach(p => {
+                if (p.name) names.add(p.name);
+            });
+        });
+        return [...names].sort();
+    }, [printers]);
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            let totalHardware = 0;
+            for (const pName of allPrinterNames) {
+                const res = await getPhotocopyData({ printerName: pName });
+                if (res && res.intervals) {
+                    const filtered = res.intervals.filter(interval => {
+                        if (!dateRange || !dateRange[0] || !dateRange[1]) return true;
+                        const start = dayjs(interval.startReading.recordedAt);
+                        const end = dayjs(interval.endReading.recordedAt);
+                        return end.isAfter(dateRange[0].startOf('day')) && start.isBefore(dateRange[1].endOf('day'));
+                    });
+                    totalHardware += filtered.reduce((s, i) => s + (i.photocopies || 0), 0);
+                }
+            }
+            setMachineData(totalHardware);
+
+            const params = {};
+            if (dateRange && dateRange[0]) params.startDate = dateRange[0].format('YYYY-MM-DD');
+            if (dateRange && dateRange[1]) params.endDate = dateRange[1].format('YYYY-MM-DD');
+            const records = await getActivityRecords(params);
+            
+            const copyRecords = (records || []).filter(r => {
+                const n = (r.serviceName || '').toLowerCase();
+                return n.includes('copy') || n.includes('photocopy');
+            });
+            const totalSubmitted = copyRecords.reduce((s, r) => s + (r.quantity || 0), 0);
+            setSubmittedData(totalSubmitted);
+
+            const groupings = {};
+            copyRecords.forEach(r => {
+                const user = r.agentUser || 'Unknown';
+                if (!groupings[user]) groupings[user] = { user, quantity: 0, revenue: 0 };
+                groupings[user].quantity += (r.quantity || 0);
+                groupings[user].revenue += (r.totalAmount || 0);
+            });
+            setAgentBreakdown(Object.values(groupings).sort((a,b) => b.quantity - a.quantity));
+
+        } catch (e) {
+            console.error('Audit fetch error', e);
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        if (allPrinterNames.length > 0) {
+            fetchData();
+        }
+    }, [allPrinterNames, dateRange, refreshTrigger]);
+
+    const difference = submittedData - machineData;
+    const isDeficit = difference < 0; 
+    const deficitColor = isDeficit ? '#ff4d4f' : '#52c41a';
+
+    const columns = [
+        { title: 'Agent Name', dataIndex: 'user', key: 'user', render: v => <Tag color="blue">{v}</Tag> },
+        { title: 'Submitted Copies', dataIndex: 'quantity', key: 'quantity', render: v => <Text strong style={{ color: '#00B4D8' }}>{v.toLocaleString()} sheets</Text> },
+        { title: 'Reported Revenue', dataIndex: 'revenue', key: 'revenue', render: v => <Text style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
+    ];
+
+    return (
+        <div>
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                <Text type="secondary">Evaluation Period:</Text>
+                <RangePicker 
+                    value={dateRange} 
+                    onChange={setDateRange} 
+                    presets={[
+                        { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                        { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
+                        { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                    ]}
+                />
+                <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Compare Data</Button>
+            </div>
+
+            <Row gutter={[16, 16]}>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: '4px solid #7b2cbf', height: '100%', background: 'rgba(123,44,191,0.03)' }}>
+                        <Statistic 
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Hardware Photocopies (Machine)</span>}
+                            value={machineData} 
+                            prefix={<PrinterOutlined />} 
+                            suffix="sheets"
+                            valueStyle={{ color: '#7b2cbf' }}
+                        />
+                        <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+                            Calculated automatically using exact printer usage counters.
+                        </Text>
+                    </Card>
+                </Col>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
+                        <Statistic 
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Agent Submissions (Inventory)</span>}
+                            value={submittedData} 
+                            prefix={<DesktopOutlined />} 
+                            suffix="sheets"
+                            valueStyle={{ color: '#00B4D8' }}
+                        />
+                        <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+                            Daily Activity records manually logged as "Photocopy".
+                        </Text>
+                    </Card>
+                </Col>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: `4px solid ${deficitColor}`, height: '100%', background: isDeficit ? 'rgba(255,77,79,0.08)' : 'rgba(82,196,26,0.08)' }}>
+                        <Statistic 
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Discrepancy (Submitted - Machine)</span>}
+                            value={Math.abs(difference)} 
+                            prefix={isDeficit ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
+                            suffix="sheets"
+                            valueStyle={{ color: deficitColor, fontWeight: 'bold' }}
+                        />
+                        <Text style={{ fontSize: 12, marginTop: 8, display: 'block', color: deficitColor }}>
+                            {isDeficit ? `Agents under-reported by ${Math.abs(difference)} photocopies in this period.` : `Agents accurately matched or exceeded hardware counts!`}
+                        </Text>
+                    </Card>
+                </Col>
+            </Row>
+
+            <Card
+                size="small"
+                title="Agent Submission Breakdown"
+                style={{ marginTop: 24 }}
+            >
+                <Table
+                    dataSource={agentBreakdown}
+                    columns={columns}
+                    rowKey="user"
+                    pagination={false}
+                    size="small"
+                    locale={{ emptyText: <Empty description="No agents submitted photocopies in this date range" /> }}
+                />
+            </Card>
+
+            <Card size="small" style={{ marginTop: 24, background: 'rgba(255,255,255,0.02)' }} title={<Space><FileTextOutlined /><span>About Data Comparison</span></Space>}>
+                <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>This tool cross-references the <strong>untamperable hardware sheet metrics</strong> (pulled directly from EPSON printers via triggers) against the manual <strong>Daily Activity records</strong> submitted by agents. A red discrepancy indicates resources were consumed by the machine but not officially financially accounted for by the user submissions.</p>
+            </Card>
+        </div>
+    );
+}
+// ==================== END PHOTOCOPY AUDIT TAB ====================
+
 function PrintManager() {
     const [printJobs, setPrintJobs] = useState([]);
     const [printers, setPrinters] = useState([]);
@@ -521,6 +684,7 @@ function PrintManager() {
     const [filterComputer, setFilterComputer] = useState('all');
     const [loading, setLoading] = useState(false);
     const [lastUpdated, setLastUpdated] = useState(new Date());
+    const [photocopyRefresh, setPhotocopyRefresh] = useState(0);
     const [totals, setTotals] = useState({
         totalJobs: 0,
         bwPages: 0,
@@ -601,6 +765,7 @@ function PrintManager() {
             onNewLog: (log) => {
                 if (log.type === 'print') fetchData();
                 if (log.type === 'printers') fetchData();
+                if (log.type === 'photocopy') setPhotocopyRefresh(prev => prev + 1);
             }
         });
 
@@ -1156,7 +1321,12 @@ function PrintManager() {
                     {
                         key: 'photocopies',
                         label: <span><PieChartOutlined style={{ marginRight: 6 }} /> Photocopy Tracking</span>,
-                        children: <PhotocopyTracker printers={printers} />
+                        children: <PhotocopyTracker printers={printers} refreshTrigger={photocopyRefresh} />
+                    },
+                    {
+                        key: 'audit',
+                        label: <span><FileTextOutlined style={{ marginRight: 6 }} /> Comparison & Audit</span>,
+                        children: <PhotocopyAudit printers={printers} refreshTrigger={photocopyRefresh} />
                     }
                 ]}
             />

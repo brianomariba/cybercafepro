@@ -55,3 +55,4 @@ coverage/
 
 # Downloaded installers (too large for git)
 backend/downloads/*.exe
+/*.exe
