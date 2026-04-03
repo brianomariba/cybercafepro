@@ -20,7 +20,8 @@ import {
     AppstoreOutlined,
     BarsOutlined,
     BarChartOutlined,
-    PieChartOutlined
+    PieChartOutlined,
+    UserOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -512,6 +513,7 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
     const [machineData, setMachineData] = useState(0);
     const [submittedData, setSubmittedData] = useState(0);
     const [agentBreakdown, setAgentBreakdown] = useState([]);
+    const [detailedCopyRecords, setDetailedCopyRecords] = useState([]);
 
     const allPrinterNames = useMemo(() => {
         const names = new Set();
@@ -554,13 +556,29 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
             setSubmittedData(totalSubmitted);
 
             const groupings = {};
+            const detailedRecords = [];
             copyRecords.forEach(r => {
                 const user = r.agentUser || 'Unknown';
-                if (!groupings[user]) groupings[user] = { user, quantity: 0, revenue: 0 };
+                const hasMachine = !!(r.hostname && r.hostname.trim());
+                if (!groupings[user]) groupings[user] = { user, quantity: 0, revenue: 0, machineSubmitted: 0, selfSubmitted: 0, machineRevenue: 0, selfRevenue: 0 };
                 groupings[user].quantity += (r.quantity || 0);
                 groupings[user].revenue += (r.totalAmount || 0);
+                if (hasMachine) {
+                    groupings[user].machineSubmitted += (r.quantity || 0);
+                    groupings[user].machineRevenue += (r.totalAmount || 0);
+                } else {
+                    groupings[user].selfSubmitted += (r.quantity || 0);
+                    groupings[user].selfRevenue += (r.totalAmount || 0);
+                }
+                detailedRecords.push({
+                    ...r,
+                    key: r._id || `${user}-${r.submittedAt}-${Math.random()}`,
+                    source: hasMachine ? 'machine' : 'self',
+                    station: r.hostname || '—',
+                });
             });
             setAgentBreakdown(Object.values(groupings).sort((a,b) => b.quantity - a.quantity));
+            setDetailedCopyRecords(detailedRecords);
 
         } catch (e) {
             console.error('Audit fetch error', e);
@@ -580,8 +598,52 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
 
     const columns = [
         { title: 'Agent Name', dataIndex: 'user', key: 'user', render: v => <Tag color="blue">{v}</Tag> },
-        { title: 'Submitted Copies', dataIndex: 'quantity', key: 'quantity', render: v => <Text strong style={{ color: '#00B4D8' }}>{v.toLocaleString()} sheets</Text> },
+        { title: 'Total Copies', dataIndex: 'quantity', key: 'quantity', render: v => <Text strong style={{ color: '#00B4D8' }}>{v.toLocaleString()} sheets</Text> },
+        { 
+            title: <span><DesktopOutlined style={{ marginRight: 4, color: '#7b2cbf' }} />Machine Submitted</span>, 
+            dataIndex: 'machineSubmitted', key: 'machineSubmitted', 
+            render: (v, row) => (
+                <Tooltip title={`Revenue: ${formatKSH(row.machineRevenue || 0)}`}>
+                    <Tag color="purple" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Tag>
+                </Tooltip>
+            )
+        },
+        { 
+            title: <span><UserOutlined style={{ marginRight: 4, color: '#ff9500' }} />Self Submitted</span>, 
+            dataIndex: 'selfSubmitted', key: 'selfSubmitted', 
+            render: (v, row) => (
+                <Tooltip title={`Revenue: ${formatKSH(row.selfRevenue || 0)}`}>
+                    <Tag color="orange" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Tag>
+                </Tooltip>
+            )
+        },
         { title: 'Reported Revenue', dataIndex: 'revenue', key: 'revenue', render: v => <Text style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
+    ];
+
+    const detailColumns = [
+        { 
+            title: 'Date', dataIndex: 'date', key: 'date', width: 110,
+            render: (v, r) => <Text style={{ fontSize: 12 }}>{v || dayjs(r.submittedAt).format('YYYY-MM-DD')}</Text>
+        },
+        { title: 'Service', dataIndex: 'serviceName', key: 'serviceName', render: v => <Text>{v}</Text> },
+        { title: 'Qty', dataIndex: 'quantity', key: 'quantity', width: 70, render: v => <Tag color="blue">{v}</Tag> },
+        { title: 'Unit Price', dataIndex: 'unitPrice', key: 'unitPrice', width: 100, render: v => <Text style={{ fontFamily: 'JetBrains Mono', fontSize: 12 }}>{formatKSH(v)}</Text> },
+        { title: 'Total', dataIndex: 'totalAmount', key: 'totalAmount', width: 100, render: v => <Text strong style={{ color: '#00ff88', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
+        { title: 'Agent', dataIndex: 'agentUser', key: 'agentUser', width: 100, render: v => <Tag color="blue">{v}</Tag> },
+        { 
+            title: 'Station', dataIndex: 'station', key: 'station', width: 140,
+            render: v => v && v !== '—' ? <Tag color="purple" icon={<DesktopOutlined />}>{v}</Tag> : <Text type="secondary">—</Text>
+        },
+        { 
+            title: 'Source', dataIndex: 'source', key: 'source', width: 130,
+            render: v => v === 'machine' 
+                ? <Tag color="purple" icon={<DesktopOutlined />}>Machine</Tag> 
+                : <Tag color="orange" icon={<UserOutlined />}>Self</Tag>
+        },
+        { 
+            title: 'Submitted', dataIndex: 'submittedAt', key: 'submittedAt', width: 150,
+            render: v => <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(v).format('MMM D, hh:mm A')}</Text>
+        },
     ];
 
     return (
@@ -657,6 +719,48 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                     pagination={false}
                     size="small"
                     locale={{ emptyText: <Empty description="No agents submitted photocopies in this date range" /> }}
+                    summary={() => {
+                        if (agentBreakdown.length <= 1) return null;
+                        const totals = agentBreakdown.reduce((acc, r) => ({
+                            quantity: acc.quantity + r.quantity,
+                            machineSubmitted: acc.machineSubmitted + r.machineSubmitted,
+                            selfSubmitted: acc.selfSubmitted + r.selfSubmitted,
+                            revenue: acc.revenue + r.revenue,
+                        }), { quantity: 0, machineSubmitted: 0, selfSubmitted: 0, revenue: 0 });
+                        return (
+                            <Table.Summary fixed>
+                                <Table.Summary.Row>
+                                    <Table.Summary.Cell index={0}><Text strong style={{ color: '#7b2cbf' }}>Totals</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={1}><Text strong style={{ color: '#00B4D8' }}>{totals.quantity.toLocaleString()} sheets</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={2}><Tag color="purple" style={{ fontWeight: 700 }}>{totals.machineSubmitted.toLocaleString()} sheets</Tag></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={3}><Tag color="orange" style={{ fontWeight: 700 }}>{totals.selfSubmitted.toLocaleString()} sheets</Tag></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={4}><Text strong style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(totals.revenue)}</Text></Table.Summary.Cell>
+                                </Table.Summary.Row>
+                            </Table.Summary>
+                        );
+                    }}
+                />
+            </Card>
+
+            {/* Detailed Activity Records */}
+            <Card
+                size="small"
+                title={
+                    <Space>
+                        <FileTextOutlined style={{ color: '#00B4D8' }} />
+                        <span>Submitted Activity Records ({detailedCopyRecords.length})</span>
+                    </Space>
+                }
+                style={{ marginTop: 16 }}
+            >
+                <Table
+                    dataSource={detailedCopyRecords}
+                    columns={detailColumns}
+                    rowKey="key"
+                    pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t) => `${t} records` }}
+                    size="small"
+                    scroll={{ x: 900 }}
+                    locale={{ emptyText: <Empty description="No photocopy activity records in this date range" /> }}
                 />
             </Card>
 
