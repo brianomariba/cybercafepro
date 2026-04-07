@@ -1279,9 +1279,15 @@
         <!-- Templates Section -->
         <div class="page-section" id="section-templates">
             <div class="card">
-                <div class="card-header">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
                     <h2 class="card-title">📄 Templates</h2>
-                    <button class="btn btn-small btn-secondary" onclick="refreshData('templates')">↻ Refresh</button>
+                    <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
+                        <input type="text" class="form-input btn-small" id="templateSearch" placeholder="Search templates..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="templateCategory" style="max-width: 150px;">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('templates')">↻</button>
+                    </div>
                 </div>
                 <div class="grid grid-3" id="templatesGrid">
                     <div class="empty-state">
@@ -1739,6 +1745,7 @@
         let allInventory = [];
         let allServices = [];
         let allSalesHistory = [];
+        let allTemplates = [];
         let correctionTarget = null; // { transactionId, itemName, qty, amount }
         let correctionTimerInterval = null;
 
@@ -1765,6 +1772,8 @@
             document.getElementById('serviceCategory').addEventListener('change', filterAndRenderServices);
             document.getElementById('salesHistorySearch').addEventListener('input', filterAndRenderSalesHistory);
             document.getElementById('salesHistoryFilter').addEventListener('change', filterAndRenderSalesHistory);
+            document.getElementById('templateSearch').addEventListener('input', filterAndRenderTemplates);
+            document.getElementById('templateCategory').addEventListener('change', filterAndRenderTemplates);
 
             // File count indicator for multi-file upload
             document.getElementById('subFile').addEventListener('change', function() {
@@ -1813,7 +1822,11 @@
                 updateCategoryDropdown('serviceCategory', allServices);
                 filterAndRenderServices();
             }
-            if (data.templates) renderTemplates(data.templates);
+            if (data.templates) {
+                allTemplates = data.templates;
+                updateCategoryDropdown('templateCategory', allTemplates);
+                filterAndRenderTemplates();
+            }
             if (data.guides) renderGuides(data.guides);
             if (data.printers) renderPrinters(data.printers);
             if (data.pendingActions) updatePendingSection(data.pendingActions);
@@ -1988,10 +2001,24 @@
             `).join('');
         }
 
+        function filterAndRenderTemplates() {
+            const query = (document.getElementById('templateSearch').value || '').toLowerCase().trim();
+            const cat = document.getElementById('templateCategory').value;
+            let filtered = allTemplates;
+            if (query) {
+                filtered = filtered.filter(t => (t.title || '').toLowerCase().includes(query) || (t.description || '').toLowerCase().includes(query) || (t.type || '').toLowerCase().includes(query));
+            }
+            if (cat && cat !== 'all') {
+                filtered = filtered.filter(t => (t.category || 'general').toLowerCase() === cat.toLowerCase());
+            }
+            renderTemplates(filtered);
+        }
+
         function renderTemplates(templates) {
             const grid = document.getElementById('templatesGrid');
             if (!templates || templates.length === 0) {
-                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📄</div><p>No templates available</p></div>';
+                const query = (document.getElementById('templateSearch').value || '').trim();
+                grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📄</div><p>${query ? 'No templates matching "' + query + '"' : 'No templates available'}</p></div>`;
                 return;
             }
 
@@ -3032,7 +3059,7 @@
                     notes: r.notes || '',
                     date: today
                 })),
-                agentUser: currentUser || 'unknown',
+                agentUser: (currentUser && (currentUser.username || currentUser.name)) || 'unknown',
                 clientId: '', // Will be set by main process
                 hostname: '',
                 date: today
@@ -3059,6 +3086,9 @@
                     saveDailyLogToStorage();
                     renderDailyActivityLog();
                     closeSubmitDayModal();
+                    
+                    // Trigger photocopy data collection
+                    ipcRenderer.send('activity-submitted');
                 } else {
                     const err = await resp.json().catch(() => ({}));
                     showToast(`❌ Submission failed: ${err.error || 'Unknown error'}`, 'error');
