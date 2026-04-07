@@ -2650,11 +2650,16 @@ app.get('/api/v1/admin/print-jobs', async (req, res) => {
     try {
         // Always fetch fresh pricing from DB (reflects admin changes immediately)
         const currentPricing = await getPricing();
-        const { limit = 100, clientId, user, printType } = req.query;
+        const { limit = 500, clientId, user, printType, startDate, endDate } = req.query;
 
         const query = { type: 'print' };
         if (clientId) query.clientId = clientId;
         if (user) query.sessionUser = { $regex: user, $options: 'i' };
+        if (startDate || endDate) {
+            query.receivedAt = {};
+            if (startDate) query.receivedAt.$gte = new Date(startDate + 'T00:00:00');
+            if (endDate) query.receivedAt.$lte = new Date(endDate + 'T23:59:59');
+        }
 
         const logs = await Log.find(query)
             .sort({ receivedAt: -1 })
@@ -6882,10 +6887,17 @@ app.get('/api/v1/admin/inventory/stats', requireAdminAuth, async (req, res) => {
  */
 app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
     try {
-        const { limit = 100, type } = req.query;
+        const { limit = 500, type, startDate, endDate } = req.query;
         const query = {};
         // Allow querying by specific transaction types (e.g. 'inventory-sale')
         if (type) query.type = type;
+
+        // Date range filtering
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate + 'T00:00:00');
+            if (endDate) query.createdAt.$lte = new Date(endDate + 'T23:59:59');
+        }
 
         const transactions = await Transaction.find(query)
             .sort({ createdAt: -1 }) // Newest first

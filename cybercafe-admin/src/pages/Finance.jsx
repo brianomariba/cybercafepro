@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Table, Tag, Button, Space, Typography, Input, Select, Tooltip, Badge, Statistic, Row, Col, DatePicker, Modal, Tabs, Avatar, Progress, Spin, Empty } from 'antd';
 import {
     DollarOutlined,
@@ -22,9 +22,14 @@ import {
     ReloadOutlined,
     CheckCircleOutlined,
     ShopOutlined,
+    FileTextOutlined,
+    UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getTransactions, getTransactionSummary, getSessions, getComputers } from '../services/api';
+import isBetween from 'dayjs/plugin/isBetween';
+import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getActivityRecords } from '../services/api';
+
+dayjs.extend(isBetween);
 
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -37,21 +42,28 @@ const formatKSH = (amount) => {
 
 function Finance() {
     const [transactions, setTransactions] = useState([]);
-    const [summary, setSummary] = useState({ today: 0, week: 0, month: 0 });
+    const [printJobs, setPrintJobs] = useState([]);
+    const [printTotals, setPrintTotals] = useState({ totalJobs: 0, bwPages: 0, colorPages: 0, bwRevenue: 0, colorRevenue: 0, totalRevenue: 0 });
+    const [activityRecords, setActivityRecords] = useState([]);
     const [sessions, setSessions] = useState([]);
     const [computers, setComputers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filterType, setFilterType] = useState('all');
     const [searchText, setSearchText] = useState('');
+    const [dateRange, setDateRange] = useState([dayjs().startOf('day'), dayjs().endOf('day')]);
 
-    // Fetch all data
+    // Fetch all data with date range
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [txnData, summaryData, sessionData, computerData] = await Promise.all([
-                getTransactions({ limit: 100 }).catch(() => []),
-                getTransactionSummary().catch(() => ({ today: 0, week: 0, month: 0 })),
-                getSessions({ limit: 50, type: 'LOGOUT' }).catch(() => []),
+            const params = {};
+            if (dateRange && dateRange[0]) params.startDate = dateRange[0].format('YYYY-MM-DD');
+            if (dateRange && dateRange[1]) params.endDate = dateRange[1].format('YYYY-MM-DD');
+
+            const [txnData, printData, activityData, computerData] = await Promise.all([
+                getTransactions({ limit: 500, ...params }).catch(() => []),
+                getPrintJobs({ limit: 500, ...params }).catch(() => ({ jobs: [], totals: {} })),
+                getActivityRecords(params).catch(() => []),
                 getComputers().catch(() => []),
             ]);
 
@@ -65,25 +77,23 @@ function Finance() {
                 return [];
             };
 
-            // Helper to ensure summary numbers
-            const parseSummary = (data) => {
-                const s = data && typeof data === 'object' ? data : {};
-                return {
-                    today: Number(s.today) || 0,
-                    week: Number(s.week) || 0,
-                    month: Number(s.month) || 0
-                };
-            };
-
             setTransactions(ensureArray(txnData));
-            setSummary(parseSummary(summaryData));
-            setSessions(ensureArray(sessionData));
+            
+            // Print jobs
+            const pJobs = printData?.jobs || [];
+            setPrintJobs(pJobs);
+            setPrintTotals(printData?.totals || { totalJobs: 0, bwPages: 0, colorPages: 0, bwRevenue: 0, colorRevenue: 0, totalRevenue: 0 });
+
+            // Activity records
+            setActivityRecords(ensureArray(activityData));
+
             setComputers(ensureArray(computerData));
         } catch (error) {
             console.error('Failed to fetch finance data:', error);
             setTransactions([]);
-            setSummary({ today: 0, week: 0, month: 0 });
-            setSessions([]);
+            setPrintJobs([]);
+            setPrintTotals({ totalJobs: 0, bwPages: 0, colorPages: 0, bwRevenue: 0, colorRevenue: 0, totalRevenue: 0 });
+            setActivityRecords([]);
             setComputers([]);
         }
         setLoading(false);
@@ -91,61 +101,115 @@ function Finance() {
 
     useEffect(() => {
         fetchData();
-        // Refresh every 30 seconds
-        const interval = setInterval(fetchData, 30000);
-        return () => clearInterval(interval);
-    }, []);
+    }, [dateRange]);
 
-    // Calculate stats from real data
-    const stats = {
-        totalRevenue: summary.today || 0,
-        weeklyRevenue: summary.week || 0,
-        monthlyRevenue: summary.month || 0,
-        transactionCount: transactions.filter(t =>
-            dayjs(t.createdAt).isAfter(dayjs().startOf('day'))
-        ).length,
-    };
-
-    // Calculate revenue by type
-    const revenueByType = {
-        sessions: transactions.filter(t => t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0),
-        tasks: transactions.filter(t => t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0),
-        inventory: transactions.filter(t => t.type === 'inventory-sale').reduce((sum, t) => sum + (t.amount || 0), 0),
-    };
-
-    // Calculate revenue by computer from transactions
-    const computerRevenue = {};
-    transactions.forEach(t => {
-        if (t.hostname) {
-            if (!computerRevenue[t.hostname]) {
-                computerRevenue[t.hostname] = { hostname: t.hostname, usage: 0, printing: 0, tasks: 0, total: 0 };
-            }
-            if (t.type === 'session') {
-                computerRevenue[t.hostname].usage += t.breakdown?.usage || t.amount || 0;
-                computerRevenue[t.hostname].printing += (t.breakdown?.printBW || 0) + (t.breakdown?.printColor || 0);
-            } else if (t.type === 'task_completion') {
-                computerRevenue[t.hostname].tasks += t.amount || 0;
-            }
-            computerRevenue[t.hostname].total = computerRevenue[t.hostname].usage +
-                computerRevenue[t.hostname].printing + computerRevenue[t.hostname].tasks;
-        }
-    });
-    const computerRevenueList = Object.values(computerRevenue).sort((a, b) => b.total - a.total);
-
-    // Get daily revenue for the past 7 days
-    const dailyRevenue = [];
-    for (let i = 6; i >= 0; i--) {
-        const day = dayjs().subtract(i, 'day');
-        const dayTransactions = transactions.filter(t =>
-            dayjs(t.createdAt).isSame(day, 'day')
-        );
-        const amount = dayTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-        dailyRevenue.push({
-            day: day.format('ddd'),
-            date: day.format('MMM DD'),
-            amount,
+    // Photocopy records from activity records
+    const photocopyRecords = useMemo(() => {
+        return activityRecords.filter(r => {
+            const n = (r.serviceName || '').toLowerCase();
+            return n.includes('copy') || n.includes('photocopy');
         });
-    }
+    }, [activityRecords]);
+
+    const photocopyRevenue = useMemo(() => {
+        return photocopyRecords.reduce((sum, r) => sum + (r.totalAmount || 0), 0);
+    }, [photocopyRecords]);
+
+    const photocopySheets = useMemo(() => {
+        return photocopyRecords.reduce((sum, r) => sum + (r.quantity || 0), 0);
+    }, [photocopyRecords]);
+
+    // Revenue stats
+    const revenueByType = useMemo(() => {
+        const txns = transactions;
+        return {
+            sessions: txns.filter(t => t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0),
+            tasks: txns.filter(t => t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0),
+            inventory: txns.filter(t => t.type === 'inventory-sale').reduce((sum, t) => sum + (t.amount || 0), 0),
+            printing: printTotals.totalRevenue || 0,
+            photocopies: photocopyRevenue,
+        };
+    }, [transactions, printTotals, photocopyRevenue]);
+
+    const totalRevenue = useMemo(() => {
+        return revenueByType.sessions + revenueByType.tasks + revenueByType.inventory + revenueByType.printing + revenueByType.photocopies;
+    }, [revenueByType]);
+
+    const transactionCount = transactions.length + printJobs.length + photocopyRecords.length;
+
+    // Revenue by computer
+    const computerRevenue = useMemo(() => {
+        const map = {};
+        transactions.forEach(t => {
+            if (t.hostname) {
+                if (!map[t.hostname]) map[t.hostname] = { hostname: t.hostname, usage: 0, printing: 0, tasks: 0, inventory: 0, photocopies: 0, total: 0 };
+                if (t.type === 'session') {
+                    map[t.hostname].usage += t.breakdown?.usage || t.amount || 0;
+                } else if (t.type === 'task_completion') {
+                    map[t.hostname].tasks += t.amount || 0;
+                } else if (t.type === 'inventory-sale') {
+                    map[t.hostname].inventory += t.amount || 0;
+                }
+            }
+        });
+        // Add print revenue per hostname
+        printJobs.forEach(j => {
+            const h = j.hostname;
+            if (h) {
+                if (!map[h]) map[h] = { hostname: h, usage: 0, printing: 0, tasks: 0, inventory: 0, photocopies: 0, total: 0 };
+                map[h].printing += j.totalPrice || 0;
+            }
+        });
+        // Add photocopy revenue per hostname
+        photocopyRecords.forEach(r => {
+            const h = r.hostname;
+            if (h) {
+                if (!map[h]) map[h] = { hostname: h, usage: 0, printing: 0, tasks: 0, inventory: 0, photocopies: 0, total: 0 };
+                map[h].photocopies += r.totalAmount || 0;
+            }
+        });
+        // Calculate totals
+        Object.values(map).forEach(c => {
+            c.total = c.usage + c.printing + c.tasks + c.inventory + c.photocopies;
+        });
+        return Object.values(map).sort((a, b) => b.total - a.total);
+    }, [transactions, printJobs, photocopyRecords]);
+
+    // Daily revenue chart - last 7 days or within date range
+    const dailyRevenue = useMemo(() => {
+        const days = [];
+        const start = dateRange?.[0] || dayjs().subtract(6, 'day');
+        const end = dateRange?.[1] || dayjs();
+        const numDays = Math.min(end.diff(start, 'day') + 1, 14); // max 14 days on chart
+        
+        for (let i = numDays - 1; i >= 0; i--) {
+            const day = end.subtract(i, 'day');
+            const dayStr = day.format('YYYY-MM-DD');
+            
+            const txnAmount = transactions
+                .filter(t => dayjs(t.createdAt).format('YYYY-MM-DD') === dayStr)
+                .reduce((sum, t) => sum + (t.amount || 0), 0);
+            
+            const printAmount = printJobs
+                .filter(j => dayjs(j.receivedAt || j.timestamp).format('YYYY-MM-DD') === dayStr)
+                .reduce((sum, j) => sum + (j.totalPrice || 0), 0);
+            
+            const copyAmount = photocopyRecords
+                .filter(r => (r.date || dayjs(r.submittedAt).format('YYYY-MM-DD')) === dayStr)
+                .reduce((sum, r) => sum + (r.totalAmount || 0), 0);
+
+            days.push({
+                day: day.format('ddd'),
+                date: day.format('MMM DD'),
+                amount: txnAmount + printAmount + copyAmount,
+                txn: txnAmount,
+                print: printAmount,
+                copy: copyAmount,
+            });
+        }
+        return days;
+    }, [transactions, printJobs, photocopyRecords, dateRange]);
+
     const maxDailyRevenue = Math.max(...dailyRevenue.map(d => d.amount), 1);
 
     const getTypeIcon = (type) => {
@@ -153,74 +217,125 @@ function Finance() {
             case 'session': return <DesktopOutlined style={{ color: '#00B4D8' }} />;
             case 'task_completion': return <CheckCircleOutlined style={{ color: '#00C853' }} />;
             case 'inventory-sale': return <ShopOutlined style={{ color: '#FFB703' }} />;
+            case 'print': return <PrinterOutlined style={{ color: '#7b2cbf' }} />;
+            case 'photocopy': return <CopyOutlined style={{ color: '#e040fb' }} />;
             default: return <DollarOutlined />;
         }
     };
 
-    const filteredTransactions = transactions.filter(t => {
-        const matchesType = filterType === 'all' || t.type === filterType;
-        const matchesSearch = !searchText ||
-            t.hostname?.toLowerCase().includes(searchText.toLowerCase()) ||
-            t.description?.toLowerCase().includes(searchText.toLowerCase()) ||
-            t.userId?.toLowerCase().includes(searchText.toLowerCase());
-        return matchesType && matchesSearch;
-    });
+    // Unified feed: merge transactions + print jobs + photocopy records
+    const unifiedFeed = useMemo(() => {
+        const feed = [];
+        
+        transactions.forEach(t => {
+            feed.push({
+                ...t,
+                _key: t.id || t._id,
+                _type: t.type,
+                _time: t.createdAt,
+                _amount: t.amount || 0,
+                _desc: t.description || (t.type === 'session' ? 'Computer Session' : t.type === 'inventory-sale' ? `Sale: ${t.itemName || 'Item'}` : 'Transaction'),
+                _user: t.userId || t.seller || 'Guest',
+                _host: t.hostname || t.seller || 'N/A',
+            });
+        });
 
-    const transactionColumns = [
+        printJobs.forEach(j => {
+            feed.push({
+                _key: j.id || `pj-${j.receivedAt}-${Math.random()}`,
+                _type: 'print',
+                _time: j.receivedAt || j.timestamp,
+                _amount: j.totalPrice || 0,
+                _desc: `Print: ${j.document || j.name || 'Document'} (${j.totalSheets || j.totalPages || 1} sheets, ${j.printType === 'color' ? '🎨 Color' : '⬛ B&W'})`,
+                _user: j.sessionUser || j.user || 'Guest',
+                _host: j.hostname || 'N/A',
+            });
+        });
+
+        photocopyRecords.forEach(r => {
+            feed.push({
+                _key: r._id || `cp-${r.submittedAt}-${Math.random()}`,
+                _type: 'photocopy',
+                _time: r.submittedAt || r.createdAt,
+                _amount: r.totalAmount || 0,
+                _desc: `${r.serviceName}: ${r.quantity} copies @ ${formatKSH(r.unitPrice)}`,
+                _user: r.agentUser || 'Agent',
+                _host: r.hostname || 'Self',
+            });
+        });
+
+        feed.sort((a, b) => new Date(b._time) - new Date(a._time));
+        return feed;
+    }, [transactions, printJobs, photocopyRecords]);
+
+    const filteredFeed = useMemo(() => {
+        return unifiedFeed.filter(item => {
+            const matchesType = filterType === 'all' || item._type === filterType;
+            const matchesSearch = !searchText ||
+                item._desc?.toLowerCase().includes(searchText.toLowerCase()) ||
+                item._user?.toLowerCase().includes(searchText.toLowerCase()) ||
+                item._host?.toLowerCase().includes(searchText.toLowerCase());
+            return matchesType && matchesSearch;
+        });
+    }, [unifiedFeed, filterType, searchText]);
+
+    const feedColumns = [
         {
             title: 'Time',
-            dataIndex: 'createdAt',
-            key: 'createdAt',
+            dataIndex: '_time',
+            key: '_time',
             render: (time) => (
-                <Text type="secondary" style={{ fontSize: 12, fontFamily: 'JetBrains Mono' }}>
-                    {dayjs(time).format('HH:mm')}
-                </Text>
+                <div>
+                    <Text style={{ fontSize: 12, fontFamily: 'JetBrains Mono' }}>
+                        {dayjs(time).format('HH:mm')}
+                    </Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: 10 }}>{dayjs(time).format('MMM D')}</Text>
+                </div>
             ),
-            width: 70,
+            width: 75,
         },
         {
             title: 'Type',
-            dataIndex: 'type',
-            key: 'type',
-            render: (type) => (
-                <Tag icon={getTypeIcon(type)} style={{ textTransform: 'capitalize' }}>
-                    {type === 'task_completion' ? 'Task' : type}
-                </Tag>
-            ),
+            dataIndex: '_type',
+            key: '_type',
+            render: (type) => {
+                const labels = { session: 'Session', task_completion: 'Task', 'inventory-sale': 'Sale', print: 'Print', photocopy: 'Photocopy' };
+                const colors = { session: 'blue', task_completion: 'green', 'inventory-sale': 'gold', print: 'purple', photocopy: 'magenta' };
+                return <Tag icon={getTypeIcon(type)} color={colors[type] || 'default'} style={{ textTransform: 'capitalize' }}>{labels[type] || type}</Tag>;
+            },
+            width: 120,
         },
         {
             title: 'Description',
-            dataIndex: 'description',
-            key: 'description',
+            dataIndex: '_desc',
+            key: '_desc',
             render: (desc, record) => (
-                <Space>
-                    {getTypeIcon(record.type)}
-                    <div>
-                        <Text strong>{desc || 'Transaction'}</Text>
-                        <br />
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                            {record.seller ? `Seller: ${record.seller}` : (record.hostname || 'N/A')}
-                        </Text>
-                    </div>
-                </Space>
+                <div>
+                    <Text strong style={{ fontSize: 13 }}>{desc}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: 11 }}>{record._host}</Text>
+                </div>
             ),
         },
         {
             title: 'User',
-            dataIndex: 'userId',
-            key: 'userId',
-            render: (user) => <Text>{user || 'Guest'}</Text>,
+            dataIndex: '_user',
+            key: '_user',
+            render: (user) => <Tag icon={<UserOutlined />} color="cyan">{user}</Tag>,
+            width: 130,
         },
         {
             title: 'Amount',
-            dataIndex: 'amount',
-            key: 'amount',
+            dataIndex: '_amount',
+            key: '_amount',
             render: (amount) => (
                 <Text style={{ fontFamily: 'JetBrains Mono', color: '#00C853', fontWeight: 600, fontSize: 14 }}>
                     {formatKSH(amount)}
                 </Text>
             ),
             align: 'right',
+            width: 130,
         },
     ];
 
@@ -247,7 +362,14 @@ function Finance() {
             title: 'Printing',
             dataIndex: 'printing',
             key: 'printing',
-            render: (amount) => <Text style={{ color: amount > 0 ? '#FFB703' : '#64748B' }}>{formatKSH(amount)}</Text>,
+            render: (amount) => <Text style={{ color: amount > 0 ? '#7b2cbf' : '#64748B' }}>{formatKSH(amount)}</Text>,
+            align: 'right',
+        },
+        {
+            title: 'Photocopies',
+            dataIndex: 'photocopies',
+            key: 'photocopies',
+            render: (amount) => <Text style={{ color: amount > 0 ? '#e040fb' : '#64748B' }}>{formatKSH(amount)}</Text>,
             align: 'right',
         },
         {
@@ -255,6 +377,13 @@ function Finance() {
             dataIndex: 'tasks',
             key: 'tasks',
             render: (amount) => <Text style={{ color: amount > 0 ? '#00C853' : '#64748B' }}>{formatKSH(amount)}</Text>,
+            align: 'right',
+        },
+        {
+            title: 'Sales',
+            dataIndex: 'inventory',
+            key: 'inventory',
+            render: (amount) => <Text style={{ color: amount > 0 ? '#FFB703' : '#64748B' }}>{formatKSH(amount)}</Text>,
             align: 'right',
         },
         {
@@ -270,6 +399,19 @@ function Finance() {
         },
     ];
 
+    // Revenue breakdown cards data
+    const revenueCards = [
+        { label: 'Session Revenue', icon: <DesktopOutlined />, amount: revenueByType.sessions, color: '#00B4D8', bg: 'rgba(0, 180, 216, 0.1)' },
+        { label: 'Print Revenue', icon: <PrinterOutlined />, amount: revenueByType.printing, color: '#7b2cbf', bg: 'rgba(123, 44, 191, 0.1)', extra: `${printTotals.bwPages || 0} BW + ${printTotals.colorPages || 0} Color sheets` },
+        { label: 'Photocopy Revenue', icon: <CopyOutlined />, amount: revenueByType.photocopies, color: '#e040fb', bg: 'rgba(224, 64, 251, 0.1)', extra: `${photocopySheets} sheets from ${photocopyRecords.length} records` },
+        { label: 'Task Revenue', icon: <CheckCircleOutlined />, amount: revenueByType.tasks, color: '#00C853', bg: 'rgba(0, 200, 83, 0.1)' },
+        { label: 'Sales Revenue', icon: <ShopOutlined />, amount: revenueByType.inventory, color: '#FFB703', bg: 'rgba(255, 183, 3, 0.1)' },
+    ];
+
+    const dateLabel = dateRange
+        ? (dateRange[0].isSame(dateRange[1], 'day') ? dateRange[0].format('MMM D, YYYY') : `${dateRange[0].format('MMM D')} – ${dateRange[1].format('MMM D, YYYY')}`)
+        : 'All Time';
+
     return (
         <div>
             {/* Page Header */}
@@ -278,7 +420,31 @@ function Finance() {
                     <DollarOutlined className="icon" />
                     <h1>Finance</h1>
                 </div>
-                <p className="page-subtitle">Track revenue, transactions, and earnings by computer</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <RangePicker
+                        value={dateRange}
+                        onChange={(val) => setDateRange(val || [dayjs().startOf('day'), dayjs().endOf('day')])}
+                        presets={[
+                            { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                            { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] },
+                            { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
+                            { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                            { label: 'Last 7 Days', value: [dayjs().subtract(7, 'day'), dayjs().endOf('day')] },
+                            { label: 'Last 30 Days', value: [dayjs().subtract(30, 'day'), dayjs().endOf('day')] },
+                        ]}
+                        size="small"
+                    />
+                    <Button
+                        icon={<ReloadOutlined spin={loading} />}
+                        size="small"
+                        type="primary"
+                        ghost
+                        onClick={fetchData}
+                        loading={loading}
+                    >
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
             {/* Revenue Stats */}
@@ -289,36 +455,29 @@ function Finance() {
                             <div className="stat-icon green">
                                 <DollarOutlined />
                             </div>
-                            <Button
-                                icon={<ReloadOutlined />}
-                                size="small"
-                                type="text"
-                                onClick={fetchData}
-                                loading={loading}
-                            />
                         </div>
-                        <div className="stat-value">{formatKSH(stats.totalRevenue)}</div>
-                        <div className="stat-label">Today's Revenue</div>
+                        <div className="stat-value">{formatKSH(totalRevenue)}</div>
+                        <div className="stat-label">Total Revenue ({dateLabel})</div>
                     </div>
 
-                    <div className="stat-card teal">
+                    <div className="stat-card" style={{ borderLeft: '3px solid #7b2cbf' }}>
                         <div className="stat-header">
-                            <div className="stat-icon teal">
-                                <CalendarOutlined />
+                            <div className="stat-icon" style={{ background: 'rgba(123,44,191,0.15)', color: '#7b2cbf' }}>
+                                <PrinterOutlined />
                             </div>
                         </div>
-                        <div className="stat-value">{formatKSH(stats.weeklyRevenue)}</div>
-                        <div className="stat-label">This Week</div>
+                        <div className="stat-value">{formatKSH(revenueByType.printing)}</div>
+                        <div className="stat-label">Printing ({printTotals.totalJobs || 0} jobs)</div>
                     </div>
 
-                    <div className="stat-card yellow">
+                    <div className="stat-card" style={{ borderLeft: '3px solid #e040fb' }}>
                         <div className="stat-header">
-                            <div className="stat-icon yellow">
-                                <BarChartOutlined />
+                            <div className="stat-icon" style={{ background: 'rgba(224,64,251,0.15)', color: '#e040fb' }}>
+                                <CopyOutlined />
                             </div>
                         </div>
-                        <div className="stat-value">{formatKSH(stats.monthlyRevenue)}</div>
-                        <div className="stat-label">This Month</div>
+                        <div className="stat-value">{formatKSH(revenueByType.photocopies)}</div>
+                        <div className="stat-label">Photocopies ({photocopySheets} sheets)</div>
                     </div>
 
                     <div className="stat-card orange">
@@ -327,8 +486,8 @@ function Finance() {
                                 <ClockCircleOutlined />
                             </div>
                         </div>
-                        <div className="stat-value">{stats.transactionCount}</div>
-                        <div className="stat-label">Today's Transactions</div>
+                        <div className="stat-value">{transactionCount}</div>
+                        <div className="stat-label">Total Records</div>
                     </div>
                 </div>
             </Spin>
@@ -340,21 +499,23 @@ function Finance() {
                         title={
                             <Space>
                                 <BarChartOutlined style={{ color: '#00C853' }} />
-                                <span style={{ fontFamily: 'Outfit' }}>Weekly Revenue</span>
-                            </Space>
-                        }
-                        extra={
-                            <Space>
-                                <Button icon={<DownloadOutlined />} size="small">Export</Button>
+                                <span style={{ fontFamily: 'Outfit' }}>Revenue ({dateLabel})</span>
                             </Space>
                         }
                     >
                         {dailyRevenue.length === 0 || maxDailyRevenue === 0 ? (
                             <Empty description="No revenue data yet" />
                         ) : (
-                            <div style={{ display: 'flex', alignItems: 'flex-end', height: 180, gap: 16, marginBottom: 24 }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-end', height: 180, gap: dailyRevenue.length > 10 ? 6 : 16, marginBottom: 24 }}>
                                 {dailyRevenue.map((item) => (
-                                    <Tooltip key={item.day} title={`${item.date}: ${formatKSH(item.amount)}`}>
+                                    <Tooltip key={item.date} title={
+                                        <div>
+                                            <div><strong>{item.date}: {formatKSH(item.amount)}</strong></div>
+                                            {item.txn > 0 && <div>Sessions/Tasks/Sales: {formatKSH(item.txn)}</div>}
+                                            {item.print > 0 && <div>Printing: {formatKSH(item.print)}</div>}
+                                            {item.copy > 0 && <div>Photocopies: {formatKSH(item.copy)}</div>}
+                                        </div>
+                                    }>
                                         <div style={{ flex: 1, textAlign: 'center' }}>
                                             <div
                                                 style={{
@@ -366,7 +527,7 @@ function Finance() {
                                                     marginBottom: 8,
                                                 }}
                                             />
-                                            <Text type="secondary" style={{ fontSize: 12 }}>{item.day}</Text>
+                                            <Text type="secondary" style={{ fontSize: dailyRevenue.length > 10 ? 10 : 12 }}>{item.day}</Text>
                                         </div>
                                     </Tooltip>
                                 ))}
@@ -374,22 +535,16 @@ function Finance() {
                         )}
 
                         {/* Revenue by Type */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                            <div style={{ padding: 16, background: 'rgba(0, 180, 216, 0.1)', borderRadius: 12, textAlign: 'center' }}>
-                                <DesktopOutlined style={{ fontSize: 24, color: '#00B4D8', marginBottom: 8 }} />
-                                <Title level={5} style={{ margin: 0, color: '#00B4D8' }}>{formatKSH(revenueByType.sessions)}</Title>
-                                <Text type="secondary" style={{ fontSize: 12 }}>Session Revenue</Text>
-                            </div>
-                            <div style={{ padding: 16, background: 'rgba(0, 200, 83, 0.1)', borderRadius: 12, textAlign: 'center' }}>
-                                <CheckCircleOutlined style={{ fontSize: 24, color: '#00C853', marginBottom: 8 }} />
-                                <Title level={5} style={{ margin: 0, color: '#00C853' }}>{formatKSH(revenueByType.tasks)}</Title>
-                                <Text type="secondary" style={{ fontSize: 12 }}>Task Revenue</Text>
-                            </div>
-                            <div style={{ padding: 16, background: 'rgba(255, 183, 3, 0.1)', borderRadius: 12, textAlign: 'center' }}>
-                                <ShopOutlined style={{ fontSize: 24, color: '#FFB703', marginBottom: 8 }} />
-                                <Title level={5} style={{ margin: 0, color: '#FFB703' }}>{formatKSH(revenueByType.inventory)}</Title>
-                                <Text type="secondary" style={{ fontSize: 12 }}>Sales Revenue</Text>
-                            </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+                            {revenueCards.map((card) => (
+                                <Tooltip key={card.label} title={card.extra || ''}>
+                                    <div style={{ padding: 12, background: card.bg, borderRadius: 12, textAlign: 'center', cursor: 'default' }}>
+                                        {React.cloneElement(card.icon, { style: { fontSize: 20, color: card.color, marginBottom: 6 } })}
+                                        <Title level={5} style={{ margin: 0, color: card.color, fontSize: 14 }}>{formatKSH(card.amount)}</Title>
+                                        <Text type="secondary" style={{ fontSize: 11 }}>{card.label}</Text>
+                                    </div>
+                                </Tooltip>
+                            ))}
                         </div>
                     </Card>
                 </Col>
@@ -400,54 +555,31 @@ function Finance() {
                         title={
                             <Space>
                                 <RiseOutlined style={{ color: '#FFB703' }} />
-                                <span style={{ fontFamily: 'Outfit' }}>Revenue Summary</span>
+                                <span style={{ fontFamily: 'Outfit' }}>Revenue Breakdown</span>
                             </Space>
                         }
                     >
-                        <div style={{ marginBottom: 24 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                <Space>
-                                    <DesktopOutlined style={{ color: '#00B4D8' }} />
-                                    <Text>Sessions</Text>
-                                </Space>
-                                <Text strong style={{ color: '#00B4D8' }}>{formatKSH(revenueByType.sessions)}</Text>
-                            </div>
-                            <Progress
-                                percent={stats.totalRevenue > 0 ? Math.round((revenueByType.sessions / stats.totalRevenue) * 100) : 0}
-                                showInfo={false}
-                                strokeColor="#00B4D8"
-                            />
-                        </div>
-
-                        <div style={{ marginBottom: 24 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                <Space>
-                                    <CheckCircleOutlined style={{ color: '#00C853' }} />
-                                    <Text>Tasks</Text>
-                                </Space>
-                                <Text strong style={{ color: '#00C853' }}>{formatKSH(revenueByType.tasks)}</Text>
-                            </div>
-                            <Progress
-                                percent={stats.totalRevenue > 0 ? Math.round((revenueByType.tasks / stats.totalRevenue) * 100) : 0}
-                                showInfo={false}
-                                strokeColor="#00C853"
-                            />
-                        </div>
-
-                        <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                <Space>
-                                    <ShopOutlined style={{ color: '#FFB703' }} />
-                                    <Text>Sales</Text>
-                                </Space>
-                                <Text strong style={{ color: '#FFB703' }}>{formatKSH(revenueByType.inventory)}</Text>
-                            </div>
-                            <Progress
-                                percent={stats.totalRevenue > 0 ? Math.round((revenueByType.inventory / stats.totalRevenue) * 100) : 0}
-                                showInfo={false}
-                                strokeColor="#FFB703"
-                            />
-                        </div>
+                        {revenueCards.map((card) => {
+                            const pct = totalRevenue > 0 ? Math.round((card.amount / totalRevenue) * 100) : 0;
+                            return (
+                                <div key={card.label} style={{ marginBottom: 16 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                        <Space>
+                                            {React.cloneElement(card.icon, { style: { color: card.color } })}
+                                            <Text style={{ fontSize: 13 }}>{card.label}</Text>
+                                        </Space>
+                                        <Text strong style={{ color: card.color, fontFamily: 'JetBrains Mono', fontSize: 13 }}>{formatKSH(card.amount)}</Text>
+                                    </div>
+                                    <Progress
+                                        percent={pct}
+                                        showInfo={true}
+                                        strokeColor={card.color}
+                                        size="small"
+                                        format={() => `${pct}%`}
+                                    />
+                                </div>
+                            );
+                        })}
                     </Card>
 
                     {/* Top Earning Computer */}
@@ -460,7 +592,7 @@ function Finance() {
                         }
                         style={{ marginTop: 24 }}
                     >
-                        {computerRevenueList.length === 0 ? (
+                        {computerRevenue.length === 0 ? (
                             <Empty description="No data yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                         ) : (
                             <div style={{ textAlign: 'center' }}>
@@ -477,9 +609,9 @@ function Finance() {
                                 }}>
                                     <DesktopOutlined style={{ fontSize: 32, color: '#fff' }} />
                                 </div>
-                                <Title level={3} style={{ margin: 0 }}>{computerRevenueList[0]?.hostname || 'N/A'}</Title>
+                                <Title level={3} style={{ margin: 0 }}>{computerRevenue[0]?.hostname || 'N/A'}</Title>
                                 <Title level={2} style={{ margin: '16px 0 0', color: '#00C853' }}>
-                                    {formatKSH(computerRevenueList[0]?.total || 0)}
+                                    {formatKSH(computerRevenue[0]?.total || 0)}
                                 </Title>
                                 <Text type="secondary">top earner</Text>
                             </div>
@@ -487,6 +619,55 @@ function Finance() {
                     </Card>
                 </Col>
             </Row>
+
+            {/* Print Revenue Breakdown */}
+            {(printTotals.totalJobs > 0) && (
+                <Card
+                    title={
+                        <Space>
+                            <PrinterOutlined style={{ color: '#7b2cbf' }} />
+                            <span style={{ fontFamily: 'Outfit' }}>Print Revenue Breakdown</span>
+                            <Badge count={printTotals.totalJobs} style={{ backgroundColor: '#7b2cbf' }} />
+                        </Space>
+                    }
+                    style={{ marginTop: 24 }}
+                >
+                    <Row gutter={[16, 16]}>
+                        <Col span={6}>
+                            <Statistic
+                                title={<Text type="secondary">B&W Sheets</Text>}
+                                value={printTotals.bwPages || 0}
+                                prefix={<FileTextOutlined style={{ color: '#b0b0c0' }} />}
+                                valueStyle={{ color: '#b0b0c0' }}
+                            />
+                        </Col>
+                        <Col span={6}>
+                            <Statistic
+                                title={<Text type="secondary">B&W Revenue</Text>}
+                                value={printTotals.bwRevenue || 0}
+                                prefix="KSH"
+                                valueStyle={{ color: '#b0b0c0', fontFamily: 'JetBrains Mono' }}
+                            />
+                        </Col>
+                        <Col span={6}>
+                            <Statistic
+                                title={<Text type="secondary">Color Sheets</Text>}
+                                value={printTotals.colorPages || 0}
+                                prefix={<FileTextOutlined style={{ color: '#e040fb' }} />}
+                                valueStyle={{ color: '#e040fb' }}
+                            />
+                        </Col>
+                        <Col span={6}>
+                            <Statistic
+                                title={<Text type="secondary">Color Revenue</Text>}
+                                value={printTotals.colorRevenue || 0}
+                                prefix="KSH"
+                                valueStyle={{ color: '#e040fb', fontFamily: 'JetBrains Mono' }}
+                            />
+                        </Col>
+                    </Row>
+                </Card>
+            )}
 
             {/* Computer Revenue Table */}
             <Card
@@ -498,27 +679,34 @@ function Finance() {
                 }
                 style={{ marginTop: 24 }}
             >
-                {computerRevenueList.length === 0 ? (
+                {computerRevenue.length === 0 ? (
                     <Empty description="No revenue data by computer yet" />
                 ) : (
                     <Table
                         columns={computerRevenueColumns}
-                        dataSource={computerRevenueList}
+                        dataSource={computerRevenue}
                         rowKey="hostname"
                         pagination={false}
+                        size="small"
                         summary={(pageData) => {
-                            const totalUsage = pageData.reduce((sum, row) => sum + row.usage, 0);
-                            const totalPrinting = pageData.reduce((sum, row) => sum + row.printing, 0);
-                            const totalTasks = pageData.reduce((sum, row) => sum + row.tasks, 0);
-                            const grandTotal = pageData.reduce((sum, row) => sum + row.total, 0);
+                            const t = pageData.reduce((acc, row) => ({
+                                usage: acc.usage + row.usage,
+                                printing: acc.printing + row.printing,
+                                photocopies: acc.photocopies + row.photocopies,
+                                tasks: acc.tasks + row.tasks,
+                                inventory: acc.inventory + row.inventory,
+                                total: acc.total + row.total,
+                            }), { usage: 0, printing: 0, photocopies: 0, tasks: 0, inventory: 0, total: 0 });
 
                             return (
                                 <Table.Summary.Row style={{ background: 'rgba(0, 200, 83, 0.1)' }}>
                                     <Table.Summary.Cell><Text strong>TOTAL</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#00B4D8' }}>{formatKSH(totalUsage)}</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#FFB703' }}>{formatKSH(totalPrinting)}</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#00C853' }}>{formatKSH(totalTasks)}</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell align="right"><Text strong style={{ fontSize: 16, color: '#00C853' }}>{formatKSH(grandTotal)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#00B4D8' }}>{formatKSH(t.usage)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#7b2cbf' }}>{formatKSH(t.printing)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#e040fb' }}>{formatKSH(t.photocopies)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#00C853' }}>{formatKSH(t.tasks)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ color: '#FFB703' }}>{formatKSH(t.inventory)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell align="right"><Text strong style={{ fontSize: 16, color: '#00C853' }}>{formatKSH(t.total)}</Text></Table.Summary.Cell>
                                 </Table.Summary.Row>
                             );
                         }}
@@ -526,13 +714,13 @@ function Finance() {
                 )}
             </Card>
 
-            {/* Recent Transactions */}
+            {/* All Records Feed */}
             <Card
                 title={
                     <Space>
                         <ClockCircleOutlined style={{ color: '#FFB703' }} />
-                        <span style={{ fontFamily: 'Outfit' }}>Recent Transactions</span>
-                        <Badge count={transactions.length} style={{ backgroundColor: '#00B4D8' }} />
+                        <span style={{ fontFamily: 'Outfit' }}>All Financial Records</span>
+                        <Badge count={unifiedFeed.length} style={{ backgroundColor: '#00B4D8' }} />
                     </Space>
                 }
                 extra={
@@ -542,30 +730,34 @@ function Finance() {
                             style={{ width: 200 }}
                             value={searchText}
                             onChange={(e) => setSearchText(e.target.value)}
+                            allowClear
                         />
                         <Select
                             value={filterType}
                             onChange={setFilterType}
-                            style={{ width: 150 }}
+                            style={{ width: 160 }}
                             options={[
-                                { value: 'all', label: 'All Types' },
-                                { value: 'session', label: 'Sessions' },
-                                { value: 'task_completion', label: 'Tasks' },
-                                { value: 'inventory-sale', label: 'Inventory Sales' },
+                                { value: 'all', label: '📊 All Types' },
+                                { value: 'session', label: '🖥️ Sessions' },
+                                { value: 'print', label: '🖨️ Printing' },
+                                { value: 'photocopy', label: '📋 Photocopies' },
+                                { value: 'task_completion', label: '✅ Tasks' },
+                                { value: 'inventory-sale', label: '🛒 Sales' },
                             ]}
                         />
                     </Space>
                 }
                 style={{ marginTop: 24 }}
             >
-                {filteredTransactions.length === 0 ? (
-                    <Empty description="No transactions yet. Complete sessions or tasks to see revenue here." />
+                {filteredFeed.length === 0 ? (
+                    <Empty description="No records found for the selected filters and date range." />
                 ) : (
                     <Table
-                        columns={transactionColumns}
-                        dataSource={filteredTransactions}
-                        rowKey="id"
-                        pagination={{ pageSize: 10 }}
+                        columns={feedColumns}
+                        dataSource={filteredFeed}
+                        rowKey="_key"
+                        pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'], showTotal: (t) => `${t} records` }}
+                        size="small"
                     />
                 )}
             </Card>
