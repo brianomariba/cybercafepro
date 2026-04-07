@@ -125,11 +125,6 @@ const menuItems = [
     label: 'Sessions',
   },
   {
-    key: 'browser-history',
-    icon: <GlobalOutlined />,
-    label: 'Browser History',
-  },
-  {
     key: 'print-manager',
     icon: <PrinterOutlined />,
     label: 'Print Manager',
@@ -150,14 +145,19 @@ const menuItems = [
     label: 'Tasks',
   },
   {
-    key: 'documents',
-    icon: <FolderOutlined />,
-    label: 'Documents',
-  },
-  {
     key: 'inventory',
     icon: <ShoppingCartOutlined />,
     label: 'Inventory',
+  },
+  {
+    key: 'monitoring',
+    icon: <GlobalOutlined />,
+    label: 'Monitoring',
+    children: [
+      { key: 'browser-history', icon: <HistoryOutlined />, label: 'Browser History' },
+      { key: 'documents', icon: <FolderOutlined />, label: 'Documents' },
+      { key: 'submissions', icon: <InboxOutlined />, label: 'Submissions' },
+    ]
   },
   {
     key: 'content',
@@ -168,11 +168,6 @@ const menuItems = [
       { key: 'admin-learning', icon: <ReadOutlined />, label: 'Learning' },
       { key: 'admin-guidance', icon: <CompassOutlined />, label: 'Guidance' },
     ]
-  },
-  {
-    key: 'submissions',
-    icon: <InboxOutlined />,
-    label: 'User Submissions',
   },
   {
     key: 'reports',

@@ -20,6 +20,8 @@ import {
     SyncOutlined,
     PlayCircleOutlined,
     LockOutlined,
+    ShopOutlined,
+    CopyOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -135,32 +137,59 @@ function Dashboard() {
         completedTasks: tasks.filter(t => t.status === 'completed').length,
     };
 
-    // Recent activity from sessions
-    const recentActivity = sessions.slice(0, 8).map((session, idx) => ({
-        id: idx,
-        type: session.type,
-        hostname: session.hostname,
-        user: session.user,
-        time: session.receivedAt,
-        charges: session.charges,
-    }));
+    // Build a unified activity feed
+    const activityFeed = [];
+    sessions.slice(0, 5).forEach((s, idx) => {
+        activityFeed.push({
+            key: `s-${idx}`,
+            icon: s.type === 'LOGIN' ? <PlayCircleOutlined /> : <LockOutlined />,
+            iconBg: s.type === 'LOGIN' ? '#00C853' : '#FB8500',
+            title: `${s.hostname || 'PC'} — ${s.type}`,
+            desc: s.user || 'Guest',
+            extra: s.charges ? formatKSH(s.charges.grandTotal) : null,
+            time: s.receivedAt,
+        });
+    });
+    printJobs.slice(0, 3).forEach((j, idx) => {
+        activityFeed.push({
+            key: `p-${idx}`,
+            icon: <PrinterOutlined />,
+            iconBg: j.printType === 'color' ? '#7B2CBF' : '#6b6b80',
+            title: `Print: ${(j.documentName || j.document || 'Document').substring(0, 30)}`,
+            desc: `${j.hostname || 'PC'} • ${j.totalPages || 1} pages • ${j.printType?.toUpperCase() || 'B&W'}`,
+            extra: null,
+            time: j.receivedAt || j.timestamp,
+        });
+    });
+    tasks.filter(t => t.status === 'completed').slice(0, 2).forEach((t, idx) => {
+        activityFeed.push({
+            key: `t-${idx}`,
+            icon: <CheckCircleOutlined />,
+            iconBg: '#00C853',
+            title: `Task done: ${(t.title || 'Task').substring(0, 30)}`,
+            desc: formatKSH(t.price),
+            extra: null,
+            time: t.completedAt || t.updatedAt,
+        });
+    });
+    activityFeed.sort((a, b) => new Date(b.time) - new Date(a.time));
 
     return (
         <div>
             {/* Page Header */}
             <div className="page-header">
-                <div className="page-title">
-                    <ThunderboltOutlined className="icon" />
-                    <h1>Dashboard</h1>
+                <div>
+                    <div className="page-title">
+                        <ThunderboltOutlined className="icon" />
+                        <h1>Dashboard</h1>
+                        <Badge
+                            status={connected ? 'success' : 'error'}
+                            text={<Text type="secondary" style={{ fontSize: 12 }}>{connected ? 'Live' : 'Offline'}</Text>}
+                            style={{ marginLeft: 8 }}
+                        />
+                    </div>
                 </div>
-                <p className="page-subtitle">
-                    Real-time overview of your cyber cafe operations
-                    <Badge
-                        status={connected ? 'success' : 'error'}
-                        text={connected ? 'Live' : 'Offline'}
-                        style={{ marginLeft: 16 }}
-                    />
-                </p>
+                <Button icon={<ReloadOutlined />} size="small" onClick={fetchData} loading={loading}>Refresh</Button>
             </div>
 
             {/* Stats Row */}
@@ -168,7 +197,6 @@ function Dashboard() {
                 <div className="stat-card blue">
                     <div className="stat-header">
                         <div className="stat-icon blue"><DesktopOutlined /></div>
-                        <Badge status={connected ? 'success' : 'default'} />
                     </div>
                     <div className="stat-value">{computedStats.onlineComputers} / {computedStats.totalComputers}</div>
                     <div className="stat-label">Computers Online</div>
@@ -185,7 +213,6 @@ function Dashboard() {
                 <div className="stat-card yellow">
                     <div className="stat-header">
                         <div className="stat-icon yellow"><DollarOutlined /></div>
-                        {computedStats.todayRevenue > 0 && <Tag color="success">Today</Tag>}
                     </div>
                     <div className="stat-value">{formatKSH(computedStats.todayRevenue)}</div>
                     <div className="stat-label">Today's Revenue</div>
@@ -195,165 +222,139 @@ function Dashboard() {
                     <div className="stat-header">
                         <div className="stat-icon purple"><CheckCircleOutlined /></div>
                     </div>
-                    <div className="stat-value">{computedStats.completedTasks}</div>
-                    <div className="stat-label">Tasks Completed Today</div>
+                    <div className="stat-value">{computedStats.pendingTasks}</div>
+                    <div className="stat-label">Pending Tasks</div>
                 </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="quick-actions">
-                <Button type="primary" icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-                    Refresh
-                </Button>
-            </div>
-
             <Spin spinning={loading}>
-                <Row gutter={[24, 24]}>
-                    {/* Connected Computers */}
+                <Row gutter={[20, 20]}>
+                    {/* Computer Status Grid */}
                     <Col xs={24} lg={14}>
                         <Card
+                            size="small"
                             title={
                                 <Space>
                                     <DesktopOutlined style={{ color: '#00B4D8' }} />
-                                    <span>Connected Computers</span>
+                                    <span>Computers</span>
                                     <Badge count={computedStats.onlineComputers} style={{ backgroundColor: '#00C853' }} />
                                 </Space>
                             }
-                            extra={<Text type="secondary">{computers.length} total</Text>}
+                            extra={<Text type="secondary" style={{ fontSize: 12 }}>{computers.length} total</Text>}
                         >
                             {computers.length === 0 ? (
-                                <Empty description="No computers connected. Start the Desktop Agent on client PCs." />
+                                <Empty description="No computers connected" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                             ) : (
-                                <Table
-                                    dataSource={computers.slice(0, 8)}
-                                    rowKey="clientId"
-                                    pagination={false}
-                                    size="small"
-                                    columns={[
-                                        {
-                                            title: 'Computer',
-                                            dataIndex: 'hostname',
-                                            key: 'hostname',
-                                            render: (hostname, record) => (
-                                                <Space>
-                                                    <Badge status={record.isOnline ? 'success' : 'default'} />
-                                                    <Text strong>{hostname}</Text>
-                                                </Space>
-                                            ),
-                                        },
-                                        {
-                                            title: 'IP',
-                                            dataIndex: 'ip',
-                                            key: 'ip',
-                                            render: (ip) => <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 12 }}>{ip}</Text>,
-                                        },
-                                        {
-                                            title: 'Status',
-                                            dataIndex: 'status',
-                                            key: 'status',
-                                            render: (status, record) => (
-                                                <Tag color={record.isOnline ? (status === 'active' ? 'success' : 'processing') : 'default'}>
-                                                    {status?.toUpperCase() || 'OFFLINE'}
-                                                </Tag>
-                                            ),
-                                        },
-                                        {
-                                            title: 'User',
-                                            dataIndex: 'sessionUser',
-                                            key: 'sessionUser',
-                                            render: (user) => user || <Text type="secondary">—</Text>,
-                                        },
-                                    ]}
-                                />
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                                    {computers.slice(0, 12).map(c => (
+                                        <div
+                                            key={c.clientId}
+                                            style={{
+                                                padding: '10px 12px',
+                                                background: c.isOnline
+                                                    ? (c.status === 'active' ? 'rgba(0,200,83,0.08)' : 'rgba(0,180,216,0.06)')
+                                                    : 'rgba(100,116,139,0.06)',
+                                                border: `1px solid ${c.isOnline ? (c.status === 'active' ? 'rgba(0,200,83,0.2)' : 'rgba(0,180,216,0.12)') : 'rgba(100,116,139,0.1)'}`,
+                                                borderRadius: 8,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: 8,
+                                            }}
+                                        >
+                                            <Badge status={c.isOnline ? (c.status === 'active' ? 'success' : 'processing') : 'default'} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <Text strong style={{ fontSize: 12, display: 'block' }} ellipsis>{c.hostname}</Text>
+                                                <Text type="secondary" style={{ fontSize: 10 }}>
+                                                    {c.isOnline ? (c.sessionUser || (c.status === 'active' ? 'Active' : 'Idle')) : 'Offline'}
+                                                </Text>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                         </Card>
                     </Col>
 
-                    {/* Revenue Summary */}
+                    {/* Revenue + Tasks */}
                     <Col xs={24} lg={10}>
                         <Card
+                            size="small"
                             title={
                                 <Space>
                                     <DollarOutlined style={{ color: '#00C853' }} />
-                                    <span>Revenue Summary</span>
+                                    <span>Revenue</span>
                                 </Space>
                             }
                         >
-                            <Row gutter={[16, 16]}>
-                                <Col span={8}>
-                                    <div style={{ textAlign: 'center', padding: 16, background: 'rgba(0, 200, 83, 0.1)', borderRadius: 12 }}>
-                                        <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>Today</Text>
-                                        <Text strong style={{ fontSize: 20, color: '#00C853' }}>
-                                            {formatKSH(computedStats.todayRevenue)}
-                                        </Text>
-                                    </div>
-                                </Col>
-                                <Col span={8}>
-                                    <div style={{ textAlign: 'center', padding: 16, background: 'rgba(0, 180, 216, 0.1)', borderRadius: 12 }}>
-                                        <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>This Week</Text>
-                                        <Text strong style={{ fontSize: 20, color: '#00B4D8' }}>
-                                            {formatKSH(computedStats.weekRevenue)}
-                                        </Text>
-                                    </div>
-                                </Col>
-                                <Col span={8}>
-                                    <div style={{ textAlign: 'center', padding: 16, background: 'rgba(255, 183, 3, 0.1)', borderRadius: 12 }}>
-                                        <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>This Month</Text>
-                                        <Text strong style={{ fontSize: 20, color: '#FFB703' }}>
-                                            {formatKSH(computedStats.monthRevenue)}
-                                        </Text>
-                                    </div>
-                                </Col>
-                            </Row>
-
-                            <div style={{ marginTop: 24 }}>
-                                <Text type="secondary">Sessions Today: {computedStats.todaySessions}</Text>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(0,200,83,0.08)', borderRadius: 10 }}>
+                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Today</Text>
+                                    <Text strong style={{ fontSize: 16, color: '#00C853', fontFamily: 'JetBrains Mono' }}>
+                                        {formatKSH(computedStats.todayRevenue)}
+                                    </Text>
+                                </div>
+                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(0,180,216,0.08)', borderRadius: 10 }}>
+                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>This Week</Text>
+                                    <Text strong style={{ fontSize: 16, color: '#00B4D8', fontFamily: 'JetBrains Mono' }}>
+                                        {formatKSH(computedStats.weekRevenue)}
+                                    </Text>
+                                </div>
+                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(255,183,3,0.08)', borderRadius: 10 }}>
+                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>This Month</Text>
+                                    <Text strong style={{ fontSize: 16, color: '#FFB703', fontFamily: 'JetBrains Mono' }}>
+                                        {formatKSH(computedStats.monthRevenue)}
+                                    </Text>
+                                </div>
+                            </div>
+                            <div style={{ marginTop: 10, display: 'flex', gap: 12, fontSize: 12 }}>
+                                <Text type="secondary">{computedStats.todaySessions} sessions today</Text>
+                                <Text type="secondary">•</Text>
+                                <Text type="secondary">{computedStats.completedTasks} tasks done</Text>
                             </div>
                         </Card>
 
-                        {/* Active Tasks */}
+                        {/* Pending Tasks */}
                         <Card
+                            size="small"
                             title={
                                 <Space>
                                     <FileTextOutlined style={{ color: '#FFB703' }} />
-                                    <span>Recent Tasks</span>
-                                    <Badge count={computedStats.pendingTasks} style={{ backgroundColor: '#FFB703' }} />
+                                    <span>Active Tasks</span>
+                                    {computedStats.pendingTasks > 0 && <Badge count={computedStats.pendingTasks} style={{ backgroundColor: '#FFB703' }} />}
                                 </Space>
                             }
-                            style={{ marginTop: 24 }}
+                            style={{ marginTop: 16 }}
+                            bodyStyle={{ maxHeight: 180, overflowY: 'auto' }}
                         >
                             {tasks.length === 0 ? (
-                                <Empty description="No tasks created yet. Create tasks to assign to users." />
+                                <Empty description="No tasks" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '12px 0' }} />
                             ) : (
                                 <List
                                     size="small"
-                                    dataSource={tasks.slice(0, 5)}
+                                    dataSource={tasks.slice(0, 4)}
                                     renderItem={task => (
-                                        <List.Item>
+                                        <List.Item style={{ padding: '6px 0' }}>
                                             <List.Item.Meta
                                                 avatar={
                                                     <Avatar
                                                         size="small"
                                                         style={{
                                                             background: task.status === 'completed' ? '#00C853' :
-                                                                task.status === 'in-progress' ? '#00B4D8' : '#FFB703'
+                                                                task.status === 'in-progress' ? '#00B4D8' : '#FFB703',
+                                                            width: 28, height: 28
                                                         }}
                                                     >
                                                         {task.status === 'completed' ? <CheckCircleOutlined /> : <SyncOutlined />}
                                                     </Avatar>
                                                 }
-                                                title={<Text ellipsis style={{ maxWidth: 200 }}>{task.title}</Text>}
+                                                title={<Text ellipsis style={{ maxWidth: 180, fontSize: 13 }}>{task.title}</Text>}
                                                 description={
-                                                    <Space>
-                                                        <Tag size="small" color={
+                                                    <Space size={4}>
+                                                        <Tag size="small" style={{ fontSize: 10 }} color={
                                                             task.status === 'completed' ? 'success' :
                                                                 task.status === 'in-progress' ? 'processing' : 'warning'
-                                                        }>
-                                                            {task.status}
-                                                        </Tag>
-                                                        <Text type="secondary" style={{ fontSize: 11 }}>
-                                                            {formatKSH(task.price)}
-                                                        </Text>
+                                                        }>{task.status}</Tag>
+                                                        <Text type="secondary" style={{ fontSize: 11 }}>{formatKSH(task.price)}</Text>
                                                     </Space>
                                                 }
                                             />
@@ -365,104 +366,50 @@ function Dashboard() {
                     </Col>
                 </Row>
 
-                <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-                    {/* Recent Sessions */}
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <ClockCircleOutlined style={{ color: '#00B4D8' }} />
-                                    <span>Recent Sessions</span>
-                                </Space>
-                            }
-                        >
-                            {sessions.length === 0 ? (
-                                <Empty description="No sessions recorded yet. Sessions appear when users log in/out on connected PCs." />
-                            ) : (
-                                <List
-                                    size="small"
-                                    dataSource={sessions.slice(0, 6)}
-                                    renderItem={session => (
-                                        <List.Item>
-                                            <List.Item.Meta
-                                                avatar={
-                                                    <Avatar style={{ background: session.type === 'LOGIN' ? '#00C853' : '#FB8500' }}>
-                                                        {session.type === 'LOGIN' ? <PlayCircleOutlined /> : <LockOutlined />}
-                                                    </Avatar>
-                                                }
-                                                title={
-                                                    <Space>
-                                                        <Text>{session.hostname}</Text>
-                                                        <Tag color={session.type === 'LOGIN' ? 'success' : 'warning'}>
-                                                            {session.type}
-                                                        </Tag>
-                                                    </Space>
-                                                }
-                                                description={
-                                                    <Space>
-                                                        <Text type="secondary">{session.user || 'Unknown'}</Text>
-                                                        {session.charges && (
-                                                            <Text style={{ color: '#00C853' }}>
-                                                                {formatKSH(session.charges.grandTotal)}
-                                                            </Text>
-                                                        )}
-                                                    </Space>
-                                                }
-                                            />
-                                            <Text type="secondary" style={{ fontSize: 11 }}>
-                                                {dayjs(session.receivedAt).fromNow()}
+                {/* Activity Feed */}
+                <Card
+                    size="small"
+                    title={
+                        <Space>
+                            <ClockCircleOutlined style={{ color: '#00B4D8' }} />
+                            <span>Recent Activity</span>
+                        </Space>
+                    }
+                    style={{ marginTop: 16 }}
+                    bodyStyle={{ maxHeight: 280, overflowY: 'auto' }}
+                >
+                    {activityFeed.length === 0 ? (
+                        <Empty description="No recent activity" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '16px 0' }} />
+                    ) : (
+                        <List
+                            size="small"
+                            dataSource={activityFeed.slice(0, 8)}
+                            renderItem={item => (
+                                <List.Item style={{ padding: '8px 0' }}>
+                                    <List.Item.Meta
+                                        avatar={
+                                            <Avatar size={32} style={{ background: item.iconBg, fontSize: 14 }}>
+                                                {item.icon}
+                                            </Avatar>
+                                        }
+                                        title={<Text style={{ fontSize: 13 }}>{item.title}</Text>}
+                                        description={<Text type="secondary" style={{ fontSize: 11 }}>{item.desc}</Text>}
+                                    />
+                                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                        {item.extra && (
+                                            <Text style={{ color: '#00C853', fontSize: 13, fontFamily: 'JetBrains Mono', display: 'block' }}>
+                                                {item.extra}
                                             </Text>
-                                        </List.Item>
-                                    )}
-                                />
+                                        )}
+                                        <Text type="secondary" style={{ fontSize: 10 }}>
+                                            {dayjs(item.time).fromNow()}
+                                        </Text>
+                                    </div>
+                                </List.Item>
                             )}
-                        </Card>
-                    </Col>
-
-                    {/* Recent Print Jobs */}
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <PrinterOutlined style={{ color: '#7B2CBF' }} />
-                                    <span>Recent Print Jobs</span>
-                                </Space>
-                            }
-                        >
-                            {printJobs.length === 0 ? (
-                                <Empty description="No print jobs recorded yet. Print jobs appear when users print documents." />
-                            ) : (
-                                <List
-                                    size="small"
-                                    dataSource={printJobs.slice(0, 6)}
-                                    renderItem={job => (
-                                        <List.Item>
-                                            <List.Item.Meta
-                                                avatar={
-                                                    <Avatar style={{ background: job.printType === 'color' ? '#7B2CBF' : '#6b6b80' }}>
-                                                        <PrinterOutlined />
-                                                    </Avatar>
-                                                }
-                                                title={<Text ellipsis style={{ maxWidth: 200 }}>{job.documentName || 'Print Job'}</Text>}
-                                                description={
-                                                    <Space>
-                                                        <Tag color={job.printType === 'color' ? 'magenta' : 'default'}>
-                                                            {job.printType?.toUpperCase() || 'B&W'}
-                                                        </Tag>
-                                                        <Text type="secondary">{job.totalPages || 1} pages</Text>
-                                                    </Space>
-                                                }
-                                            />
-                                            <Text type="secondary" style={{ fontSize: 11 }}>
-                                                {job.hostname}
-                                            </Text>
-                                        </List.Item>
-                                    )}
-                                />
-                            )}
-                        </Card>
-                    </Col>
-                </Row>
+                        />
+                    )}
+                </Card>
             </Spin>
         </div>
     );
