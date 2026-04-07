@@ -932,15 +932,15 @@ function PrintManager() {
         return matchesStatus && matchesColor && matchesSearch && matchesPrinter && matchesComputer && matchesDate;
     }), [printJobs, filterStatus, filterColorType, searchText, filterPrinter, filterComputer, dateRange]);
 
-    const stats = {
-        totalJobs: totals.totalJobs || printJobs.length,
-        completed: printJobs.filter(j => j.status === 'completed').length,
-        pending: printJobs.filter(j => j.status === 'pending' || j.status === 'printing' || j.status === 'spooling').length,
-        totalPages: totals.totalPages || printJobs.reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
-        bwPages: totals.bwPages || printJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
-        colorPages: totals.colorPages || printJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
-        totalRevenue: totals.totalRevenue || printJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
-    };
+    const stats = useMemo(() => ({
+        totalJobs: filteredJobs.length,
+        completed: filteredJobs.filter(j => j.status === 'completed').length,
+        pending: filteredJobs.filter(j => j.status === 'pending' || j.status === 'printing' || j.status === 'spooling').length,
+        totalPages: filteredJobs.reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
+        bwPages: filteredJobs.filter(j => j.colorType === 'bw').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
+        colorPages: filteredJobs.filter(j => j.colorType === 'color').reduce((sum, j) => sum + (j.totalSheets || (j.pages * j.copies)), 0),
+        totalRevenue: filteredJobs.filter(j => j.status === 'completed').reduce((sum, j) => sum + j.totalPrice, 0),
+    }), [filteredJobs]);
 
     // Calculate total printers across all clients
     const totalPrintersCount = printers.reduce((sum, client) => sum + (client.printers?.length || 0), 0);
