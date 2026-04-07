@@ -652,6 +652,14 @@ ipcMain.on('get-portal-data', async (event) => {
     await sendPortalData(event);
 });
 
+// Provide client info to portal for activity record submissions
+ipcMain.handle('get-client-info', () => {
+    return {
+        clientId: CLIENT_ID,
+        hostname: os.hostname()
+    };
+});
+
 // Get photocopy sheet readings for portal display
 let photocopyReadings = [];
 
@@ -757,7 +765,8 @@ ipcMain.on('record-sale', async (event, saleData) => {
                 reason: note,
                 paymentMethod: paymentMethod || 'cash',
                 clientId: CLIENT_ID,
-                sessionId: currentSession?.id
+                sessionId: currentSession?.id,
+                sessionUser: currentSession?.user || 'unknown'
             }, { timeout: 10000 });
 
             if (response.data.success) {
@@ -778,7 +787,7 @@ ipcMain.on('record-sale', async (event, saleData) => {
         } catch (error) {
             // If network fails, queue for later
             console.log('[Portal] Network error, queuing sale for later sync');
-            offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash' });
+            offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash', sessionId: currentSession?.id, sessionUser: currentSession?.user || 'unknown' });
             offlineStore.decrementLocalStock(itemId, quantity);
             event.reply('sale-result', {
                 success: true,
@@ -791,7 +800,7 @@ ipcMain.on('record-sale', async (event, saleData) => {
         }
     } else {
         // Offline mode - queue the action
-        offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash' });
+        offlineStore.addPendingAction('SELL_ITEM', { itemId, itemName, quantity, unitPrice, total, note, paymentMethod: paymentMethod || 'cash', sessionId: currentSession?.id, sessionUser: currentSession?.user || 'unknown' });
         offlineStore.decrementLocalStock(itemId, quantity);
         event.reply('sale-result', {
             success: true,
@@ -1158,7 +1167,9 @@ async function autoSyncPending() {
                         quantity: action.payload.quantity,
                         reason: `Offline sale: ${action.payload.note || ''} (auto-synced)`,
                         paymentMethod: action.payload.paymentMethod || 'cash',
-                        clientId: CLIENT_ID
+                        clientId: CLIENT_ID,
+                        sessionId: action.payload.sessionId,
+                        sessionUser: action.payload.sessionUser || 'unknown'
                     },
                     { timeout: 10000 }
                 );
@@ -3590,6 +3601,8 @@ ipcMain.on('record-activity', (event, data) => {
     // Notify portal window of updated activity log
     if (portalWindow && !portalWindow.isDestroyed()) {
         portalWindow.webContents.send('activity-log', activityLog);
+        // Also send individual record so portal merges it into localStorage daily log
+        portalWindow.webContents.send('shortcut-activity-recorded', record);
     }
 
     // Show desktop notification
@@ -3698,12 +3711,13 @@ ipcMain.on('trigger-activity-popup', (event, service) => {
     showActivityPopup(service);
 });
 
-// IPC: Get client info (used by portal for activity submission)
-ipcMain.handle('get-client-info', () => {
-    return {
-        clientId: CLIENT_ID,
-        hostname: os.hostname()
-    };
+// IPC: Trigger photocopy collection when daily activity is submitted
+ipcMain.on('activity-submitted', async () => {
+    try {
+        await triggerPhotocopyCollection('submit-activity');
+    } catch (e) {
+        console.error('[PHOTOCOPY] Trigger after activity submit failed:', e.message);
+    }
 });
 
 // ==================== APP LIFECYCLE ====================

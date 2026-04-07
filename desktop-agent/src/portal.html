@@ -2838,6 +2838,31 @@
         const DAILY_LOG_KEY = 'hawknine_daily_activity_log';
         const DAILY_LOG_DATE_KEY = 'hawknine_daily_activity_date';
 
+        // Listen for activity records from keyboard shortcuts (via main process)
+        ipcRenderer.on('shortcut-activity-recorded', (event, record) => {
+            // Avoid duplicates (check by id)
+            if (dailyActivityLog.some(r => r.id === record.id)) return;
+
+            // Map main.js record format to portal format
+            const portalRecord = {
+                id: record.id,
+                serviceId: record.serviceId,
+                serviceName: record.serviceName,
+                icon: record.icon || '📋',
+                quantity: record.quantity,
+                unitPrice: record.unitPrice,
+                totalAmount: record.totalAmount,
+                customerName: record.customerName || '',
+                notes: record.notes || '',
+                timestamp: record.timestamp
+            };
+
+            dailyActivityLog.push(portalRecord);
+            saveDailyLogToStorage();
+            renderDailyActivityLog();
+            showToast(`⌨️ Shortcut: ${record.serviceName} x${record.quantity} = KSH ${record.totalAmount.toLocaleString()}`, 'success');
+        });
+
         // Fetch trackable services from backend
         async function fetchTrackableServices() {
             try {
