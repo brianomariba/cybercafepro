@@ -49,17 +49,56 @@ const { startSheetsMonitor, runSheetsCycle } = require('./sheets-monitor');
 function forceDownloadsFolder() {
     if (os.platform() !== 'win32') return;
     const downloadsPath = path.join(os.homedir(), 'Downloads');
-    // We try injecting into HKCU (Current User) because it doesn't require admin elevation, though HKLM is stronger.
+    // Ensure Downloads folder exists
+    if (!fs.existsSync(downloadsPath)) {
+        try { fs.mkdirSync(downloadsPath, { recursive: true }); } catch (e) { /* ignore */ }
+    }
+
     const cmds = [
+        // Chrome: Set download directory and disable "Ask where to save"
         `reg add "HKCU\\Software\\Policies\\Google\\Chrome" /v DefaultDownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`,
-        `reg add "HKCU\\Software\\Policies\\Microsoft\\Edge" /v DefaultDownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`
+        `reg add "HKCU\\Software\\Policies\\Google\\Chrome" /v PromptForDownloadLocation /t REG_DWORD /d 0 /f`,
+        `reg add "HKCU\\Software\\Policies\\Google\\Chrome" /v DownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`,
+        // Edge: Set download directory and disable "Ask where to save"
+        `reg add "HKCU\\Software\\Policies\\Microsoft\\Edge" /v DefaultDownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`,
+        `reg add "HKCU\\Software\\Policies\\Microsoft\\Edge" /v PromptForDownloadLocation /t REG_DWORD /d 0 /f`,
+        `reg add "HKCU\\Software\\Policies\\Microsoft\\Edge" /v DownloadDirectory /t REG_SZ /d "${downloadsPath}" /f`,
     ];
     cmds.forEach(cmd => {
         exec(cmd, (err) => {
-            if (err) console.error('[REGISTRY] Failed to enforce policy:', cmd, err.message);
-            else console.log('[REGISTRY] Successfully enforced download policy to Downloads for browsers.');
+            if (err) console.error('[REGISTRY] Failed:', err.message);
         });
     });
+
+    // Firefox: Write user.js preferences to force download folder
+    try {
+        const firefoxProfiles = path.join(os.homedir(), 'AppData', 'Roaming', 'Mozilla', 'Firefox', 'Profiles');
+        if (fs.existsSync(firefoxProfiles)) {
+            const profiles = fs.readdirSync(firefoxProfiles).filter(d => {
+                try { return fs.statSync(path.join(firefoxProfiles, d)).isDirectory(); } catch { return false; }
+            });
+            const prefs = [
+                `user_pref("browser.download.dir", "${downloadsPath.replace(/\\/g, '\\\\')}");`,
+                `user_pref("browser.download.folderList", 2);`,
+                `user_pref("browser.download.useDownloadDir", true);`,
+                `user_pref("browser.download.manager.showWhenStarting", false);`
+            ].join('\n') + '\n';
+            for (const profile of profiles) {
+                const userJs = path.join(firefoxProfiles, profile, 'user.js');
+                try {
+                    // Append if file exists, or create new
+                    let existing = '';
+                    if (fs.existsSync(userJs)) existing = fs.readFileSync(userJs, 'utf8');
+                    if (!existing.includes('browser.download.dir')) {
+                        fs.appendFileSync(userJs, '\n// HawkNine: Force downloads to Downloads folder\n' + prefs);
+                    }
+                } catch (e) { /* ignore permission errors */ }
+            }
+            console.log('[REGISTRY] Firefox download preferences applied');
+        }
+    } catch (e) { /* Firefox not installed, skip */ }
+
+    console.log(`[REGISTRY] Browser download policies enforced → ${downloadsPath}`);
 }
 
 // Load Configuration
@@ -1313,7 +1352,7 @@ async function startSession(username) {
                                 path: serviceResult.path,
                                 timestamp: serviceResult.timestamp
                             };
-                            sendToServer(`${API_URL}/agent/online-services`, servicePayload).catch(e => console.error('Online Service Log Error:', e.message));
+                            sendToServer(`${config.server.baseUrl}/api/v1/agent/online-services`, servicePayload).catch(e => console.error('Online Service Log Error:', e.message));
                         }
                     }).catch(err => console.error("PDF Scan Error (RT):", err));
                 }
