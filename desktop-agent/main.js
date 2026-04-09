@@ -933,15 +933,14 @@ ipcMain.on('get-pending-count', (event) => {
 // Open a resource (Template/Guide)
 ipcMain.on('open-resource', async (event, { type, id, title }) => {
     try {
-        // Construct download URL
-        // endpoint: /api/v1/templates/:id/download or /api/v1/guides/:id/download
-        const url = `${config.server.baseUrl}/api/v1/${type}/${id}/download`;
+        // For templates, use /view endpoint to open inline in browser
+        // For guides and other types, use /download endpoint
+        const action = type === 'templates' ? 'view' : 'download';
+        const url = `${config.server.baseUrl}/api/v1/${type}/${id}/${action}`;
 
-        console.log(`[RESOURCE] Requesting to open: ${url}`);
+        console.log(`[RESOURCE] Opening (${action}): ${url}`);
 
-        // Use shell.openExternal as a robust fallback that works for all file types
-        // This opens the URL in the default browser, which will handle the download/viewing
-        // This is often more reliable than downloading to temp and trying to open with specific app
+        // Use shell.openExternal to open in the default browser
         await shell.openExternal(url);
 
     } catch (error) {
@@ -1109,7 +1108,8 @@ async function sendPortalData(event) {
         submissions: offlineStore.getSubmissions(),
         lastSync: offlineStore.getLastSync(),
         printers,
-        isOnline
+        isOnline,
+        serverBaseUrl: config.server.baseUrl
     });
     console.log(`[Portal] Data sent to renderer (Public Docs: ${offlineStore.getPublicDocuments().length})`);
 }
@@ -3381,7 +3381,7 @@ function showActivityPopup(service) {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
     const popW = 420;
-    const popH = 380;
+    const popH = 420;
 
     activityWindow = new BrowserWindow({
         width: popW,
@@ -3435,61 +3435,66 @@ function buildActivityPopupHtml(service) {
     background: transparent;
     -webkit-app-region: drag;
     user-select: none;
+    overflow: hidden;
   }
   .popup {
     background: rgba(18, 18, 30, 0.96);
     border: 1px solid ${svcColor}44;
     border-radius: 16px;
-    padding: 24px;
+    padding: 20px 22px;
     box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px ${svcColor}22;
     backdrop-filter: blur(20px);
     -webkit-app-region: no-drag;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
   .header {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
   }
   .svc-icon {
-    width: 44px; height: 44px; border-radius: 12px;
+    width: 40px; height: 40px; border-radius: 10px;
     background: ${svcColor}22; display: flex; align-items: center;
-    justify-content: center; font-size: 22px;
+    justify-content: center; font-size: 20px;
     border: 1px solid ${svcColor}44;
+    flex-shrink: 0;
   }
   .svc-info h2 {
-    color: #fff; font-size: 16px; font-weight: 700;
+    color: #fff; font-size: 15px; font-weight: 700;
   }
   .svc-info .price {
-    color: ${svcColor}; font-size: 13px; font-weight: 600;
+    color: ${svcColor}; font-size: 12px; font-weight: 600;
   }
   .close-btn {
-    position: absolute; top: 12px; right: 16px;
+    position: absolute; top: 10px; right: 14px;
     background: none; border: none; color: #666; font-size: 18px;
     cursor: pointer; width: 28px; height: 28px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
     transition: all 0.2s;
   }
   .close-btn:hover { background: rgba(255,77,79,0.15); color: #ff4d4f; }
-  .field { margin-bottom: 14px; }
+  .field { margin-bottom: 10px; }
   .field label {
-    display: block; color: #aaa; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+    display: block; color: #aaa; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
   }
   .field input, .field select, .field textarea {
     width: 100%; background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
-    color: #fff; padding: 10px 14px; font-size: 14px;
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+    color: #fff; padding: 8px 12px; font-size: 13px;
     font-family: inherit; outline: none; transition: border 0.2s;
   }
   .field input:focus, .field select:focus, .field textarea:focus {
     border-color: ${svcColor};
   }
-  .field textarea { resize: none; height: 50px; }
+  .field textarea { resize: none; height: 38px; }
   .field select { appearance: none; cursor: pointer; }
   .field select option { background: #1a1a2e; color: #fff; }
-  .row { display: flex; gap: 10px; }
+  .row { display: flex; gap: 8px; }
   .row .field { flex: 1; }
   .qty-row { display: flex; align-items: center; gap: 8px; }
   .qty-btn {
-    width: 36px; height: 36px; border-radius: 10px; border: none;
+    width: 34px; height: 34px; border-radius: 8px; border: none;
     background: ${svcColor}22; color: ${svcColor}; font-size: 18px;
     font-weight: 700; cursor: pointer; display: flex;
     align-items: center; justify-content: center; transition: all 0.2s;
@@ -3500,19 +3505,35 @@ function buildActivityPopupHtml(service) {
   }
   .total-row {
     display: flex; justify-content: space-between; align-items: center;
-    padding: 12px 16px; background: ${svcColor}11; border-radius: 10px;
-    border: 1px solid ${svcColor}22; margin-bottom: 16px;
+    padding: 10px 14px; background: ${svcColor}11; border-radius: 10px;
+    border: 1px solid ${svcColor}22; margin-bottom: 12px;
+    transition: all 0.3s;
   }
-  .total-label { color: #999; font-size: 12px; font-weight: 600; }
-  .total-amount { color: ${svcColor}; font-size: 20px; font-weight: 800; }
+  .total-row.flash {
+    border-color: ${svcColor}88;
+    box-shadow: 0 0 16px ${svcColor}33;
+  }
+  .total-label { color: #999; font-size: 11px; font-weight: 600; }
+  .total-amount { color: ${svcColor}; font-size: 20px; font-weight: 800; transition: transform 0.2s; }
+  .total-amount.bounce { transform: scale(1.15); }
   .submit-btn {
     width: 100%; padding: 12px; background: linear-gradient(135deg, ${svcColor}, ${svcColor}cc);
-    border: none; border-radius: 12px; color: #fff; font-size: 15px;
+    border: none; border-radius: 12px; color: #fff; font-size: 14px;
     font-weight: 700; cursor: pointer; transition: all 0.2s;
-    font-family: inherit;
+    font-family: inherit; margin-top: auto;
   }
   .submit-btn:hover { filter: brightness(1.15); transform: translateY(-1px); }
   .submit-btn:active { transform: translateY(0); }
+  .enter-hint {
+    text-align: center; font-size: 10px; color: #666;
+    margin-top: 6px; transition: all 0.3s;
+  }
+  .enter-hint .key {
+    display: inline-block; padding: 1px 6px; background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
+    font-family: monospace; font-size: 10px; color: #aaa;
+  }
+  .enter-hint.ready { color: ${svcColor}; }
 </style>
 </head>
 <body>
@@ -3530,7 +3551,7 @@ function buildActivityPopupHtml(service) {
     <label>Quantity</label>
     <div class="qty-row">
       <button class="qty-btn" onclick="changeQty(-1)">−</button>
-      <input type="number" class="qty-input" id="qty" value="1" min="1" onchange="updateTotal()">
+      <input type="number" class="qty-input" id="qty" value="1" min="1" oninput="onQtyChange()">
       <button class="qty-btn" onclick="changeQty(1)">+</button>
     </div>
   </div>
@@ -3540,7 +3561,7 @@ function buildActivityPopupHtml(service) {
       <label>Customer (optional)</label>
       <input type="text" id="customer" placeholder="Customer name">
     </div>
-    <div class="field">
+    <div class="field" style="max-width: 120px;">
       <label>Payment</label>
       <select id="payment">
         <option value="cash">💵 Cash</option>
@@ -3554,7 +3575,7 @@ function buildActivityPopupHtml(service) {
     <textarea id="notes" placeholder="Any additional details..."></textarea>
   </div>
 
-  <div class="total-row">
+  <div class="total-row" id="totalRow">
     <span class="total-label">TOTAL</span>
     <span class="total-amount" id="totalDisplay">KSH ${(service.price || 0).toLocaleString()}</span>
   </div>
@@ -3562,18 +3583,24 @@ function buildActivityPopupHtml(service) {
   <button class="submit-btn" id="submitBtn" onclick="recordActivity()">
     ⚡ Record Activity
   </button>
+  <div class="enter-hint" id="enterHint">
+    Press <span class="key">Enter</span> to calculate total, then <span class="key">Enter</span> again to record
+  </div>
 </div>
 
 <script>
   const { ipcRenderer } = require('electron');
   let currentService = ${JSON.stringify({ _id: service._id, name: service.name, price: service.price, unit: service.unit, icon: service.icon, color: service.color })};
+  let totalConfirmed = false; // Tracks if Enter was pressed once to confirm total
 
   // Listen for service change (if popup reused)
   ipcRenderer.on('set-service', (e, svc) => {
     currentService = svc;
     document.getElementById('svcName').textContent = svc.name;
     document.getElementById('qty').value = 1;
+    totalConfirmed = false;
     updateTotal();
+    updateHint();
   });
 
   function changeQty(delta) {
@@ -3581,13 +3608,44 @@ function buildActivityPopupHtml(service) {
     let v = parseInt(inp.value) || 1;
     v = Math.max(1, v + delta);
     inp.value = v;
+    totalConfirmed = false;
     updateTotal();
+    updateHint();
+  }
+
+  function onQtyChange() {
+    totalConfirmed = false;
+    updateTotal();
+    updateHint();
   }
 
   function updateTotal() {
     const qty = parseInt(document.getElementById('qty').value) || 1;
     const total = qty * (currentService.price || 0);
     document.getElementById('totalDisplay').textContent = 'KSH ' + total.toLocaleString();
+  }
+
+  function flashTotal() {
+    const row = document.getElementById('totalRow');
+    const amount = document.getElementById('totalDisplay');
+    row.classList.add('flash');
+    amount.classList.add('bounce');
+    setTimeout(() => {
+      row.classList.remove('flash');
+      amount.classList.remove('bounce');
+    }, 400);
+  }
+
+  function updateHint() {
+    const hint = document.getElementById('enterHint');
+    if (totalConfirmed) {
+      hint.textContent = '';
+      hint.innerHTML = 'Press <span class="key">Enter</span> to record activity ⚡';
+      hint.classList.add('ready');
+    } else {
+      hint.innerHTML = 'Press <span class="key">Enter</span> to calculate total, then <span class="key">Enter</span> again to record';
+      hint.classList.remove('ready');
+    }
   }
 
   function recordActivity() {
@@ -3614,6 +3672,26 @@ function buildActivityPopupHtml(service) {
     btn.style.background = 'linear-gradient(135deg, #52c41a, #389e0d)';
     setTimeout(() => window.close(), 600);
   }
+
+  // Global Enter key handler: two-step flow
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!totalConfirmed) {
+        // First Enter: calculate & confirm total
+        updateTotal();
+        flashTotal();
+        totalConfirmed = true;
+        updateHint();
+      } else {
+        // Second Enter: record the activity
+        recordActivity();
+      }
+    }
+    if (e.key === 'Escape') {
+      window.close();
+    }
+  });
 
   // Auto-focus quantity input
   setTimeout(() => document.getElementById('qty').focus(), 100);

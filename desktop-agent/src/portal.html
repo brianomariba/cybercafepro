@@ -506,6 +506,195 @@
             box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
         }
 
+        /* Floating Cart Button */
+        .cart-fab {
+            position: fixed;
+            bottom: 28px;
+            right: 28px;
+            z-index: 500;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            border: none;
+            color: white;
+            font-size: 26px;
+            cursor: pointer;
+            box-shadow: 0 6px 24px rgba(0, 180, 216, 0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: cartPulseIn 0.4s ease;
+        }
+
+        .cart-fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 32px rgba(0, 180, 216, 0.6);
+        }
+
+        .cart-fab .cart-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            background: var(--danger);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--bg-dark);
+            animation: badgeBounce 0.3s ease;
+        }
+
+        @keyframes cartPulseIn {
+            0% { transform: scale(0); opacity: 0; }
+            60% { transform: scale(1.15); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        @keyframes badgeBounce {
+            0% { transform: scale(0); }
+            60% { transform: scale(1.3); }
+            100% { transform: scale(1); }
+        }
+
+        /* Cart Item Row in Checkout */
+        .cart-item-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            margin-bottom: 8px;
+            transition: all 0.25s;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .cart-item-row:hover {
+            border-color: rgba(0, 180, 216, 0.3);
+            background: rgba(0, 180, 216, 0.04);
+        }
+
+        .cart-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .cart-item-name {
+            font-weight: 600;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .cart-item-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .cart-item-qty {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .cart-item-qty .cart-qty-btn {
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            background: rgba(0, 180, 216, 0.1);
+            border: 1px solid rgba(0, 180, 216, 0.4);
+            color: var(--primary);
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .cart-item-qty .cart-qty-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .cart-item-qty .cart-qty-val {
+            font-size: 15px;
+            font-weight: 700;
+            min-width: 28px;
+            text-align: center;
+        }
+
+        .cart-item-total {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--success);
+            min-width: 80px;
+            text-align: right;
+        }
+
+        .cart-item-remove {
+            background: none;
+            border: none;
+            color: var(--danger);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 4px 6px;
+            border-radius: 4px;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+        }
+
+        .cart-item-remove:hover {
+            opacity: 1;
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .cart-summary-bar {
+            background: linear-gradient(135deg, rgba(0, 200, 83, 0.12), rgba(0, 180, 216, 0.12));
+            border: 1px solid rgba(0, 200, 83, 0.3);
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+        }
+
+        .checkout-progress {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            margin-top: 12px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .checkout-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--success));
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        /* Add to cart success animation on item card */
+        .item-card.added-flash {
+            border-color: var(--success) !important;
+            box-shadow: 0 0 16px rgba(0, 200, 83, 0.3);
+        }
+
         /* Service/Template Cards */
         .service-card {
             background: var(--card-bg);
@@ -537,10 +726,74 @@
             background: var(--card-bg);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 12px;
-            padding: 16px;
+            overflow: hidden;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .template-card:hover {
+            border-color: rgba(0, 180, 216, 0.4);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .template-preview {
+            width: 100%;
+            height: 140px;
+            background: rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
             display: flex;
-            gap: 12px;
             align-items: center;
+            justify-content: center;
+        }
+
+        .template-preview iframe {
+            width: 200%;
+            height: 200%;
+            border: none;
+            transform: scale(0.5);
+            transform-origin: top left;
+            pointer-events: none;
+        }
+
+        .template-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .template-preview .preview-icon {
+            font-size: 48px;
+            opacity: 0.5;
+        }
+
+        .template-preview .preview-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.25s;
+        }
+
+        .template-card:hover .preview-overlay {
+            opacity: 1;
+        }
+
+        .preview-overlay span {
+            background: rgba(0, 180, 216, 0.9);
+            color: white;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .template-body {
+            padding: 14px 16px;
         }
 
         .template-icon {
@@ -1154,7 +1407,7 @@
         <button class="nav-tab" data-section="templates">📄 Templates</button>
         <button class="nav-tab" data-section="guides">📚 Guides</button>
         <button class="nav-tab" data-section="printers" style="display:none">🖨️ My Printers</button>
-        <button class="nav-tab" data-section="photocopy">📋 Photocopy Tracking</button>
+        <button class="nav-tab" data-section="photocopy" style="display:none">📋 Photocopy Tracking</button>
         <button class="nav-tab" data-section="submissions">📤 Submissions</button>
         <button class="nav-tab" data-section="activity">⚡ Activity Tracker <span class="badge" id="activityBadge" style="display:none">0</span></button>
         <button class="nav-tab" data-section="help">❓ Help & Shortcuts</button>
@@ -1527,11 +1780,11 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <!-- Sale Modal -->
+    <!-- Add to Cart Modal -->
     <div class="modal-overlay" id="saleModal">
         <div class="modal">
             <div class="modal-header">
-                <h3 class="modal-title">Record Sale</h3>
+                <h3 class="modal-title">🛒 Add to Cart</h3>
                 <button class="modal-close" onclick="closeSaleModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -1553,11 +1806,46 @@
 
                 <div
                     style="background: rgba(0, 200, 83, 0.1); padding: 16px; border-radius: 8px; text-align: center; margin: 16px 0;">
-                    <div style="font-size: 12px; color: var(--text-secondary);">Total Amount</div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">Line Total</div>
                     <div style="font-size: 28px; font-weight: 700; color: var(--success);" id="saleTotal">KSH 0</div>
                 </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSaleModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirmSaleBtn" onclick="addToCart()" style="background: linear-gradient(135deg, #00C853, #00B4D8);">🛒 Add to Cart</button>
+            </div>
+        </div>
+    </div>
 
-                <div class="form-group">
+    <!-- Floating Cart Button -->
+    <button class="cart-fab" id="cartFab" onclick="openCheckoutModal()" style="display: none;" title="View Cart">
+        🛒
+        <span class="cart-badge" id="cartBadge">0</span>
+    </button>
+
+    <!-- Checkout Modal -->
+    <div class="modal-overlay" id="checkoutModal">
+        <div class="modal" style="max-width: 560px;">
+            <div class="modal-header">
+                <h3 class="modal-title">🧾 Checkout</h3>
+                <button class="modal-close" onclick="closeCheckoutModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="cartItemsList" style="max-height: 280px; overflow-y: auto; margin-bottom: 12px;"></div>
+
+                <div class="cart-summary-bar">
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">Cart Total</div>
+                        <div style="font-size: 13px; color: var(--text-secondary);" id="checkoutItemCount">0 items</div>
+                    </div>
+                    <div style="font-size: 28px; font-weight: 800; color: var(--success);" id="checkoutGrandTotal">KSH 0</div>
+                </div>
+
+                <div class="checkout-progress" id="checkoutProgress">
+                    <div class="checkout-progress-bar" id="checkoutProgressBar"></div>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
                     <label class="form-label">Payment Method</label>
                     <div style="display: flex; gap: 8px;">
                         <button type="button" class="btn btn-small payment-method-btn active" id="pmCash"
@@ -1579,8 +1867,9 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="closeSaleModal()">Cancel</button>
-                <button class="btn btn-primary" id="confirmSaleBtn" onclick="confirmSale()">Confirm Sale</button>
+                <button class="btn btn-secondary" onclick="closeCheckoutModal()">Continue Shopping</button>
+                <button class="btn" onclick="clearCart()" style="background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3);">🗑️ Clear</button>
+                <button class="btn btn-primary" id="confirmCheckoutBtn" onclick="confirmCheckout()">💰 Confirm Sale</button>
             </div>
         </div>
     </div>
@@ -1749,6 +2038,11 @@
         let correctionTarget = null; // { transactionId, itemName, qty, amount }
         let correctionTimerInterval = null;
 
+        // Cart State
+        let cart = []; // Array of { id, name, price, stock, quantity }
+        let checkoutInProgress = false;
+        let serverBaseUrl = ''; // Server base URL for preview URLs
+
         // Activity Tracker State
         let trackableServices = [];
         let dailyActivityLog = []; // Array of { id, serviceId, serviceName, icon, quantity, unitPrice, totalAmount, customerName, notes, timestamp }
@@ -1837,6 +2131,7 @@
             }
 
             updateOnlineStatus(data.isOnline);
+            if (data.serverBaseUrl) serverBaseUrl = data.serverBaseUrl;
         });
 
         ipcRenderer.on('new-public-document', (event, data) => {
@@ -1881,11 +2176,13 @@
 
         ipcRenderer.on('sale-result', (event, result) => {
             if (result.success) {
-                showToast(result.message, 'success');
-                closeSaleModal();
-                loadAllData();
-                // Refresh sales history too
-                loadSalesHistory();
+                // Only show toast if not in batch checkout (batch shows its own toasts)
+                if (!checkoutInProgress) {
+                    showToast(result.message, 'success');
+                    closeSaleModal();
+                    loadAllData();
+                    loadSalesHistory();
+                }
             } else {
                 showToast(result.message, 'error');
             }
@@ -1974,12 +2271,17 @@
                 const isOut = item.stock <= 0;
                 const stockClass = isOut ? 'out' : (isLow ? 'low' : '');
 
+                // Check if already in cart
+                const inCart = cart.find(c => c.id === item._id);
+                const cartQtyLabel = inCart ? `<div style="font-size: 11px; color: var(--primary); font-weight: 600; margin-top: 4px;">🛒 ${inCart.quantity} in cart</div>` : '';
+
                 return `
-                    <div class="item-card ${isOut ? 'out-of-stock' : ''}" onclick="${isOut ? '' : `openSaleModal('${item._id}', '${item.name}', ${item.price}, ${item.stock})`}">
+                    <div class="item-card ${isOut ? 'out-of-stock' : ''} ${inCart ? 'added-flash' : ''}" onclick="${isOut ? '' : `openSaleModal('${item._id}', '${item.name.replace(/'/g, "\\'") }', ${item.price}, ${item.stock})`}">
                         <div class="item-category">${item.category || 'General'}</div>
                         <div class="item-name">${item.name}</div>
                         <div class="item-price">KSH ${(item.price || 0).toLocaleString()}</div>
                         <div class="item-stock ${stockClass}">${isOut ? 'Out of Stock' : `${item.stock} in stock`}</div>
+                        ${cartQtyLabel}
                     </div>
                 `;
             }).join('');
@@ -2022,16 +2324,37 @@
                 return;
             }
 
-            grid.innerHTML = templates.map(tpl => `
-                <div class="template-card">
-                    <div class="template-icon">${getFileIcon(tpl.type)}</div>
-                    <div class="template-info">
-                        <div class="template-name">${tpl.title}</div>
-                        <div class="template-type">${tpl.category || 'General'} • ${tpl.type || 'Document'}</div>
-                        <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('templates', '${tpl._id}', '${tpl.title}')">📂 Open</button>
+            grid.innerHTML = templates.map(tpl => {
+                const mime = (tpl.fileMimeType || '').toLowerCase();
+                const hasFile = !!tpl.fileUrl;
+                let previewHtml = '';
+
+                if (hasFile && serverBaseUrl) {
+                    const viewUrl = `${serverBaseUrl}/api/v1/templates/${tpl._id}/view`;
+                    if (mime.includes('pdf')) {
+                        previewHtml = `<iframe src="${viewUrl}#toolbar=0&navpanes=0&scrollbar=0" loading="lazy"></iframe>`;
+                    } else if (mime.includes('image')) {
+                        previewHtml = `<img src="${viewUrl}" alt="${escapeHtml(tpl.title)}" loading="lazy">`;
+                    } else {
+                        previewHtml = `<div class="preview-icon">${getFileIcon(tpl.type)}</div>`;
+                    }
+                } else {
+                    previewHtml = `<div class="preview-icon">${getFileIcon(tpl.type)}</div>`;
+                }
+
+                return `
+                    <div class="template-card" onclick="openResource('templates', '${tpl._id}', '${escapeHtml(tpl.title)}')">
+                        <div class="template-preview">
+                            ${previewHtml}
+                            <div class="preview-overlay"><span>📂 Open</span></div>
+                        </div>
+                        <div class="template-body">
+                            <div class="template-name">${escapeHtml(tpl.title)}</div>
+                            <div class="template-type">${tpl.category || 'General'} • ${tpl.type || 'Document'}</div>
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function renderGuides(guides) {
@@ -2284,19 +2607,26 @@
             }
         }
 
-        // Sale Modal
+        // Sale Modal (now serves as "Add to Cart" modal)
         function openSaleModal(id, name, price, stock) {
-            selectedItem = { id, name, price, stock };
+            // Account for items already in cart when computing available stock
+            const existing = cart.find(c => c.id === id);
+            const cartQty = existing ? existing.quantity : 0;
+            const availableStock = stock - cartQty;
+
+            if (availableStock <= 0) {
+                showToast(`All stock for ${name} is already in your cart`, 'error');
+                return;
+            }
+
+            selectedItem = { id, name, price, stock, availableStock };
             saleQuantity = 1;
             document.getElementById('saleItemName').textContent = name;
             document.getElementById('saleItemPrice').textContent = `KSH ${price.toLocaleString()} / unit`;
             const qtyInput = document.getElementById('saleQuantity');
             qtyInput.value = 1;
-            qtyInput.max = stock;
+            qtyInput.max = availableStock;
             document.getElementById('saleTotal').textContent = `KSH ${price.toLocaleString()}`;
-            document.getElementById('saleNote').value = '';
-            // Reset payment method to Cash
-            selectPaymentMethod('cash');
             document.getElementById('saleModal').classList.add('active');
             // Focus the quantity input so user can type immediately
             setTimeout(() => qtyInput.select(), 100);
@@ -2340,48 +2670,243 @@
 
         function adjustQuantity(delta) {
             if (!selectedItem) return;
+            const maxQty = selectedItem.availableStock || selectedItem.stock;
             const newQty = saleQuantity + delta;
-            if (newQty < 1 || newQty > selectedItem.stock) return;
+            if (newQty < 1 || newQty > maxQty) return;
             saleQuantity = newQty;
             updateSaleTotal();
         }
 
         function onQuantityInput(input) {
             if (!selectedItem) return;
+            const maxQty = selectedItem.availableStock || selectedItem.stock;
             let val = parseInt(input.value, 10);
             if (isNaN(val) || val < 1) val = 1;
-            if (val > selectedItem.stock) val = selectedItem.stock;
+            if (val > maxQty) val = maxQty;
             saleQuantity = val;
             // Don't overwrite while user is typing, just update total
             document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
         }
 
-        function confirmSale() {
+        // ==================== CART SYSTEM ====================
+
+        function addToCart() {
             if (!selectedItem) return;
-            // Read final value from input in case user typed directly
+            // Read final value from input
             const qtyInput = document.getElementById('saleQuantity');
             let qty = parseInt(qtyInput.value, 10);
+            const maxQty = selectedItem.availableStock || selectedItem.stock;
             if (isNaN(qty) || qty < 1) qty = 1;
-            if (qty > selectedItem.stock) qty = selectedItem.stock;
-            saleQuantity = qty;
-            qtyInput.value = qty;
+            if (qty > maxQty) qty = maxQty;
 
-            if (saleQuantity < 1) {
+            if (qty < 1) {
                 showToast('Please enter a valid quantity', 'error');
                 return;
             }
 
+            // Check if item already in cart
+            const existing = cart.find(c => c.id === selectedItem.id);
+            if (existing) {
+                existing.quantity += qty;
+                // Cap to available stock
+                if (existing.quantity > selectedItem.stock) {
+                    existing.quantity = selectedItem.stock;
+                }
+            } else {
+                cart.push({
+                    id: selectedItem.id,
+                    name: selectedItem.name,
+                    price: selectedItem.price,
+                    stock: selectedItem.stock,
+                    quantity: qty
+                });
+            }
+
+            closeSaleModal();
+            updateCartUI();
+            filterAndRenderInventory(); // Refresh to show cart badges on items
+            showToast(`🛒 Added ${qty}x ${selectedItem.name} to cart`, 'success');
+        }
+
+        function removeFromCart(itemId) {
+            cart = cart.filter(c => c.id !== itemId);
+            updateCartUI();
+            renderCheckoutItems();
+            filterAndRenderInventory();
+            if (cart.length === 0) {
+                closeCheckoutModal();
+            }
+        }
+
+        function adjustCartItemQty(itemId, delta) {
+            const item = cart.find(c => c.id === itemId);
+            if (!item) return;
+            const newQty = item.quantity + delta;
+            if (newQty < 1) {
+                removeFromCart(itemId);
+                return;
+            }
+            if (newQty > item.stock) return;
+            item.quantity = newQty;
+            updateCartUI();
+            renderCheckoutItems();
+            filterAndRenderInventory();
+        }
+
+        function clearCart() {
+            if (cart.length === 0) return;
+            if (!confirm('Clear all items from cart?')) return;
+            cart = [];
+            updateCartUI();
+            closeCheckoutModal();
+            filterAndRenderInventory();
+            showToast('Cart cleared', 'success');
+        }
+
+        function updateCartUI() {
+            const fab = document.getElementById('cartFab');
+            const badge = document.getElementById('cartBadge');
+            const totalItems = cart.reduce((sum, c) => sum + c.quantity, 0);
+            if (cart.length > 0) {
+                fab.style.display = 'flex';
+                badge.textContent = totalItems;
+            } else {
+                fab.style.display = 'none';
+            }
+        }
+
+        function getCartTotal() {
+            return cart.reduce((sum, c) => sum + (c.price * c.quantity), 0);
+        }
+
+        function openCheckoutModal() {
+            if (cart.length === 0) {
+                showToast('Your cart is empty', 'error');
+                return;
+            }
+            renderCheckoutItems();
+            selectPaymentMethod('cash');
+            document.getElementById('saleNote').value = '';
+            document.getElementById('checkoutModal').classList.add('active');
+        }
+
+        function closeCheckoutModal() {
+            document.getElementById('checkoutModal').classList.remove('active');
+        }
+
+        function renderCheckoutItems() {
+            const list = document.getElementById('cartItemsList');
+            const grandTotal = getCartTotal();
+            const totalItems = cart.reduce((sum, c) => sum + c.quantity, 0);
+
+            document.getElementById('checkoutGrandTotal').textContent = `KSH ${grandTotal.toLocaleString()}`;
+            document.getElementById('checkoutItemCount').textContent = `${cart.length} item${cart.length !== 1 ? 's' : ''} (${totalItems} unit${totalItems !== 1 ? 's' : ''})`;
+
+            if (cart.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">🛒</div><p>Your cart is empty</p></div>';
+                return;
+            }
+
+            list.innerHTML = cart.map(item => `
+                <div class="cart-item-row">
+                    <div class="cart-item-info">
+                        <div class="cart-item-name">📦 ${escapeHtml(item.name)}</div>
+                        <div class="cart-item-meta">KSH ${item.price.toLocaleString()} / unit • ${item.stock} in stock</div>
+                    </div>
+                    <div class="cart-item-qty">
+                        <button class="cart-qty-btn" onclick="adjustCartItemQty('${item.id}', -1)">−</button>
+                        <span class="cart-qty-val">${item.quantity}</span>
+                        <button class="cart-qty-btn" onclick="adjustCartItemQty('${item.id}', 1)">+</button>
+                    </div>
+                    <div class="cart-item-total">KSH ${(item.price * item.quantity).toLocaleString()}</div>
+                    <button class="cart-item-remove" onclick="removeFromCart('${item.id}')" title="Remove">✕</button>
+                </div>
+            `).join('');
+        }
+
+        async function confirmCheckout() {
+            if (cart.length === 0) return;
+            if (checkoutInProgress) return;
+
+            checkoutInProgress = true;
+            const btn = document.getElementById('confirmCheckoutBtn');
+            const progressContainer = document.getElementById('checkoutProgress');
+            const progressBar = document.getElementById('checkoutProgressBar');
             const note = document.getElementById('saleNote').value;
             const paymentMethod = document.querySelector('.payment-method-btn.active')?.id === 'pmMpesa' ? 'mpesa' : 'cash';
-            ipcRenderer.send('record-sale', {
-                itemId: selectedItem.id,
-                itemName: selectedItem.name,
-                quantity: saleQuantity,
-                unitPrice: selectedItem.price,
-                total: selectedItem.price * saleQuantity,
-                note,
-                paymentMethod
-            });
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Processing...';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+
+            let successCount = 0;
+            let failCount = 0;
+            const totalItems = cart.length;
+
+            for (let i = 0; i < totalItems; i++) {
+                const item = cart[i];
+                progressBar.style.width = `${((i) / totalItems) * 100}%`;
+                btn.textContent = `⏳ ${i + 1} of ${totalItems}...`;
+
+                try {
+                    await new Promise((resolve, reject) => {
+                        const onResult = (event, result) => {
+                            ipcRenderer.removeListener('sale-result', onResult);
+                            if (result.success) {
+                                successCount++;
+                                resolve();
+                            } else {
+                                failCount++;
+                                reject(new Error(result.message));
+                            }
+                        };
+                        ipcRenderer.on('sale-result', onResult);
+                        ipcRenderer.send('record-sale', {
+                            itemId: item.id,
+                            itemName: item.name,
+                            quantity: item.quantity,
+                            unitPrice: item.price,
+                            total: item.price * item.quantity,
+                            note,
+                            paymentMethod
+                        });
+                        // Safety timeout (30s)
+                        setTimeout(() => {
+                            ipcRenderer.removeListener('sale-result', onResult);
+                            failCount++;
+                            resolve();
+                        }, 30000);
+                    });
+                } catch (e) {
+                    console.error(`Checkout failed for ${item.name}:`, e.message);
+                }
+            }
+
+            progressBar.style.width = '100%';
+
+            // Done
+            checkoutInProgress = false;
+            btn.disabled = false;
+            btn.textContent = '💰 Confirm Sale';
+
+            if (successCount > 0) {
+                const grandTotal = getCartTotal();
+                showToast(`✅ ${successCount} item(s) sold for KSH ${grandTotal.toLocaleString()}!`, 'success');
+                cart = [];
+                updateCartUI();
+                closeCheckoutModal();
+                loadAllData();
+                loadSalesHistory();
+            }
+            if (failCount > 0) {
+                showToast(`❌ ${failCount} item(s) failed to process`, 'error');
+            }
+
+            setTimeout(() => {
+                progressContainer.style.display = 'none';
+                progressBar.style.width = '0%';
+            }, 500);
         }
 
         // Pending Actions

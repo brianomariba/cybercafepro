@@ -510,10 +510,14 @@ function PhotocopyTracker({ printers, refreshTrigger }) {
 function PhotocopyAudit({ printers, refreshTrigger }) {
     const [loading, setLoading] = useState(false);
     const [dateRange, setDateRange] = useState([dayjs().startOf('week'), dayjs().endOf('day')]);
-    const [machineData, setMachineData] = useState(0);
-    const [submittedData, setSubmittedData] = useState(0);
+    // Machine-detected data
+    const [machinePhotocopies, setMachinePhotocopies] = useState(0);
+    const [machinePrints, setMachinePrints] = useState({ bw: 0, color: 0, total: 0 });
+    // Agent-submitted data
+    const [submittedPhotocopies, setSubmittedPhotocopies] = useState(0);
+    const [submittedPrints, setSubmittedPrints] = useState(0);
     const [agentBreakdown, setAgentBreakdown] = useState([]);
-    const [detailedCopyRecords, setDetailedCopyRecords] = useState([]);
+    const [detailedRecords, setDetailedRecords] = useState([]);
 
     const allPrinterNames = useMemo(() => {
         const names = new Set();
@@ -525,10 +529,19 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
         return [...names].sort();
     }, [printers]);
 
+    // Helper: classify a record as photocopy or printing
+    const classifyRecord = (r) => {
+        const name = (r.serviceName || '').toLowerCase();
+        if (name.includes('photocop') || name.includes('copy')) return 'photocopy';
+        if (name.includes('print')) return 'printing';
+        return null; // not relevant
+    };
+
     const fetchData = async () => {
         setLoading(true);
         try {
-            let totalHardware = 0;
+            // ---- 1. HARDWARE DATA: Photocopy tracking (from page counters) ----
+            let totalHardwarePhotocopies = 0;
             for (const pName of allPrinterNames) {
                 const res = await getPhotocopyData({ printerName: pName });
                 if (res && res.intervals) {
@@ -538,47 +551,94 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                         const end = dayjs(interval.endReading.recordedAt);
                         return end.isAfter(dateRange[0].startOf('day')) && start.isBefore(dateRange[1].endOf('day'));
                     });
-                    totalHardware += filtered.reduce((s, i) => s + (i.photocopies || 0), 0);
+                    totalHardwarePhotocopies += filtered.reduce((s, i) => s + (i.photocopies || 0), 0);
                 }
             }
-            setMachineData(totalHardware);
+            setMachinePhotocopies(totalHardwarePhotocopies);
 
+            // ---- 2. HARDWARE DATA: Print jobs (from print tracking) ----
+            const printParams = { limit: 2000 };
+            if (dateRange && dateRange[0]) printParams.startDate = dateRange[0].format('YYYY-MM-DD');
+            if (dateRange && dateRange[1]) printParams.endDate = dateRange[1].format('YYYY-MM-DD');
+            let hwPrintsBW = 0, hwPrintsColor = 0;
+            try {
+                const printData = await getPrintJobs(printParams);
+                const jobs = printData.jobs || [];
+                jobs.forEach(j => {
+                    const sheets = j.totalSheets || ((j.totalPages || j.pages || 1) * (j.copies || 1));
+                    if (j.printType === 'color') {
+                        hwPrintsColor += sheets;
+                    } else {
+                        hwPrintsBW += sheets;
+                    }
+                });
+            } catch (e) {
+                console.error('Failed to fetch print jobs for audit', e);
+            }
+            setMachinePrints({ bw: hwPrintsBW, color: hwPrintsColor, total: hwPrintsBW + hwPrintsColor });
+
+            // ---- 3. AGENT SUBMISSIONS: Activity records ----
             const params = {};
             if (dateRange && dateRange[0]) params.startDate = dateRange[0].format('YYYY-MM-DD');
             if (dateRange && dateRange[1]) params.endDate = dateRange[1].format('YYYY-MM-DD');
             const records = await getActivityRecords(params);
-            
-            const copyRecords = (records || []).filter(r => {
-                const n = (r.serviceName || '').toLowerCase();
-                return n.includes('copy') || n.includes('photocopy');
-            });
-            const totalSubmitted = copyRecords.reduce((s, r) => s + (r.quantity || 0), 0);
-            setSubmittedData(totalSubmitted);
 
+            // Filter to only relevant services (photocopy + printing)
+            const relevantRecords = (records || []).filter(r => classifyRecord(r) !== null);
+
+            let totalSubmittedPhotocopies = 0;
+            let totalSubmittedPrints = 0;
             const groupings = {};
-            const detailedRecords = [];
-            copyRecords.forEach(r => {
+            const detailed = [];
+
+            relevantRecords.forEach(r => {
+                const type = classifyRecord(r);
                 const user = r.agentUser || 'Unknown';
+                const qty = r.quantity || 0;
                 const hasMachine = !!(r.hostname && r.hostname.trim());
-                if (!groupings[user]) groupings[user] = { user, quantity: 0, revenue: 0, machineSubmitted: 0, selfSubmitted: 0, machineRevenue: 0, selfRevenue: 0 };
-                groupings[user].quantity += (r.quantity || 0);
+
+                if (type === 'photocopy') totalSubmittedPhotocopies += qty;
+                if (type === 'printing') totalSubmittedPrints += qty;
+
+                if (!groupings[user]) groupings[user] = {
+                    user,
+                    totalQty: 0,
+                    photocopyQty: 0, printQty: 0,
+                    photocopyRevenue: 0, printRevenue: 0,
+                    revenue: 0,
+                    machineSubmitted: 0, selfSubmitted: 0,
+                    machineRevenue: 0, selfRevenue: 0
+                };
+                groupings[user].totalQty += qty;
                 groupings[user].revenue += (r.totalAmount || 0);
+                if (type === 'photocopy') {
+                    groupings[user].photocopyQty += qty;
+                    groupings[user].photocopyRevenue += (r.totalAmount || 0);
+                } else {
+                    groupings[user].printQty += qty;
+                    groupings[user].printRevenue += (r.totalAmount || 0);
+                }
                 if (hasMachine) {
-                    groupings[user].machineSubmitted += (r.quantity || 0);
+                    groupings[user].machineSubmitted += qty;
                     groupings[user].machineRevenue += (r.totalAmount || 0);
                 } else {
-                    groupings[user].selfSubmitted += (r.quantity || 0);
+                    groupings[user].selfSubmitted += qty;
                     groupings[user].selfRevenue += (r.totalAmount || 0);
                 }
-                detailedRecords.push({
+
+                detailed.push({
                     ...r,
                     key: r._id || `${user}-${r.submittedAt}-${Math.random()}`,
+                    recordType: type,
                     source: hasMachine ? 'machine' : 'self',
                     station: r.hostname || '—',
                 });
             });
-            setAgentBreakdown(Object.values(groupings).sort((a,b) => b.quantity - a.quantity));
-            setDetailedCopyRecords(detailedRecords);
+
+            setSubmittedPhotocopies(totalSubmittedPhotocopies);
+            setSubmittedPrints(totalSubmittedPrints);
+            setAgentBreakdown(Object.values(groupings).sort((a, b) => b.totalQty - a.totalQty));
+            setDetailedRecords(detailed);
 
         } catch (e) {
             console.error('Audit fetch error', e);
@@ -587,130 +647,181 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
     };
 
     useEffect(() => {
-        if (allPrinterNames.length > 0) {
-            fetchData();
-        }
+        fetchData();
     }, [allPrinterNames, dateRange, refreshTrigger]);
 
-    const difference = submittedData - machineData;
-    const isDeficit = difference < 0; 
-    const deficitColor = isDeficit ? '#ff4d4f' : '#52c41a';
+    const photocopyDiff = submittedPhotocopies - machinePhotocopies;
+    const photocopyDeficit = photocopyDiff < 0;
+    const printDiff = submittedPrints - machinePrints.total;
+    const printDeficit = printDiff < 0;
 
     const columns = [
         { title: 'Agent Name', dataIndex: 'user', key: 'user', render: v => <Tag color="blue">{v}</Tag> },
-        { title: 'Total Copies', dataIndex: 'quantity', key: 'quantity', render: v => <Text strong style={{ color: '#00B4D8' }}>{v.toLocaleString()} sheets</Text> },
-        { 
-            title: <span><DesktopOutlined style={{ marginRight: 4, color: '#7b2cbf' }} />Machine Submitted</span>, 
-            dataIndex: 'machineSubmitted', key: 'machineSubmitted', 
+        {
+            title: <span>📋 Photocopy Qty</span>,
+            dataIndex: 'photocopyQty', key: 'photocopyQty',
+            render: v => <Text style={{ color: '#7b2cbf', fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Text>
+        },
+        {
+            title: <span>🖨️ Printing Qty</span>,
+            dataIndex: 'printQty', key: 'printQty',
+            render: v => <Text style={{ color: '#00B4D8', fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Text>
+        },
+        {
+            title: <span><DesktopOutlined style={{ marginRight: 4, color: '#7b2cbf' }} />Machine</span>,
+            dataIndex: 'machineSubmitted', key: 'machineSubmitted',
             render: (v, row) => (
                 <Tooltip title={`Revenue: ${formatKSH(row.machineRevenue || 0)}`}>
-                    <Tag color="purple" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Tag>
+                    <Tag color="purple" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()}</Tag>
                 </Tooltip>
             )
         },
-        { 
-            title: <span><UserOutlined style={{ marginRight: 4, color: '#ff9500' }} />Self Submitted</span>, 
-            dataIndex: 'selfSubmitted', key: 'selfSubmitted', 
+        {
+            title: <span><UserOutlined style={{ marginRight: 4, color: '#ff9500' }} />Self</span>,
+            dataIndex: 'selfSubmitted', key: 'selfSubmitted',
             render: (v, row) => (
                 <Tooltip title={`Revenue: ${formatKSH(row.selfRevenue || 0)}`}>
-                    <Tag color="orange" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Tag>
+                    <Tag color="orange" style={{ fontWeight: 600 }}>{(v || 0).toLocaleString()}</Tag>
                 </Tooltip>
             )
         },
-        { title: 'Reported Revenue', dataIndex: 'revenue', key: 'revenue', render: v => <Text style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
+        { title: 'Revenue', dataIndex: 'revenue', key: 'revenue', render: v => <Text style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
     ];
 
     const detailColumns = [
-        { 
+        {
             title: 'Date', dataIndex: 'date', key: 'date', width: 110,
             render: (v, r) => <Text style={{ fontSize: 12 }}>{v || dayjs(r.submittedAt).format('YYYY-MM-DD')}</Text>
         },
-        { title: 'Service', dataIndex: 'serviceName', key: 'serviceName', render: v => <Text>{v}</Text> },
+        {
+            title: 'Service', dataIndex: 'serviceName', key: 'serviceName',
+            render: (v, r) => (
+                <Space>
+                    <Tag color={r.recordType === 'photocopy' ? 'purple' : 'cyan'} style={{ fontSize: 10 }}>
+                        {r.recordType === 'photocopy' ? '📋' : '🖨️'} {v}
+                    </Tag>
+                </Space>
+            )
+        },
         { title: 'Qty', dataIndex: 'quantity', key: 'quantity', width: 70, render: v => <Tag color="blue">{v}</Tag> },
         { title: 'Unit Price', dataIndex: 'unitPrice', key: 'unitPrice', width: 100, render: v => <Text style={{ fontFamily: 'JetBrains Mono', fontSize: 12 }}>{formatKSH(v)}</Text> },
         { title: 'Total', dataIndex: 'totalAmount', key: 'totalAmount', width: 100, render: v => <Text strong style={{ color: '#00ff88', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
         { title: 'Agent', dataIndex: 'agentUser', key: 'agentUser', width: 100, render: v => <Tag color="blue">{v}</Tag> },
-        { 
+        {
             title: 'Station', dataIndex: 'station', key: 'station', width: 140,
             render: v => v && v !== '—' ? <Tag color="purple" icon={<DesktopOutlined />}>{v}</Tag> : <Text type="secondary">—</Text>
         },
-        { 
-            title: 'Source', dataIndex: 'source', key: 'source', width: 130,
-            render: v => v === 'machine' 
-                ? <Tag color="purple" icon={<DesktopOutlined />}>Machine</Tag> 
+        {
+            title: 'Notes', dataIndex: 'notes', key: 'notes', width: 120, ellipsis: true,
+            render: v => v ? <Tooltip title={v}><Text type="secondary" style={{ fontSize: 11 }}>{v}</Text></Tooltip> : '—'
+        },
+        {
+            title: 'Source', dataIndex: 'source', key: 'source', width: 110,
+            render: v => v === 'machine'
+                ? <Tag color="purple" icon={<DesktopOutlined />}>Machine</Tag>
                 : <Tag color="orange" icon={<UserOutlined />}>Self</Tag>
         },
-        { 
+        {
             title: 'Submitted', dataIndex: 'submittedAt', key: 'submittedAt', width: 150,
             render: v => <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(v).format('MMM D, hh:mm A')}</Text>
         },
     ];
 
+    const renderComparisonCard = (title, icon, machineVal, submittedVal, diff, isDeficit, color, description) => (
+        <Row gutter={[16, 16]}>
+            <Col span={8}>
+                <Card size="small" style={{ borderLeft: `4px solid ${color}`, height: '100%', background: `${color}08` }}>
+                    <Statistic
+                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Machine Detected {title}</span>}
+                        value={machineVal}
+                        prefix={icon}
+                        suffix="sheets"
+                        valueStyle={{ color }}
+                    />
+                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+                        {description[0]}
+                    </Text>
+                </Card>
+            </Col>
+            <Col span={8}>
+                <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
+                    <Statistic
+                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Agent Submitted {title}</span>}
+                        value={submittedVal}
+                        prefix={<DesktopOutlined />}
+                        suffix="sheets"
+                        valueStyle={{ color: '#00B4D8' }}
+                    />
+                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+                        {description[1]}
+                    </Text>
+                </Card>
+            </Col>
+            <Col span={8}>
+                <Card size="small" style={{ borderLeft: `4px solid ${isDeficit ? '#ff4d4f' : '#52c41a'}`, height: '100%', background: isDeficit ? 'rgba(255,77,79,0.08)' : 'rgba(82,196,26,0.08)' }}>
+                    <Statistic
+                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Discrepancy</span>}
+                        value={Math.abs(diff)}
+                        prefix={isDeficit ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
+                        suffix="sheets"
+                        valueStyle={{ color: isDeficit ? '#ff4d4f' : '#52c41a', fontWeight: 'bold' }}
+                    />
+                    <Text style={{ fontSize: 12, marginTop: 8, display: 'block', color: isDeficit ? '#ff4d4f' : '#52c41a' }}>
+                        {isDeficit ? `Agents under-reported by ${Math.abs(diff)} ${title.toLowerCase()}.` : `Agents accurately matched or exceeded!`}
+                    </Text>
+                </Card>
+            </Col>
+        </Row>
+    );
+
     return (
         <div>
             <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                 <Text type="secondary">Evaluation Period:</Text>
-                <RangePicker 
-                    value={dateRange} 
-                    onChange={setDateRange} 
+                <RangePicker
+                    value={dateRange}
+                    onChange={setDateRange}
                     presets={[
                         { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                        { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] },
                         { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
                         { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                        { label: 'Last 7 Days', value: [dayjs().subtract(7, 'day'), dayjs()] },
                     ]}
                 />
                 <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Compare Data</Button>
             </div>
 
-            <Row gutter={[16, 16]}>
-                <Col span={8}>
-                    <Card size="small" style={{ borderLeft: '4px solid #7b2cbf', height: '100%', background: 'rgba(123,44,191,0.03)' }}>
-                        <Statistic 
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Hardware Photocopies (Machine)</span>}
-                            value={machineData} 
-                            prefix={<PrinterOutlined />} 
-                            suffix="sheets"
-                            valueStyle={{ color: '#7b2cbf' }}
-                        />
-                        <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
-                            Calculated automatically using exact printer usage counters.
-                        </Text>
-                    </Card>
-                </Col>
-                <Col span={8}>
-                    <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
-                        <Statistic 
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Agent Submissions (Inventory)</span>}
-                            value={submittedData} 
-                            prefix={<DesktopOutlined />} 
-                            suffix="sheets"
-                            valueStyle={{ color: '#00B4D8' }}
-                        />
-                        <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
-                            Daily Activity records manually logged as "Photocopy".
-                        </Text>
-                    </Card>
-                </Col>
-                <Col span={8}>
-                    <Card size="small" style={{ borderLeft: `4px solid ${deficitColor}`, height: '100%', background: isDeficit ? 'rgba(255,77,79,0.08)' : 'rgba(82,196,26,0.08)' }}>
-                        <Statistic 
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Discrepancy (Submitted - Machine)</span>}
-                            value={Math.abs(difference)} 
-                            prefix={isDeficit ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
-                            suffix="sheets"
-                            valueStyle={{ color: deficitColor, fontWeight: 'bold' }}
-                        />
-                        <Text style={{ fontSize: 12, marginTop: 8, display: 'block', color: deficitColor }}>
-                            {isDeficit ? `Agents under-reported by ${Math.abs(difference)} photocopies in this period.` : `Agents accurately matched or exceeded hardware counts!`}
-                        </Text>
-                    </Card>
-                </Col>
-            </Row>
+            {/* ---- PHOTOCOPY COMPARISON ---- */}
+            <Card size="small" style={{ marginBottom: 16, background: 'rgba(123,44,191,0.03)', border: '1px solid rgba(123,44,191,0.12)' }}
+                title={<Space><PrinterOutlined style={{ color: '#7b2cbf' }} /><span>Photocopy Comparison</span><Tag color="purple">{submittedPhotocopies} submitted vs {machinePhotocopies} detected</Tag></Space>}
+            >
+                {renderComparisonCard(
+                    'Photocopies', <PrinterOutlined />, machinePhotocopies, submittedPhotocopies,
+                    photocopyDiff, photocopyDeficit, '#7b2cbf',
+                    ['Calculated from hardware page counters minus tracked print jobs.', 'From activity records with photocopy/copy services.']
+                )}
+            </Card>
 
+            {/* ---- PRINTING COMPARISON ---- */}
+            <Card size="small" style={{ marginBottom: 16, background: 'rgba(0,180,216,0.03)', border: '1px solid rgba(0,180,216,0.12)' }}
+                title={<Space><PrinterOutlined style={{ color: '#00B4D8' }} /><span>Printing Comparison</span><Tag color="cyan">{submittedPrints} submitted vs {machinePrints.total} detected</Tag></Space>}
+            >
+                {renderComparisonCard(
+                    'Prints', <PrinterOutlined />, machinePrints.total, submittedPrints,
+                    printDiff, printDeficit, '#00B4D8',
+                    [
+                        `Auto-tracked print jobs (${machinePrints.bw} B&W, ${machinePrints.color} Color).`,
+                        'From activity records with printing services.'
+                    ]
+                )}
+            </Card>
+
+            {/* ---- AGENT BREAKDOWN ---- */}
             <Card
                 size="small"
-                title="Agent Submission Breakdown"
-                style={{ marginTop: 24 }}
+                title={<Space><UserOutlined style={{ color: '#00B4D8' }} /><span>Agent Submission Breakdown</span></Space>}
+                style={{ marginTop: 16 }}
             >
                 <Table
                     dataSource={agentBreakdown}
@@ -718,23 +829,25 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                     rowKey="user"
                     pagination={false}
                     size="small"
-                    locale={{ emptyText: <Empty description="No agents submitted photocopies in this date range" /> }}
+                    locale={{ emptyText: <Empty description="No agents submitted photocopy or printing records in this date range" /> }}
                     summary={() => {
                         if (agentBreakdown.length <= 1) return null;
                         const totals = agentBreakdown.reduce((acc, r) => ({
-                            quantity: acc.quantity + r.quantity,
+                            photocopyQty: acc.photocopyQty + r.photocopyQty,
+                            printQty: acc.printQty + r.printQty,
                             machineSubmitted: acc.machineSubmitted + r.machineSubmitted,
                             selfSubmitted: acc.selfSubmitted + r.selfSubmitted,
                             revenue: acc.revenue + r.revenue,
-                        }), { quantity: 0, machineSubmitted: 0, selfSubmitted: 0, revenue: 0 });
+                        }), { photocopyQty: 0, printQty: 0, machineSubmitted: 0, selfSubmitted: 0, revenue: 0 });
                         return (
                             <Table.Summary fixed>
                                 <Table.Summary.Row>
                                     <Table.Summary.Cell index={0}><Text strong style={{ color: '#7b2cbf' }}>Totals</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={1}><Text strong style={{ color: '#00B4D8' }}>{totals.quantity.toLocaleString()} sheets</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={2}><Tag color="purple" style={{ fontWeight: 700 }}>{totals.machineSubmitted.toLocaleString()} sheets</Tag></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={3}><Tag color="orange" style={{ fontWeight: 700 }}>{totals.selfSubmitted.toLocaleString()} sheets</Tag></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={4}><Text strong style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(totals.revenue)}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={1}><Text strong style={{ color: '#7b2cbf' }}>{totals.photocopyQty.toLocaleString()}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={2}><Text strong style={{ color: '#00B4D8' }}>{totals.printQty.toLocaleString()}</Text></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={3}><Tag color="purple" style={{ fontWeight: 700 }}>{totals.machineSubmitted.toLocaleString()}</Tag></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={4}><Tag color="orange" style={{ fontWeight: 700 }}>{totals.selfSubmitted.toLocaleString()}</Tag></Table.Summary.Cell>
+                                    <Table.Summary.Cell index={5}><Text strong style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(totals.revenue)}</Text></Table.Summary.Cell>
                                 </Table.Summary.Row>
                             </Table.Summary>
                         );
@@ -748,24 +861,34 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                 title={
                     <Space>
                         <FileTextOutlined style={{ color: '#00B4D8' }} />
-                        <span>Submitted Activity Records ({detailedCopyRecords.length})</span>
+                        <span>Submitted Activity Records ({detailedRecords.length})</span>
+                        {detailedRecords.length > 0 && (
+                            <Space size={4}>
+                                <Tag color="purple" style={{ fontSize: 10 }}>{detailedRecords.filter(r => r.recordType === 'photocopy').length} photocopy</Tag>
+                                <Tag color="cyan" style={{ fontSize: 10 }}>{detailedRecords.filter(r => r.recordType === 'printing').length} printing</Tag>
+                            </Space>
+                        )}
                     </Space>
                 }
                 style={{ marginTop: 16 }}
             >
                 <Table
-                    dataSource={detailedCopyRecords}
+                    dataSource={detailedRecords}
                     columns={detailColumns}
                     rowKey="key"
-                    pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t) => `${t} records` }}
+                    pagination={{ pageSize: 15, showSizeChanger: true, pageSizeOptions: ['10', '15', '25', '50'], showTotal: (t) => `${t} records` }}
                     size="small"
-                    scroll={{ x: 900 }}
-                    locale={{ emptyText: <Empty description="No photocopy activity records in this date range" /> }}
+                    scroll={{ x: 1100 }}
+                    locale={{ emptyText: <Empty description="No photocopy or printing activity records in this date range" /> }}
                 />
             </Card>
 
             <Card size="small" style={{ marginTop: 24, background: 'rgba(255,255,255,0.02)' }} title={<Space><FileTextOutlined /><span>About Data Comparison</span></Space>}>
-                <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>This tool cross-references the <strong>untamperable hardware sheet metrics</strong> (pulled directly from EPSON printers via triggers) against the manual <strong>Daily Activity records</strong> submitted by agents. A red discrepancy indicates resources were consumed by the machine but not officially financially accounted for by the user submissions.</p>
+                <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
+                    <strong>📋 Photocopy Comparison:</strong> Cross-references <strong>untamperable hardware sheet counters</strong> (read directly from EPSON printers) against agent-submitted <em>photocopy activity records</em>. A deficit means copies were made but not reported.<br />
+                    <strong>🖨️ Printing Comparison:</strong> Cross-references <strong>auto-tracked print jobs</strong> (intercepted by the desktop agent) against agent-submitted <em>printing activity records</em>. This verifies agents are accurately logging all print jobs they facilitate.<br />
+                    <em style={{ opacity: 0.7 }}>A red discrepancy indicates resources consumed but not financially accounted for.</em>
+                </p>
             </Card>
         </div>
     );

@@ -397,11 +397,42 @@ const defaultPricing = {
 };
 
 // Helper: Get current pricing
+// Priority: Services collection (admin-managed) > Settings (pricing key) > defaults
 async function getPricing() {
     try {
+        // Start with defaults
+        let pricing = { ...defaultPricing };
+
+        // Layer 1: Override with Settings collection values (if any)
         const settings = await Settings.findOne({ key: 'pricing' });
-        return settings ? { ...defaultPricing, ...settings.value } : defaultPricing;
+        if (settings && settings.value) {
+            pricing = { ...pricing, ...settings.value };
+        }
+
+        // Layer 2: Override with actual Service prices (authoritative source)
+        // The admin manages these in Settings > Services & Pricing
+        const services = await Service.find({ isActive: true });
+        for (const svc of services) {
+            const cat = (svc.category || '').toLowerCase();
+            const name = (svc.name || '').toLowerCase();
+            if (cat === 'printing' && name.includes('b&w')) {
+                pricing.printBW = svc.price;
+            } else if (cat === 'printing' && name.includes('color')) {
+                pricing.printColor = svc.price;
+            } else if (cat === 'photocopy' && (name.includes('b&w') || name.includes('b\u0026w'))) {
+                pricing.photocopyBW = svc.price;
+            } else if (cat === 'photocopy' && name.includes('color')) {
+                pricing.photocopyColor = svc.price;
+            } else if (cat === 'scanning') {
+                pricing.scanning = svc.price;
+            } else if (cat === 'usage' && name.includes('computer')) {
+                pricing.computerUsage = svc.price;
+            }
+        }
+
+        return pricing;
     } catch (e) {
+        console.error('[PRICING] Failed to get pricing:', e.message);
         return defaultPricing;
     }
 }
@@ -1919,8 +1950,46 @@ app.get('/api/v1/templates/:id/download', async (req, res) => {
     }
 });
 
+/**
+ * GET /api/v1/templates/:id/view
+ * View a template file in the browser (inline)
+ */
+app.get('/api/v1/templates/:id/view', async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
 
-// ==================== RESOURCE MANAGEMENT: COURSES (LEARNING) ====================
+        if (!template.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this template' });
+        }
+
+        const filePath = path.join(__dirname, template.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Increment download count
+        await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
+
+        // Determine MIME type
+        const mimeType = template.fileMimeType || 'application/octet-stream';
+        const fileName = template.fileOriginalName || 'template';
+
+        // Set Content-Disposition to inline so browser opens it instead of downloading
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+        
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+    } catch (error) {
+        console.error('[TEMPLATES] View failed:', error);
+        res.status(500).json({ error: 'Failed to view template' });
+    }
+});
+
+
 
 /**
  * GET /api/v1/courses
