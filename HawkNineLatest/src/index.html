@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>HawkNine Client</title>
+    <!-- Animate.css for smooth transitions -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
+    <style>
+        :root {
+            --primary: #00B4D8;
+            --bg-dark: #011627;
+            --surface: rgba(1, 22, 39, 0.95);
+            --text: #ffffff;
+            --accent: #FFB703;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* === VIEW STATES === */
+        .view-section {
+            display: none;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .view-section.active {
+            display: flex;
+        }
+
+        /* === LOCK SCREEN STYLES === */
+        #lock-screen {
+            background: radial-gradient(circle at center, #023047 0%, #011627 100%);
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .login-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-radius: 20px;
+            padding: 40px;
+            width: 350px;
+            text-align: center;
+            box-shadow: 0 0 50px rgba(0, 180, 216, 0.2);
+        }
+
+        .logo-container {
+            margin-bottom: 25px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-image {
+            width: 80px;
+            height: 80px;
+            border-radius: 16px;
+            object-fit: cover;
+            box-shadow: 0 4px 20px rgba(0, 180, 216, 0.3);
+        }
+
+        .logo-text {
+            font-size: 28px;
+            font-weight: bold;
+            color: var(--primary);
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            color: #94A3B8;
+            margin-bottom: 5px;
+        }
+
+        .input-field {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .input-field:focus {
+            border-color: var(--primary);
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #00B4D8 0%, #0077B6 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 16px;
+            transition: transform 0.1s;
+        }
+
+        .btn-login:active {
+            transform: scale(0.98);
+        }
+
+        .error-msg {
+            color: #ef4444;
+            font-size: 13px;
+            margin-top: 10px;
+            min-height: 20px;
+        }
+
+        /* === WIDGET STYLES (Session Active) === */
+        #widget-screen {
+            background: linear-gradient(160deg, #011627 0%, #022b42 100%);
+            border: 2px solid var(--primary);
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+        }
+
+        .widget-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(0, 180, 216, 0.2);
+            padding-bottom: 12px;
+            margin-bottom: 15px;
+            width: 100%;
+        }
+
+        .widget-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .widget-logo-img {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            object-fit: cover;
+            border: 1px solid rgba(0, 180, 216, 0.3);
+        }
+
+        .widget-title {
+            font-size: 14px;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0, 200, 83, 0.1);
+            padding: 4px 8px;
+            border-radius: 20px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #00C853;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #00C853;
+            animation: pulse-dot 2s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .status-text {
+            font-size: 10px;
+            color: #00C853;
+            font-weight: 700;
+        }
+
+        .info-row {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            font-size: 13px;
+            margin-bottom: 10px;
+            width: 100%;
+        }
+
+        .label {
+            color: #94A3B8;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        .value {
+            color: #FFFFFF;
+            font-family: 'Segoe UI', sans-serif;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .session-status {
+            background: rgba(0, 180, 216, 0.1);
+            border: 1px solid rgba(0, 180, 216, 0.2);
+            border-radius: 10px;
+            padding: 10px;
+            text-align: center;
+            margin-top: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .session-active-text {
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .btn-logout {
+            margin-top: 14px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.2s;
+        }
+
+        .btn-logout:hover {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-shutdown {
+            margin-top: 25px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #ef4444;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .btn-shutdown:hover {
+            background: #ef4444;
+            color: white;
+        }
+
+        .footer-text {
+            margin-top: 20px;
+            font-size: 11px;
+            color: #64748B;
+        }
+
+        /* Green notification banner for incoming documents */
+        .doc-notification {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, rgba(0, 200, 83, 0.95), rgba(0, 150, 60, 0.95));
+            border: 1px solid rgba(0, 255, 100, 0.4);
+            border-radius: 14px;
+            padding: 16px 28px;
+            z-index: 99999;
+            box-shadow: 0 8px 32px rgba(0, 200, 83, 0.4);
+            animation: slideDown 0.4s ease-out;
+            max-width: 500px;
+            cursor: pointer;
+        }
+
+        .doc-notification.visible {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .doc-notification .notif-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+            animation: pulse-ring 1.5s infinite;
+        }
+
+        .doc-notification .notif-body h4 {
+            margin: 0 0 4px 0;
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .doc-notification .notif-body p {
+            margin: 0;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        .doc-notification .notif-close {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateX(-50%) translateY(-100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(-50%) translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 12px rgba(255, 255, 255, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Green notification banner (visible on both lock screen and widget) -->
+    <div id="docNotification" class="doc-notification">
+        <div class="notif-icon">📄</div>
+        <div class="notif-body">
+            <h4 id="notifTitle">New Document Upload</h4>
+            <p id="notifBody">Loading...</p>
+        </div>
+        <button class="notif-close" onclick="dismissNotification()">&times;</button>
+    </div>
+
+    <!-- LOCK SCREEN VIEW -->
+    <div id="lock-screen" class="view-section active">
+        <div class="login-card animate__animated animate__fadeIn">
+            <div class="logo-container">
+                <img src="logo.jpg" alt="HawkNine Logo" class="logo-image">
+                <span class="logo-text">HawkNine</span>
+            </div>
+
+            <form id="loginForm">
+                <div class="input-group">
+                    <label>ACCESS TICKET / EMAIL</label>
+                    <input type="text" id="username" class="input-field" placeholder="Enter your ID..." required
+                        autofocus>
+                </div>
+                <div class="input-group">
+                    <label>PASSWORD</label>
+                    <input type="password" id="password" class="input-field" placeholder="Enter password..." required>
+                </div>
+
+                <div class="error-msg" id="loginError"></div>
+
+                <button type="submit" class="btn-login" id="loginBtn">UNLOCK COMPUTER</button>
+            </form>
+
+            <div class="footer-text">
+                Protected by HawkNine Security Agent v1.0 <br>
+                <span id="lock-ip">Connecting...</span>
+            </div>
+
+            <button id="shutdownBtn" class="btn-shutdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    style="margin-right:5px; vertical-align: text-bottom;">
+                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                    <line x1="12" y1="2" x2="12" y2="12"></line>
+                </svg>
+                SHUTDOWN PC
+            </button>
+        </div>
+    </div>
+
+    <!-- WIDGET VIEW (Small, always-on-top) -->
+    <div id="widget-screen" class="view-section">
+        <div class="widget-header">
+            <div class="widget-logo">
+                <img src="logo.jpg" alt="Logo" class="widget-logo-img">
+                <span class="widget-title">HawkNine</span>
+            </div>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                <span class="status-text">ACTIVE</span>
+            </div>
+        </div>
+
+        <div class="info-row">
+            <span class="label">Computer</span>
+            <span class="value" id="pcName">Syncing...</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Address</span>
+            <span class="value" id="ipAddress">0.0.0.0</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Operator</span>
+            <span class="value" id="sessionUser">Connecting...</span>
+        </div>
+
+        <div class="session-status">
+            <span class="session-active-text">✓ SESSION SECURED</span>
+        </div>
+
+
+
+        <button class="btn-logout" id="logoutBtn">END SESSION & LOCK</button>
+    </div>
+
+
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        // Ensure input focus works on initial load (after restart/auto-launch)
+        document.addEventListener('DOMContentLoaded', () => {
+            const tryFocus = () => {
+                const inp = document.getElementById('username');
+                if (inp) { inp.focus(); inp.click(); }
+            };
+            setTimeout(tryFocus, 300);
+            setTimeout(tryFocus, 1000);
+            setTimeout(tryFocus, 3000);
+        });
+
+        // Click anywhere on lock screen to focus the username input
+        document.addEventListener('click', (e) => {
+            const lockScreen = document.getElementById('lock-screen');
+            if (lockScreen && lockScreen.classList.contains('active')) {
+                const inp = document.getElementById('username');
+                // Only auto-focus if click wasn't on another input or button
+                if (inp && e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                    inp.focus();
+                }
+            }
+        });
+
+
+        // --- LOGIN FLOW ---
+        const loginForm = document.getElementById('loginForm');
+        const loginBtn = document.getElementById('loginBtn');
+        const errorMsg = document.getElementById('loginError');
+
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+
+            loginBtn.innerText = "AUTHENTICATING...";
+            loginBtn.disabled = true;
+            errorMsg.innerText = "";
+
+            // Send login request to Main process
+            ipcRenderer.send('login-attempt', { username, pass });
+        });
+
+        // --- LOGOUT FLOW ---
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            if (confirm('Are you sure you want to end your session? The computer will lock.')) {
+                ipcRenderer.send('logout-request');
+            }
+        });
+
+        // --- SHUTDOWN FLOW ---
+        const shutdownBtn = document.getElementById('shutdownBtn');
+        if (shutdownBtn) {
+            shutdownBtn.addEventListener('click', () => {
+                if (confirm('Are you sure you want to SHUT DOWN this computer?')) {
+                    ipcRenderer.send('shutdown-request');
+                }
+            });
+        }
+
+        // --- IPC LISTENERS ---
+
+        // Login Response
+        ipcRenderer.on('login-response', (event, response) => {
+            loginBtn.innerText = "UNLOCK COMPUTER";
+            loginBtn.disabled = false;
+
+            if (response.success) {
+                if (response.silent) {
+                    // Silent login: Portal window is already open, don't switch to widget view.
+                    // Just clear the form fields so lock screen is clean if we return.
+                    document.getElementById('username').value = '';
+                    document.getElementById('password').value = '';
+                } else {
+                    // Legacy: Switch to Widget View (should not happen in normal flow)
+                    document.getElementById('lock-screen').classList.remove('active');
+                    document.getElementById('widget-screen').classList.add('active');
+                    document.getElementById('sessionUser').innerText = response.name || response.user || 'User';
+                }
+            } else {
+                errorMsg.innerText = response.message || "Authentication failed";
+                document.getElementById('username').focus();
+            }
+        });
+
+        // System Info Update
+        ipcRenderer.on('update-info', (event, data) => {
+            if (data.hostname) document.getElementById('pcName').innerText = data.hostname;
+            if (data.ip) {
+                document.getElementById('ipAddress').innerText = data.ip;
+                document.getElementById('lock-ip').innerText = `IP: ${data.ip} | Host: ${data.hostname}`;
+            }
+        });
+
+        // Secondary Lock signal (for non-primary monitors)
+        ipcRenderer.on('secondary-lock', () => {
+            document.getElementById('lock-screen').innerHTML = `
+                <div style="text-align:center; opacity: 0.5;">
+                    <img src="logo.jpg" style="width:120px; filter: grayscale(1); margin-bottom: 20px;">
+                    <h2 style="color: #64748B; letter-spacing: 2px;">STATION LOCKED</h2>
+                    <p style="color: #475569;">Access this PC from the primary monitor</p>
+                </div>
+            `;
+            document.getElementById('lock-screen').classList.add('active');
+            document.getElementById('widget-screen').classList.remove('active');
+        });
+
+        // Logout/Lock signal from server or menu
+        ipcRenderer.on('lock-session', () => {
+            document.getElementById('widget-screen').classList.remove('active');
+            document.getElementById('lock-screen').classList.add('active');
+            document.getElementById('password').value = '';
+            document.getElementById('username').value = '';
+
+            // Aggressively focus the username input - retry to handle OS focus delays
+            const focusUsername = () => {
+                const inp = document.getElementById('username');
+                if (inp) {
+                    inp.focus();
+                    inp.click();
+                }
+            };
+            focusUsername();
+            setTimeout(focusUsername, 200);
+            setTimeout(focusUsername, 500);
+            setTimeout(focusUsername, 1500);
+        });
+
+        // Public document upload notification (green banner)
+        let notifTimeout = null;
+        ipcRenderer.on('public-document-arrived', (event, data) => {
+            const el = document.getElementById('docNotification');
+            const title = document.getElementById('notifTitle');
+            const body = document.getElementById('notifBody');
+
+            title.innerText = `📄 New Order: ${data.orderId}`;
+            body.innerText = `${data.customerName} uploaded ${data.fileCount} file(s) for ${data.serviceType}`;
+
+            el.classList.add('visible');
+
+            // Auto-dismiss after 15 seconds
+            if (notifTimeout) clearTimeout(notifTimeout);
+            notifTimeout = setTimeout(() => dismissNotification(), 15000);
+        });
+
+        function dismissNotification() {
+            const el = document.getElementById('docNotification');
+            el.classList.remove('visible');
+            if (notifTimeout) { clearTimeout(notifTimeout); notifTimeout = null; }
+        }
+        // Expose for onclick
+        window.dismissNotification = dismissNotification;
+
+    </script>
+</body>
+
+</html>

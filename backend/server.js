@@ -1,0 +1,8223 @@
+/**
+ * HawkNine Backend API Server v2.0
+ * Enhanced with detailed activity tracking, print management, and browser history
+ */
+
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
+
+// Global pricing configuration
+let pricing = {
+    printBW: 10,
+    printColor: 20,
+    sessionHourly: 60
+};
+
+// ==================== DATABASE CONNECTION ====================
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/hawknine';
+mongoose.connect(MONGODB_URI)
+    .then(() => {
+        console.log('✅ Connected to MongoDB persistence layer');
+
+        // Load pricing from DB
+        Settings.findOne({ key: 'pricing' }).then(setting => {
+            if (setting && setting.value) {
+                Object.assign(pricing, setting.value);
+                console.log('✅ Loaded pricing configuration from DB');
+            } else {
+                console.log('⚠️ Pricing not found in DB, using defaults');
+                // Initialize default pricing in DB
+                Settings.create({ key: 'pricing', value: pricing })
+                    .then(() => console.log('✅ Initialized default pricing in DB'))
+                    .catch(err => console.error('Failed to init pricing:', err));
+            }
+        }).catch(err => console.error('Failed to load pricing:', err));
+    })
+    .catch(err => {
+        console.error('❌ MongoDB connection error:', err);
+        console.log('Falling back to limited local state...');
+    });
+
+// Load Models
+const User = require('./models/User');
+const Computer = require('./models/Computer');
+const Session = require('./models/Session');
+const Task = require('./models/Task');
+const Service = require('./models/Service');
+const Transaction = require('./models/Transaction');
+const SharedDocument = require('./models/SharedDocument');
+const Log = require('./models/Log');
+const AuthSession = require('./models/AuthSession');
+const VerificationCode = require('./models/VerificationCode');
+const Template = require('./models/Template');
+const Course = require('./models/Course');
+const Guide = require('./models/Guide');
+const Settings = require('./models/Settings');
+const Blocklist = require('./models/Blocklist');
+const ServiceCategory = require('./models/ServiceCategory');
+const InventoryItem = require('./models/InventoryItem');
+const UserSubmission = require('./models/UserSubmission');
+const DocumentRequest = require('./models/DocumentRequest');
+const Client = require('./models/Client');
+const OnlineService = require('./models/OnlineService');
+const PageCounterReading = require('./models/PageCounterReading');
+const TrackableService = require('./models/TrackableService');
+const ActivityRecord = require('./models/ActivityRecord');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: '*' },
+    maxHttpBufferSize: 10e6 // 10MB for screenshots
+});
+
+// Store connected agent sockets
+const agentSockets = new Map(); // clientId -> socketId
+
+// ==================== SOCKET.IO HANDLERS ====================
+io.on('connection', (socket) => {
+    console.log(`[SOCKET] New connection: ${socket.id}`);
+
+    // Agent registration
+    socket.on('agent-register', (data) => {
+        if (data.clientId) {
+            agentSockets.set(data.clientId, socket.id);
+            socket.clientId = data.clientId;
+            socket.hostname = data.hostname;
+            console.log(`[SOCKET] Agent registered: ${data.clientId} (${data.hostname})`);
+        }
+    });
+
+    // Agent response (screenshots, errors, etc.)
+    socket.on('agent-response', (data) => {
+        // Use explicit clientId from data if available, otherwise use socket property
+        const clientId = data.clientId || socket.clientId;
+        const hostname = data.hostname || socket.hostname;
+
+        if (data.type === 'screenshot' && data.screenshot) {
+            // Broadcast screenshot to admin dashboards
+            io.emit('agent-screenshot', {
+                clientId: clientId,
+                hostname: hostname,
+                screenshot: data.screenshot,
+                timestamp: data.timestamp || new Date().toISOString()
+            });
+            console.log(`[SOCKET] Screenshot received from ${clientId} (${hostname})`);
+        } else if (data.type === 'error') {
+            io.emit('agent-error', {
+                clientId: clientId,
+                hostname: hostname,
+                message: data.message
+            });
+            console.log(`[SOCKET] Error from ${clientId}: ${data.message}`);
+        } else if (data.type === 'document-downloaded') {
+            // Update document status in DB
+            if (data.documentId) {
+                SharedDocument.findOneAndUpdate(
+                    { id: data.documentId },
+                    {
+                        status: 'downloaded',
+                        downloadedAt: new Date(data.timestamp)
+                    }
+                ).then(doc => {
+                    if (doc) {
+                        io.emit('document-status-update', {
+                            id: doc.id,
+                            status: 'downloaded',
+                            downloadedAt: data.timestamp
+                        });
+                        console.log(`[DOCUMENT] Download confirmed for ${doc.filename} by ${clientId}`);
+                    }
+                });
+            }
+        }
+    });
+
+    // Handle disconnect
+    socket.on('disconnect', () => {
+        if (socket.clientId) {
+            agentSockets.delete(socket.clientId);
+            console.log(`[SOCKET] Agent disconnected: ${socket.clientId}`);
+        }
+    });
+});
+
+// Trust Nginx Proxy
+app.set('trust proxy', 1);
+
+// ==================== HEALTH CHECK ====================
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ==================== STATIC FILES ====================
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ==================== SECURITY: RATE LIMITING ====================
+
+// Simple in-memory rate limiter
+const rateLimitStore = new Map();
+
+const rateLimit = (options = {}) => {
+    const windowMs = options.windowMs || 15 * 60 * 1000; // 15 minutes
+    const max = options.max || 100;
+    const message = options.message || 'Too many requests, please try again later';
+
+    return (req, res, next) => {
+        const key = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
+        const now = Date.now();
+
+        if (!rateLimitStore.has(key)) {
+            rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
+            return next();
+        }
+
+        const record = rateLimitStore.get(key);
+
+        if (now > record.resetTime) {
+            rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
+            return next();
+        }
+
+        if (record.count >= max) {
+            return res.status(429).json({ error: message });
+        }
+
+        record.count++;
+        next();
+    };
+};
+
+// Clean up rate limit store periodically
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of rateLimitStore) {
+        if (now > value.resetTime) {
+            rateLimitStore.delete(key);
+        }
+    }
+}, 60000); // Every minute
+
+// ==================== AUTHENTICATION SYSTEM ====================
+
+// Admin credentials (in production, store hashed in DB)
+// ==================== AUTHENTICATION SYSTEM (2FA) ====================
+
+// Admin Configuration
+const ADMIN_CONFIG = {
+    email: process.env.ADMIN_EMAIL || 'admin@hawknine.co.ke',
+    username: process.env.ADMIN_USERNAME || 'admin',
+    passwordHash: process.env.ADMIN_PASSWORD_HASH || crypto.createHash('sha256').update(process.env.ADMIN_PASSWORD || 'admin123').digest('hex')
+};
+
+const OTP_STORE = new Map(); // username -> { otp, expiresAt }
+const TEMP_TOKENS = new Map(); // tempToken -> username (for linking step 1 to step 2)
+
+// Email Transporter
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
+// Helper: Generate OTP
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// Helper: Send Email with OTP
+const sendOTPEmail = async (email, otp, username) => {
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.log(`[DEV MODE] OTP for ${username} (${email}): ${otp}`);
+        return true;
+    }
+
+    try {
+        await transporter.sendMail({
+            from: '"HawkNine Security" <noreply@hawknine.co.ke>',
+            to: email,
+            subject: 'HawkNine Admin Access Code',
+            html: `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+                    <h2 style="color: #00B4D8; text-align: center;">Two-Factor Authentication</h2>
+                    <p style="color: #333;">Hello <strong>${username}</strong>,</p>
+                    <p>A login attempt was made for your HawkNine Admin account.</p>
+                    <div style="background-color: #f8f9fa; padding: 20px; text-align: center; border-radius: 5px; margin: 20px 0;">
+                        <span style="font-size: 32px; letter-spacing: 5px; color: #023047; font-weight: bold;">${otp}</span>
+                    </div>
+                    <p style="font-size: 12px; color: #666; text-align: center;">This code expires in 5 minutes. Do not share it with anyone.</p>
+                </div>
+            `
+        });
+        return true;
+    } catch (error) {
+        console.error('Email error:', error);
+        return false;
+    }
+};
+
+// Active sessions
+// adminSessions and agentUsers are declared below in the DATA STORES section
+
+// Crypto helpers
+const generateToken = () => crypto.randomBytes(32).toString('hex');
+const hashPassword = (password) => crypto.createHash('sha256').update(password).digest('hex');
+const verifyPassword = (password, hash) => hashPassword(password) === hash;
+
+// Auth middleware for admin routes
+const requireAdminAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const session = await AuthSession.findOne({ token, type: 'admin' });
+
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+
+        req.admin = session;
+        next();
+    } catch (error) {
+        res.status(500).json({ error: 'Authentication error' });
+    }
+};
+
+const requireSuperAdminAuth = async (req, res, next) => {
+    await requireAdminAuth(req, res, () => {
+        if (req.admin.role !== 'Super Admin') {
+            return res.status(403).json({ error: 'Super Admin privileges required' });
+        }
+        next();
+    });
+};
+
+
+// Ensure uploads and downloads directory exists
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(DOWNLOADS_DIR)) {
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+}
+
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, UPLOADS_DIR);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + '-' + file.originalname);
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit — allow large documents
+    fileFilter: (req, file, cb) => {
+        // Allow common document types
+        const allowedTypes = [
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+            'image/jpeg',
+            'image/png',
+            'image/gif',
+            'application/zip',
+            'application/x-rar-compressed'
+        ];
+        if (allowedTypes.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(null, true); // Allow all for now
+        }
+    }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(UPLOADS_DIR)); // Serve uploaded files
+
+// Apply rate limiting to all API routes
+app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 500 }));
+
+// Stricter rate limit for auth endpoints
+const authRateLimit = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 1000,               // Increased limit to handle multiple agents sharing one IP
+    message: 'Too many login attempts, please try again later'
+});
+
+
+
+// ==================== DATA STORES ====================
+// Real-time tracking stores
+const computers = new Map();          // clientId -> computer status
+//ptr const documentRequests = [];          // Transient document request tracking (deprecated in favor of MongoDB)
+const sharedDocuments = [];           // Transient shared documents tracking
+
+// Sessions (handled by MongoDB AuthSession and VerificationCode models)
+// No in-memory stores needed for cluster stability
+
+
+// Pricing configuration (Default)
+// Pricing configuration (Default fallback)
+const defaultPricing = {
+    computerUsage: 200,    // KSH per hour
+    printBW: 10,           // KSH per page B&W
+    printColor: 50,        // KSH per page Color
+    scanning: 20,          // KSH per page
+    photocopyBW: 8,        // KSH per copy
+    photocopyColor: 40     // KSH per copy
+};
+
+// Helper: Get current pricing
+// Priority: Services collection (admin-managed) > Settings (pricing key) > defaults
+async function getPricing() {
+    try {
+        // Start with defaults
+        let pricing = { ...defaultPricing };
+
+        // Layer 1: Override with Settings collection values (if any)
+        const settings = await Settings.findOne({ key: 'pricing' });
+        if (settings && settings.value) {
+            pricing = { ...pricing, ...settings.value };
+        }
+
+        // Layer 2: Override with actual Service prices (authoritative source)
+        // The admin manages these in Settings > Services & Pricing
+        const services = await Service.find({ isActive: true });
+        for (const svc of services) {
+            const cat = (svc.category || '').toLowerCase();
+            const name = (svc.name || '').toLowerCase();
+            if (cat === 'printing' && name.includes('b&w')) {
+                pricing.printBW = svc.price;
+            } else if (cat === 'printing' && name.includes('color')) {
+                pricing.printColor = svc.price;
+            } else if (cat === 'photocopy' && (name.includes('b&w') || name.includes('b\u0026w'))) {
+                pricing.photocopyBW = svc.price;
+            } else if (cat === 'photocopy' && name.includes('color')) {
+                pricing.photocopyColor = svc.price;
+            } else if (cat === 'scanning') {
+                pricing.scanning = svc.price;
+            } else if (cat === 'usage' && name.includes('computer')) {
+                pricing.computerUsage = svc.price;
+            }
+        }
+
+        return pricing;
+    } catch (e) {
+        console.error('[PRICING] Failed to get pricing:', e.message);
+        return defaultPricing;
+    }
+}
+
+// ==================== PERSISTENCE SEEDING ====================
+async function seedDatabase() {
+    try {
+        console.log('🌱 Seeding database with initial data...');
+
+        /*
+        // Seed Portal User
+        const userCount = await User.countDocuments({ type: 'portal' });
+        if (userCount === 0) {
+            await User.create({
+                username: 'demo',
+                email: 'demo@example.com',
+                name: 'Demo User',
+                passwordHash: hashPassword('demo123'),
+                type: 'portal',
+                active: true
+            });
+            console.log('✅ Demo portal user created');
+        }
+
+        // Seed Agent User
+        const agentCount = await User.countDocuments({ type: 'agent' });
+        if (agentCount === 0) {
+            await User.create({
+                username: 'agent1',
+                name: 'Agent User 1',
+                passwordHash: hashPassword('agent123'),
+                type: 'agent',
+                active: true
+            });
+            console.log('✅ Demo agent user created');
+        }
+        */
+
+        // Seed Services
+        const serviceCount = await Service.countDocuments();
+        if (serviceCount === 0) {
+            const initialServices = [
+                { id: 'svc-1', name: 'Computer Usage', category: 'usage', price: 200, unit: 'per_hour', isActive: true },
+                { id: 'svc-2', name: 'B&W Printing', category: 'printing', price: 10, unit: 'per_page', isActive: true },
+                { id: 'svc-3', name: 'Color Printing', category: 'printing', price: 50, unit: 'per_page', isActive: true },
+                { id: 'svc-4', name: 'Document Scanning', category: 'scanning', price: 20, unit: 'per_page', isActive: true },
+                { id: 'svc-5', name: 'Photocopying B&W', category: 'photocopy', price: 8, unit: 'per_copy', isActive: true },
+                { id: 'svc-6', name: 'Photocopying Color', category: 'photocopy', price: 40, unit: 'per_copy', isActive: true },
+                { id: 'svc-7', name: 'Typing Services', category: 'typing', price: 50, unit: 'per_page', isActive: true },
+                { id: 'svc-8', name: 'CV Creation', category: 'document', price: 500, unit: 'flat', isActive: true },
+                { id: 'svc-9', name: 'Email Setup', category: 'service', price: 200, unit: 'flat', isActive: true },
+                { id: 'svc-10', name: 'Internet Browsing', category: 'usage', price: 100, unit: 'per_hour', isActive: true },
+            ];
+            await Service.insertMany(initialServices);
+            console.log('✅ Initial services seeded');
+        }
+    } catch (err) {
+        console.error('❌ Seeding error:', err);
+    }
+}
+// Run seed after connection
+mongoose.connection.once('open', async () => {
+    // Quick Fix: Drop the problematic id_1 sparse index that caused M-Pesa E11000 duplicate errors
+    try {
+        const db = mongoose.connection.db;
+        const result = await db.collection('transactions').deleteMany({ id: null });
+        console.log(`[DB Cleanup] Removed ${result.deletedCount} null-id transactions`);
+        await db.collection('transactions').dropIndex('id_1');
+        console.log('[DB Cleanup] Successfully dropped id_1 index from transactions');
+    } catch (e) {
+        // If it fails, the index might not exist, which is fine
+    }
+
+    await seedDatabase();
+
+    // Sync in-memory computer Map from Database on startup
+    try {
+        const computerDocs = await Computer.find();
+        computerDocs.forEach(c => {
+            const doc = c.toObject();
+            const now = new Date();
+            computers.set(doc.clientId, {
+                ...doc,
+                isOnline: (now - new Date(doc.lastSeen)) < 45000
+            });
+        });
+        console.log(`📡 Synced ${computers.size} computers from DB to real-time store`);
+    } catch (e) {
+        console.error('Failed to sync in-memory stores:', e);
+    }
+});
+
+
+// ==================== AUTHENTICATION ENDPOINTS ====================
+
+/**
+ * POST /api/v1/auth/admin/login-step1
+ * Validate credentials and send OTP
+ */
+app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        // 1. Verify Credentials
+        let adminUser = null;
+        const isSuperAdmin = (
+            username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase() &&
+            verifyPassword(password, ADMIN_CONFIG.passwordHash)
+        );
+
+        if (isSuperAdmin) {
+            adminUser = {
+                username: ADMIN_CONFIG.username,
+                email: ADMIN_CONFIG.email,
+                role: 'Super Admin'
+            };
+        } else {
+            // Check DB for admin users
+            const dbAdmin = await User.findOne({
+                username: username,
+                type: 'admin',
+                active: true
+            });
+
+            if (dbAdmin && verifyPassword(password, dbAdmin.passwordHash)) {
+                adminUser = {
+                    username: dbAdmin.username,
+                    email: dbAdmin.email,
+                    role: dbAdmin.role || 'Admin'
+                };
+            }
+        }
+
+        if (!adminUser) {
+            // Delay to prevent timing attacks
+            await new Promise(resolve => setTimeout(resolve, 800));
+            return res.status(401).json({ error: 'Invalid username or password' });
+        }
+
+        // Check DB connection
+        if (mongoose.connection.readyState !== 1) {
+            console.error('[AUTH] Login Step 1 blocked: MongoDB not connected');
+            return res.status(503).json({ error: 'Database connection failed. Please ensure MongoDB is running.' });
+        }
+
+        // 2. Generate and Send OTP
+        const otp = generateOTP();
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+
+        // Store OTP linked to username (Persistent for Cluster)
+        await VerificationCode.findOneAndUpdate(
+            { type: 'admin_otp', key: username },
+            { value: otp, expiresAt },
+            { upsert: true }
+        );
+
+        // Use a temporary token to identify this login flow
+        const tempToken = generateToken();
+        await VerificationCode.create({
+            type: 'admin_temp_token',
+            key: tempToken,
+            value: username,
+            expiresAt
+        });
+
+        // Send to registered admin email
+        const sent = await sendOTPEmail(adminUser.email, otp, username);
+
+
+        if (sent) {
+            res.json({
+                success: true,
+                message: '2FA Code sent to email',
+                tempToken,
+                emailMask: adminUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+            });
+        } else {
+            res.status(500).json({ error: 'Failed to send verification code' });
+        }
+
+    } catch (error) {
+        console.error('Login Step 1 Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/admin/login-step2
+ * Verify OTP and issue session token
+ */
+app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
+    try {
+        const { tempToken, otp } = req.body;
+
+        if (!tempToken || !otp) {
+            return res.status(400).json({ error: 'Missing verification data' });
+        }
+
+        // Check DB connection
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database connection failed. Please try again later.' });
+        }
+
+        // Get username from tempToken
+        const tokenRecord = await VerificationCode.findOne({ type: 'admin_temp_token', key: tempToken });
+
+        if (!tokenRecord) {
+            console.log('[AUTH DEBUG] Step 2 Failed: Temp token not found or expired');
+            return res.status(400).json({ error: 'Session expired. Please login again.' });
+        }
+
+        const username = tokenRecord.value;
+
+        // Get OTP for this user
+        const otpRecord = await VerificationCode.findOne({ type: 'admin_otp', key: username });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: 'Verification code not found' });
+        }
+
+        if (Date.now() > otpRecord.expiresAt) {
+            await VerificationCode.deleteMany({ key: { $in: [username, tempToken] } });
+            return res.status(400).json({ error: 'Code expired' });
+        }
+
+        if (String(otpRecord.value).trim() !== String(otp).trim()) {
+            console.log(`[AUTH DEBUG] Invalid OTP for ${username}. Expected: ${otpRecord.value}, Got: ${otp}`);
+            return res.status(401).json({ error: 'Invalid code' });
+        }
+
+        // Success! Cleanup and Create Session
+        await VerificationCode.deleteMany({
+            $or: [
+                { type: 'admin_otp', key: username },
+                { type: 'admin_temp_token', key: tempToken }
+            ]
+        });
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000)); // 24 hours
+
+        // Determine user info for session
+        let sessionInfo = {
+            username: username,
+            type: 'admin',
+            expiresAt
+        };
+
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            sessionInfo.email = ADMIN_CONFIG.email;
+            sessionInfo.role = 'Super Admin';
+        } else {
+            const dbUser = await User.findOne({ username, type: 'admin' });
+            sessionInfo.email = dbUser.email;
+            sessionInfo.role = dbUser.role || 'Admin';
+        }
+
+        const session = await AuthSession.create({
+            token,
+            ...sessionInfo
+        });
+
+        console.log(`Admin login success: ${username}`);
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                username: session.username,
+                email: session.email,
+                role: session.role
+            },
+            expiresIn: 86400
+        });
+
+    } catch (error) {
+        console.error('Login Step 2 Error:', error);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+
+/**
+ * POST /api/v1/auth/admin/logout
+ * Admin dashboard logout
+ */
+app.post('/api/v1/auth/admin/logout', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.split(' ')[1];
+            await AuthSession.deleteOne({ token, type: 'admin' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Logout failed' });
+    }
+});
+
+
+/**
+ * GET /api/v1/auth/admin/verify
+ * Verify admin token is still valid
+ */
+app.get('/api/v1/auth/admin/verify', requireAdminAuth, (req, res) => {
+    res.json({
+        valid: true,
+        user: { username: req.admin.username },
+        expiresAt: req.admin.expiresAt
+    });
+});
+
+/**
+ * POST /api/v1/auth/agent/login
+ * Desktop agent user authentication
+ */
+app.post('/api/v1/auth/agent/login', authRateLimit, async (req, res) => {
+    try {
+        const { username, password, clientId, hostname } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ success: false, message: 'Username and password required' });
+        }
+
+        // Find user in MongoDB (either by username or email)
+        const user = await User.findOne({
+            $or: [{ username }, { email: username }],
+            type: 'agent'
+        });
+
+        if (!user) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+
+        if (!user.active) {
+            return res.status(401).json({ success: false, message: 'Account is disabled' });
+        }
+
+        // Verify password
+        if (!verifyPassword(password, user.passwordHash)) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+
+        console.log(`Agent user login: ${username} on ${hostname || clientId}`);
+
+        res.json({
+            success: true,
+            user: {
+                username: user.username,
+                name: user.name
+            }
+        });
+    } catch (error) {
+        console.error('Agent login error:', error);
+        res.status(500).json({ success: false, message: 'Authentication failed' });
+    }
+});
+
+
+/* User routes protection will be applied after requireUserAuth is defined. */
+
+/**
+ * USER AUTHENTICATION (OTP-based or Direct)
+ * POST /api/v1/auth/user/login-step1
+ * Validate credentials and either send OTP or login directly based on settings
+ */
+app.post('/api/v1/auth/user/login-step1', authRateLimit, async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+        // Find user in MongoDB
+        const foundUser = await User.findOne({ username, type: 'portal' });
+        if (!foundUser) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        if (!foundUser.active) {
+            return res.status(401).json({ error: 'Account is disabled' });
+        }
+        if (!verifyPassword(password, foundUser.passwordHash)) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Check if OTP is required from settings
+        let otpRequired = true;
+        try {
+            const authSettings = await Settings.findOne({ key: 'portal_auth' });
+            if (authSettings?.value?.otpEnabled === false) {
+                otpRequired = false;
+            }
+        } catch (e) {
+            // Default to OTP enabled
+        }
+
+        if (!otpRequired) {
+            // Direct login without OTP
+            console.log(`[USER AUTH] Direct login (OTP disabled) for: ${username}`);
+
+            const token = generateToken();
+            const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+
+            await AuthSession.create({
+                token,
+                username: foundUser.username,
+                email: foundUser.email,
+                name: foundUser.name,
+                type: 'portal',
+                expiresAt
+            });
+
+            return res.json({
+                success: true,
+                skipOtp: true,
+                token,
+                user: {
+                    username: foundUser.username,
+                    email: foundUser.email,
+                    name: foundUser.name
+                },
+                expiresIn: 86400
+            });
+        }
+
+        // OTP is required - proceed with 2FA
+        console.log(`[USER AUTH] OTP required for: ${username}`);
+
+        // Generate OTP and send via email
+        const otp = generateOTP();
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+        // Store OTP linked to username (Persistent for Cluster)
+        await VerificationCode.findOneAndUpdate(
+            { type: 'user_otp', key: username },
+            { value: otp, expiresAt },
+            { upsert: true }
+        );
+
+        // Use a temporary token identify this login flow
+        const tempToken = generateToken();
+        await VerificationCode.create({
+            type: 'user_temp_token',
+            key: tempToken,
+            value: username,
+            expiresAt
+        });
+
+        const emailSent = await sendOTPEmail(foundUser.email, otp, username);
+
+        if (emailSent) {
+            res.json({
+                success: true,
+                skipOtp: false,
+                message: '2FA Code sent to email',
+                tempToken,
+                emailMask: foundUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+            });
+        } else {
+            res.status(500).json({ error: 'Failed to send verification code' });
+        }
+    } catch (error) {
+        console.error('User Login Step 1 Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/user/login-step2
+ * Verify OTP and issue user session token
+ */
+app.post('/api/v1/auth/user/login-step2', authRateLimit, async (req, res) => {
+    try {
+        const { tempToken, otp } = req.body;
+        if (!tempToken || !otp) {
+            return res.status(400).json({ error: 'Missing verification data' });
+        }
+
+        // Get username from tempToken
+        const tokenRecord = await VerificationCode.findOne({ type: 'user_temp_token', key: tempToken });
+
+        if (!tokenRecord) {
+            console.log('[USER AUTH] Step 2 Failed: Temp token not found or expired');
+            return res.status(400).json({ error: 'Session expired. Please login again.' });
+        }
+
+        const username = tokenRecord.value;
+
+        // Get OTP for this user
+        const otpRecord = await VerificationCode.findOne({ type: 'user_otp', key: username });
+
+        if (!otpRecord) {
+            return res.status(400).json({ error: 'Verification code not found' });
+        }
+
+        if (Date.now() > otpRecord.expiresAt) {
+            await VerificationCode.deleteMany({ key: { $in: [username, tempToken] } });
+            return res.status(400).json({ error: 'Code expired' });
+        }
+
+        if (String(otpRecord.value).trim() !== String(otp).trim()) {
+            console.log(`[USER AUTH DEBUG] Invalid OTP for ${username}. Expected: ${otpRecord.value}, Got: ${otp}`);
+            return res.status(401).json({ error: 'Invalid code' });
+        }
+
+        // Success: create user session
+        const foundUserDetails = await User.findOne({ username, type: 'portal' });
+        if (!foundUserDetails) {
+            return res.status(500).json({ error: 'User not found' });
+        }
+
+        // Cleanup codes
+        await VerificationCode.deleteMany({
+            $or: [
+                { type: 'user_otp', key: username },
+                { type: 'user_temp_token', key: tempToken }
+            ]
+        });
+
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+
+        const session = await AuthSession.create({
+            token,
+            username: foundUserDetails.username,
+            email: foundUserDetails.email,
+            name: foundUserDetails.name,
+            type: 'portal',
+            expiresAt
+        });
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                username: session.username,
+                email: session.email,
+                name: session.name
+            },
+            expiresIn: 86400
+        });
+    } catch (error) {
+        console.error('User Login Step 2 Error:', error);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+
+
+/**
+ * CLIENT AUTHENTICATION AND DASHBOARD ROUTES
+ * For public users registering from the Landing Page
+ */
+
+const requireClientAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+        const token = authHeader.split(' ')[1];
+        const session = await AuthSession.findOne({ token, type: 'client' });
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+        req.client = session;
+        next();
+    } catch (err) {
+        res.status(500).json({ error: 'Authentication error' });
+    }
+};
+
+app.post('/api/v1/client/register', async (req, res) => {
+    try {
+        const { name, email, phone, password } = req.body;
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: 'Name, email, and password are required' });
+        }
+
+        const existingClient = await Client.findOne({ email });
+        if (existingClient) {
+            return res.status(400).json({ error: 'Email already registered' });
+        }
+
+        const newClient = await Client.create({
+            name,
+            email,
+            phone,
+            passwordHash: hashPassword(password)
+        });
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+        await AuthSession.create({
+            token,
+            username: newClient._id.toString(), // Using ID as username for generic session object
+            email: newClient.email,
+            type: 'client',
+            expiresAt
+        });
+
+        res.json({ success: true, token, user: { id: newClient._id, name: newClient.name, email: newClient.email } });
+    } catch (err) {
+        console.error('Client Registration Error:', err);
+        res.status(500).json({ error: 'Failed to register account' });
+    }
+});
+
+app.post('/api/v1/client/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const client = await Client.findOne({ email });
+        if (!client || !verifyPassword(password, client.passwordHash)) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + (24 * 60 * 60 * 1000));
+        await AuthSession.create({
+            token,
+            username: client._id.toString(),
+            email: client.email,
+            type: 'client',
+            expiresAt
+        });
+
+        res.json({ success: true, token, user: { id: client._id, name: client.name, email: client.email } });
+    } catch (err) {
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+app.get('/api/v1/client/history', requireClientAuth, async (req, res) => {
+    try {
+        const email = req.client.email;
+        // Fetch document requests tracking info
+        const requests = await DocumentRequest.find({ email }).sort({ createdAt: -1 });
+
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
+        const mappedRequests = requests.map(reqDoc => {
+            const reqObj = reqDoc.toObject();
+            if (reqObj.resultFiles && reqObj.resultFiles.length > 0) {
+                reqObj.resultFiles = reqObj.resultFiles.map(f => ({
+                    ...f,
+                    downloadUrl: `${baseUrl}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch history' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/user/logout
+ * User dashboard logout
+ */
+const requireUserAuth = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+        const token = authHeader.split(' ')[1];
+        const session = await AuthSession.findOne({ token, type: 'portal' });
+
+        if (!session || Date.now() > session.expiresAt) {
+            if (session) await AuthSession.deleteOne({ token });
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+
+        // Re-check if user is still active (in case admin disabled them)
+        const user = await User.findOne({ username: session.username, type: 'portal' });
+        if (!user || !user.active) {
+            await AuthSession.deleteOne({ token });
+            return res.status(403).json({ error: 'Account has been disabled' });
+        }
+
+        req.user = session;
+        next();
+    } catch (error) {
+        res.status(500).json({ error: 'Authentication error' });
+    }
+};
+
+app.post('/api/v1/auth/user/logout', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.split(' ')[1];
+            await AuthSession.deleteOne({ token, type: 'portal' });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Logout failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/portal-auth-settings
+ * Get portal authentication settings (admin only)
+ */
+app.get('/api/v1/admin/portal-auth-settings', requireAdminAuth, async (req, res) => {
+    try {
+        let settings = await Settings.findOne({ key: 'portal_auth' });
+        if (!settings) {
+            settings = {
+                value: {
+                    otpEnabled: true,
+                    sessionDurationHours: 24
+                }
+            };
+        }
+        res.json(settings.value);
+    } catch (error) {
+        console.error('[PORTAL AUTH] Get settings failed:', error);
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/portal-auth-settings
+ * Update portal authentication settings (admin only)
+ */
+app.put('/api/v1/admin/portal-auth-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const { otpEnabled, sessionDurationHours } = req.body;
+
+        const settings = await Settings.findOneAndUpdate(
+            { key: 'portal_auth' },
+            {
+                value: {
+                    otpEnabled: otpEnabled !== false,
+                    sessionDurationHours: sessionDurationHours || 24
+                },
+                updatedAt: new Date()
+            },
+            { new: true, upsert: true }
+        );
+
+        console.log(`[PORTAL AUTH] Settings updated - OTP: ${settings.value.otpEnabled ? 'Enabled' : 'Disabled'}`);
+
+        // Broadcast to all connected admin clients
+        io.emit('settings-update', { key: 'portal_auth', value: settings.value });
+
+        res.json({
+            success: true,
+            settings: settings.value,
+            message: `OTP ${settings.value.otpEnabled ? 'enabled' : 'disabled'} for portal login`
+        });
+    } catch (error) {
+        console.error('[PORTAL AUTH] Update settings failed:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+/**
+ * GET /api/v1/auth/portal-config
+ * Public endpoint to check if OTP is required (for login page)
+ */
+app.get('/api/v1/auth/portal-config', async (req, res) => {
+    try {
+        const settings = await Settings.findOne({ key: 'portal_auth' });
+        res.json({
+            otpEnabled: settings?.value?.otpEnabled !== false
+        });
+    } catch (error) {
+        res.json({ otpEnabled: true }); // Default to OTP enabled
+    }
+});
+
+
+/**
+ * GET /api/v1/auth/user/verify
+ * Verify user token validity
+ */
+app.get('/api/v1/auth/user/verify', requireUserAuth, (req, res) => {
+    res.json({
+        valid: true,
+        user: { username: req.user.username, email: req.user.email, name: req.user.name },
+        expiresAt: req.user.expiresAt
+    });
+});
+
+
+/**
+ * POST /api/v1/auth/agent/users
+ * Create new agent user (admin only)
+ */
+app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
+    try {
+        const { username, password, name, email } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        const existing = await User.findOne({ username });
+        if (existing) {
+            return res.status(409).json({ error: 'Username already exists' });
+        }
+
+        const newUser = await User.create({
+            username,
+            passwordHash: hashPassword(password),
+            email: email,
+            name: name || username,
+            type: 'agent',
+            active: true
+        });
+
+        res.json({
+            success: true,
+            user: { username: newUser.username, name: newUser.name }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create user' });
+    }
+});
+
+/**
+ * GET /api/v1/auth/agent/users
+ * List all agent users (admin only)
+ */
+app.get('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
+    try {
+        const users = await User.find({ type: 'agent' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/agent/users/:username
+ * Update agent user (admin only)
+ */
+app.put('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, name, active, email } = req.body;
+
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+        if (email !== undefined) updateData.email = email;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'agent' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Emit real-time event when user status changes
+        if (active !== undefined) {
+            io.emit('user-status-changed', {
+                username: user.username,
+                userType: 'agent',
+                active: user.active,
+                changedBy: 'admin'
+            });
+            console.log(`[USER STATUS] Agent user ${username} ${user.active ? 'enabled' : 'disabled'} by admin`);
+
+            // If disabled, invalidate any existing sessions
+            if (!user.active) {
+                await AuthSession.deleteMany({ username, type: 'agent' });
+            }
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, name: user.name, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update user' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/agent/users/:username
+ * Delete agent user (admin only)
+ */
+app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'agent' });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+/**
+ * ==================== STAFF/ADMIN MANAGEMENTUS ====================
+ * Manage other administrators (Super Admin only)
+ */
+
+/**
+ * GET /api/v1/auth/admin/staff
+ * List all admin users
+ */
+app.get('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const admins = await User.find({ type: 'admin' }).sort({ createdAt: -1 });
+        res.json(admins);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch staff' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/admin/staff
+ * Create new admin user
+ */
+app.post('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username, password, name, email, role } = req.body;
+
+        if (!username || !password || !email) {
+            return res.status(400).json({ error: 'Username, password and email required' });
+        }
+
+        const existing = await User.findOne({
+            $or: [{ username }, { email }]
+        });
+
+        if (existing) {
+            return res.status(409).json({ error: 'Username or email already exists' });
+        }
+
+        const newUser = await User.create({
+            username,
+            passwordHash: hashPassword(password),
+            email,
+            name: name || username,
+            type: 'admin',
+            role: role || 'Staff',
+            active: true
+        });
+
+        res.json({
+            success: true,
+            user: { username: newUser.username, name: newUser.name, role: newUser.role }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create staff member' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/admin/staff/:username
+ * Update admin user
+ */
+app.put('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, name, active, email, role } = req.body;
+
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+        if (email !== undefined) updateData.email = email;
+        if (role !== undefined) updateData.role = role;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'admin' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'Staff member not found' });
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, name: user.name, role: user.role, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update staff member' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/admin/staff/:username
+ * Delete admin user
+ */
+app.delete('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'admin' });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'Staff member not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete staff member' });
+    }
+});
+
+/**
+ * ==================== PORTAL USERS (userAccounts) ====================
+ * These are users who log into the User Portal (web)
+ */
+
+/**
+ * GET /api/v1/auth/portal/users
+ * List all portal users (admin only)
+ */
+app.get('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
+    try {
+        const users = await User.find({ type: 'portal' }).sort({ createdAt: -1 });
+        res.json(users);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch portal users' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/portal/users
+ * Create new portal user (admin only)
+ */
+app.post('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
+    try {
+        const { username, password, email, name } = req.body;
+
+        if (!username || !password || !email) {
+            return res.status(400).json({ error: 'Username, password and email required' });
+        }
+
+        const existing = await User.findOne({ username });
+        if (existing) {
+            return res.status(409).json({ error: 'Username already exists' });
+        }
+
+        const newUser = await User.create({
+            username,
+            email,
+            passwordHash: hashPassword(password),
+            name: name || username,
+            type: 'portal',
+            active: true
+        });
+
+        res.json({
+            success: true,
+            user: { username: newUser.username, email: newUser.email, name: newUser.name }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create portal user' });
+    }
+});
+
+/**
+ * PUT /api/v1/auth/portal/users/:username
+ * Update portal user (admin only)
+ */
+app.put('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { password, email, name, active } = req.body;
+
+        const updateData = {};
+        if (password) updateData.passwordHash = hashPassword(password);
+        if (email) updateData.email = email;
+        if (name !== undefined) updateData.name = name;
+        if (active !== undefined) updateData.active = active;
+
+        const user = await User.findOneAndUpdate(
+            { username, type: 'portal' },
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Emit real-time event when user status changes
+        if (active !== undefined) {
+            io.emit('user-status-changed', {
+                username: user.username,
+                userType: 'portal',
+                active: user.active,
+                changedBy: 'admin'
+            });
+            console.log(`[USER STATUS] Portal user ${username} ${user.active ? 'enabled' : 'disabled'} by admin`);
+
+            // If disabled, invalidate all their sessions immediately
+            if (!user.active) {
+                await AuthSession.deleteMany({ username, type: 'portal' });
+            }
+        }
+
+        res.json({
+            success: true,
+            user: { username: user.username, email: user.email, name: user.name, active: user.active }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update portal user' });
+    }
+});
+
+/**
+ * DELETE /api/v1/auth/portal/users/:username
+ * Delete portal user (admin only)
+ */
+app.delete('/api/v1/auth/portal/users/:username', requireAdminAuth, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const result = await User.deleteOne({ username, type: 'portal' });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete portal user' });
+    }
+});
+
+
+/**
+ * POST /api/v1/admin/cleanup-demo-users
+ * Remove all demo/test users (Admin only)
+ * This is a protected bulk cleanup endpoint
+ */
+app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) => {
+    try {
+        console.log('[ADMIN] Starting demo user cleanup...');
+
+        // Pattern matching for demo data
+        const demoPatterns = {
+            $or: [
+                { username: /^agent\d+$/i },           // agent1, agent2, etc.
+                { username: 'demo' },
+                { username: /test/i },
+                { name: 'Demo User' },
+                { name: /^Agent User \d+$/i },         // Agent User 1, Agent User 2, etc.
+                { email: /example\.com$/i },           // demo@example.com
+                { email: /test@/i }
+            ]
+        };
+
+        // Get users to be deleted for logging
+        const usersToDelete = await User.find(demoPatterns);
+        const usernames = usersToDelete.map(u => u.username);
+
+        console.log(`[ADMIN] Found ${usersToDelete.length} demo users to delete:`, usernames);
+
+        // Delete demo users
+        const deleteResult = await User.deleteMany(demoPatterns);
+
+        // Clean up orphaned sessions
+        const sessionDeleteResult = await Session.deleteMany({
+            user: { $in: usernames }
+        });
+
+        console.log(`[ADMIN] Deleted ${deleteResult.deletedCount} demo users and ${sessionDeleteResult.deletedCount} sessions`);
+
+        res.json({
+            success: true,
+            deletedUsers: deleteResult.deletedCount,
+            deletedSessions: sessionDeleteResult.deletedCount,
+            deletedUsernames: usernames
+        });
+    } catch (error) {
+        console.error('[ADMIN] Cleanup failed:', error);
+        res.status(500).json({ error: 'Failed to cleanup demo users' });
+    }
+});
+
+
+// ==================== SETTINGS API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/settings
+ * Get all admin settings
+ */
+app.get('/api/v1/admin/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = await Settings.find();
+        const settingsObj = {};
+        settings.forEach(s => {
+            settingsObj[s.key] = s.value;
+        });
+        res.json(settingsObj);
+    } catch (error) {
+        console.error('[SETTINGS] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/settings
+ * Save admin settings (key-value pairs)
+ */
+app.post('/api/v1/admin/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const { settings } = req.body;
+
+        if (!settings || typeof settings !== 'object') {
+            return res.status(400).json({ error: 'Settings object required' });
+        }
+
+        const updates = [];
+        for (const [key, value] of Object.entries(settings)) {
+            updates.push(
+                Settings.findOneAndUpdate(
+                    { key },
+                    { value, updatedAt: new Date() },
+                    { upsert: true, new: true }
+                )
+            );
+        }
+
+        await Promise.all(updates);
+        console.log('[SETTINGS] Updated:', Object.keys(settings));
+
+        res.json({ success: true, message: 'Settings saved successfully' });
+    } catch (error) {
+        console.error('[SETTINGS] Save failed:', error);
+        res.status(500).json({ error: 'Failed to save settings' });
+    }
+});
+
+
+// ==================== BLOCKLIST API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/blocklist
+ * Get all blocked sites
+ */
+app.get('/api/v1/admin/blocklist', requireAdminAuth, async (req, res) => {
+    try {
+        const blocklist = await Blocklist.find({ active: true }).sort({ createdAt: -1 });
+        res.json(blocklist);
+    } catch (error) {
+        console.error('[BLOCKLIST] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get blocklist' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/blocklist
+ * Add a site to blocklist
+ */
+app.post('/api/v1/admin/blocklist', requireAdminAuth, async (req, res) => {
+    try {
+        const { url, reason } = req.body;
+
+        if (!url) {
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
+        // Extract domain
+        let domain;
+        try {
+            const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+            domain = urlObj.hostname;
+        } catch {
+            domain = url;
+        }
+
+        // Check if already blocked
+        const existing = await Blocklist.findOne({ domain, active: true });
+        if (existing) {
+            return res.status(400).json({ error: 'This domain is already blocked' });
+        }
+
+        const blocked = await Blocklist.create({
+            url,
+            domain,
+            reason: reason || 'Blocked by admin',
+            blockedBy: req.admin.username || 'admin'
+        });
+
+        console.log(`[BLOCKLIST] Site blocked: ${domain} by ${req.admin.username}`);
+
+        // Notify all connected agents about the new block
+        io.emit('blocklist-updated', { action: 'add', domain, url });
+
+        res.json({ success: true, blocked });
+    } catch (error) {
+        console.error('[BLOCKLIST] Add failed:', error);
+        res.status(500).json({ error: 'Failed to add to blocklist' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/blocklist/:id
+ * Remove a site from blocklist
+ */
+app.delete('/api/v1/admin/blocklist/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const blocked = await Blocklist.findByIdAndUpdate(id, { active: false });
+
+        if (!blocked) {
+            return res.status(404).json({ error: 'Block entry not found' });
+        }
+
+        console.log(`[BLOCKLIST] Site unblocked: ${blocked.domain}`);
+
+        // Notify all connected agents
+        io.emit('blocklist-updated', { action: 'remove', domain: blocked.domain });
+
+        res.json({ success: true, message: 'Site removed from blocklist' });
+    } catch (error) {
+        console.error('[BLOCKLIST] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to remove from blocklist' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/blocklist
+ * Get blocklist for agents (public endpoint for agents)
+ */
+app.get('/api/v1/agent/blocklist', async (req, res) => {
+    try {
+        const blocklist = await Blocklist.find({ active: true });
+        res.json(blocklist.map(b => b.domain));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get blocklist' });
+    }
+});
+
+
+// ==================== ADMIN PASSWORD CHANGE ====================
+
+/**
+ * POST /api/v1/admin/change-password
+ * Change admin password
+ */
+app.post('/api/v1/admin/change-password', requireAdminAuth, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new password required' });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        const username = req.admin.username;
+
+        // For super admin, check against env config
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            // Verify current password
+            if (!verifyPassword(currentPassword, ADMIN_CONFIG.passwordHash)) {
+                return res.status(401).json({ error: 'Current password is incorrect' });
+            }
+
+            // Super admin password is stored in env, so we save it to settings
+            await Settings.findOneAndUpdate(
+                { key: 'super_admin_password_hash' },
+                { value: hashPassword(newPassword), updatedAt: new Date() },
+                { upsert: true }
+            );
+
+            console.log('[ADMIN] Super admin password changed');
+            res.json({ success: true, message: 'Password changed successfully' });
+        } else {
+            // For DB admin users
+            const adminUser = await User.findOne({ username, type: 'admin' });
+            if (!adminUser) {
+                return res.status(404).json({ error: 'Admin user not found' });
+            }
+
+            if (!verifyPassword(currentPassword, adminUser.passwordHash)) {
+                return res.status(401).json({ error: 'Current password is incorrect' });
+            }
+
+            adminUser.passwordHash = hashPassword(newPassword);
+            await adminUser.save();
+
+            console.log(`[ADMIN] Password changed for: ${username}`);
+            res.json({ success: true, message: 'Password changed successfully' });
+        }
+    } catch (error) {
+        console.error('[ADMIN] Password change failed:', error);
+        res.status(500).json({ error: 'Failed to change password' });
+    }
+});
+
+
+// ==================== RESOURCE MANAGEMENT: TEMPLATES ====================
+
+/**
+ * GET /api/v1/templates
+ * Get all templates (public - for user portal)
+ */
+app.get('/api/v1/templates', async (req, res) => {
+    try {
+        const templates = await Template.find().sort({ createdAt: -1 });
+        res.json(templates);
+    } catch (error) {
+        console.error('[TEMPLATES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get templates' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/templates
+ * Create a new template with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/templates', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, type, previewUrl, featured } = req.body;
+
+        if (!title || !description || !category || !type) {
+            return res.status(400).json({ error: 'Title, description, category, and type are required' });
+        }
+
+        const templateData = {
+            title,
+            description,
+            category,
+            type,
+            previewUrl,
+            featured: featured === 'true' || featured === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            templateData.fileUrl = `/uploads/${req.file.filename}`;
+            templateData.fileOriginalName = req.file.originalname;
+            templateData.fileMimeType = req.file.mimetype;
+            templateData.fileSize = req.file.size;
+        }
+
+        const template = await Template.create(templateData);
+        console.log(`[TEMPLATES] Created: ${title}`);
+        res.json(template);
+    } catch (error) {
+        console.error('[TEMPLATES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create template' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/templates/:id
+ * Delete a template (admin only)
+ */
+app.delete('/api/v1/admin/templates/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const template = await Template.findByIdAndDelete(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        // Delete associated file if exists
+        if (template.fileUrl) {
+            const filePath = path.join(__dirname, template.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[TEMPLATES] Deleted: ${template.title}`);
+        res.json({ success: true, message: 'Template deleted' });
+    } catch (error) {
+        console.error('[TEMPLATES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
+    }
+});
+
+/**
+ * GET /api/v1/templates/:id/download
+ * Download a template file (public)
+ */
+app.get('/api/v1/templates/:id/download', async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        if (!template.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this template' });
+        }
+
+        const filePath = path.join(__dirname, template.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Increment download count
+        await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
+
+        res.download(filePath, template.fileOriginalName || 'template');
+    } catch (error) {
+        console.error('[TEMPLATES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download template' });
+    }
+});
+
+/**
+ * GET /api/v1/templates/:id/view
+ * View a template file in the browser (inline)
+ */
+app.get('/api/v1/templates/:id/view', async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        if (!template.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this template' });
+        }
+
+        const filePath = path.join(__dirname, template.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Increment download count
+        await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
+
+        // Determine MIME type
+        const mimeType = template.fileMimeType || 'application/octet-stream';
+        const fileName = template.fileOriginalName || 'template';
+
+        // Set Content-Disposition to inline so browser opens it instead of downloading
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+        
+        const fileStream = fs.createReadStream(filePath);
+        fileStream.pipe(res);
+    } catch (error) {
+        console.error('[TEMPLATES] View failed:', error);
+        res.status(500).json({ error: 'Failed to view template' });
+    }
+});
+
+
+
+/**
+ * GET /api/v1/courses
+ * Get all courses (public - for user portal)
+ */
+app.get('/api/v1/courses', async (req, res) => {
+    try {
+        const courses = await Course.find().sort({ createdAt: -1 });
+        res.json(courses);
+    } catch (error) {
+        console.error('[COURSES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get courses' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/courses
+ * Create a new course with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/courses', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, duration, lessons, level, content, featured } = req.body;
+
+        if (!title || !description || !category || !duration) {
+            return res.status(400).json({ error: 'Title, description, category, and duration are required' });
+        }
+
+        const courseData = {
+            title,
+            description,
+            category,
+            duration,
+            lessons: parseInt(lessons) || 0,
+            level: level || 'Beginner',
+            content,
+            featured: featured === 'true' || featured === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            courseData.fileUrl = `/uploads/${req.file.filename}`;
+            courseData.fileOriginalName = req.file.originalname;
+            courseData.fileMimeType = req.file.mimetype;
+            courseData.fileSize = req.file.size;
+        }
+
+        const course = await Course.create(courseData);
+        console.log(`[COURSES] Created: ${title}`);
+        res.json(course);
+    } catch (error) {
+        console.error('[COURSES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create course' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/courses/:id
+ * Delete a course (admin only)
+ */
+app.delete('/api/v1/admin/courses/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const course = await Course.findByIdAndDelete(req.params.id);
+        if (!course) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+
+        // Delete associated file if exists
+        if (course.fileUrl) {
+            const filePath = path.join(__dirname, course.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[COURSES] Deleted: ${course.title}`);
+        res.json({ success: true, message: 'Course deleted' });
+    } catch (error) {
+        console.error('[COURSES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete course' });
+    }
+});
+
+/**
+ * GET /api/v1/courses/:id/download
+ * Download a course file (public)
+ */
+app.get('/api/v1/courses/:id/download', async (req, res) => {
+    try {
+        const course = await Course.findById(req.params.id);
+        if (!course) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+
+        if (!course.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this course' });
+        }
+
+        const filePath = path.join(__dirname, course.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        res.download(filePath, course.fileOriginalName || 'course-material');
+    } catch (error) {
+        console.error('[COURSES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download course' });
+    }
+});
+
+
+// ==================== RESOURCE MANAGEMENT: GUIDES (GUIDANCE) ====================
+
+/**
+ * GET /api/v1/guides
+ * Get all guides (public - for user portal)
+ */
+app.get('/api/v1/guides', async (req, res) => {
+    try {
+        const guides = await Guide.find().sort({ createdAt: -1 });
+        res.json(guides);
+    } catch (error) {
+        console.error('[GUIDES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get guides' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/guides
+ * Create a new guide with optional file upload (admin only)
+ */
+app.post('/api/v1/admin/guides', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, objective, type, duration, content, popular } = req.body;
+
+        if (!title || !description || !objective || !duration) {
+            return res.status(400).json({ error: 'Title, description, objective, and duration are required' });
+        }
+
+        const guideData = {
+            title,
+            description,
+            objective,
+            type: type || 'Guide',
+            duration,
+            content,
+            popular: popular === 'true' || popular === true
+        };
+
+        // Handle file upload
+        if (req.file) {
+            guideData.fileUrl = `/uploads/${req.file.filename}`;
+            guideData.fileOriginalName = req.file.originalname;
+            guideData.fileMimeType = req.file.mimetype;
+            guideData.fileSize = req.file.size;
+        }
+
+        const guide = await Guide.create(guideData);
+        console.log(`[GUIDES] Created: ${title}`);
+        res.json(guide);
+    } catch (error) {
+        console.error('[GUIDES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create guide' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/guides/:id
+ * Delete a guide (admin only)
+ */
+app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const guide = await Guide.findByIdAndDelete(req.params.id);
+        if (!guide) {
+            return res.status(404).json({ error: 'Guide not found' });
+        }
+
+        // Delete associated file if exists
+        if (guide.fileUrl) {
+            const filePath = path.join(__dirname, guide.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        console.log(`[GUIDES] Deleted: ${guide.title}`);
+        res.json({ success: true, message: 'Guide deleted' });
+    } catch (error) {
+        console.error('[GUIDES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete guide' });
+    }
+});
+
+/**
+ * GET /api/v1/guides/:id/download
+ * Download a guide file (public)
+ */
+/**
+ * GET /api/v1/guides/:id/download
+ * Download a guide file (secure)
+ */
+app.get('/api/v1/guides/:id/download', async (req, res) => {
+    try {
+        // Security check: Ensure user is logged in (Agent or Portal User)
+        /*
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            // Check for temporary download token query param if needed for browser direct links
+            // For now, require auth header
+             return res.status(401).json({ error: 'Unauthorized' });
+        }
+        */
+        // For simple browser downloads, we might need a query param token or cookie.
+        // For now, let's assume public access until full user portal auth is improved
+        // OR check for a valid session ID in query params
+
+        const guide = await Guide.findById(req.params.id);
+        if (!guide) {
+            return res.status(404).json({ error: 'Guide not found' });
+        }
+
+        if (!guide.fileUrl) {
+            return res.status(404).json({ error: 'No file attached to this guide' });
+        }
+
+        const filePath = path.join(__dirname, guide.fileUrl);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        res.download(filePath, guide.fileOriginalName || 'guide');
+    } catch (error) {
+        console.error('[GUIDES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download guide' });
+    }
+});
+
+
+// ==================== AGENT API ENDPOINTS ====================
+
+
+/**
+ * POST /api/v1/agent/sync
+ * Receives heartbeat/status updates from agents
+ */
+app.post('/api/v1/agent/sync', async (req, res) => {
+    try {
+        const data = req.body;
+
+        if (!data.clientId) {
+            return res.status(400).json({ error: 'Missing clientId' });
+        }
+
+        // Update computer status in MongoDB
+        const computerData = {
+            hostname: data.hostname,
+            ip: data.ip,
+            status: data.status,
+            sessionId: data.sessionId,
+            sessionUser: data.sessionUser,
+            uptime: data.uptime,
+            metrics: data.metrics,
+            lastSeen: new Date().toISOString(),
+            activity: {
+                window: data.activity?.window,
+                printJobsActive: data.activity?.printJobsActive || 0,
+                hasScreenshot: !!data.activity?.screenshot
+            }
+        };
+
+        const computer = await Computer.findOneAndUpdate(
+            { clientId: data.clientId },
+            { $set: computerData },
+            { upsert: true, new: true }
+        );
+
+        console.log(`[SYNC] Computer updated: ${data.hostname} (${data.clientId}) - Status: ${data.status}`);
+
+        // SYNC IN-MEMORY MAP (Fixes Dashboard & Socket Stats)
+        computers.set(data.clientId, {
+            ...computer.toObject(),
+            isOnline: true
+        });
+
+        // Store activity log in MongoDB
+        await Log.create({
+            type: 'activity',
+            clientId: data.clientId,
+            hostname: data.hostname,
+            sessionId: data.sessionId,
+            sessionUser: data.sessionUser,
+            data: {
+                ...data.activity,
+                screenshot: data.activity?.screenshot ? '[CAPTURED]' : null
+            },
+            receivedAt: new Date().toISOString()
+        });
+
+        // Broadcast to admin dashboards
+        io.emit('computer-update', {
+            ...computer.toObject(),
+            isOnline: true
+        });
+
+        // Emit screenshot separately if included
+        if (data.activity?.screenshot) {
+            io.emit('screenshot-update', {
+                clientId: data.clientId,
+                hostname: data.hostname,
+                screenshot: data.activity.screenshot,
+                timestamp: data.timestamp
+            });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Sync Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/session
+ * Receives session events (LOGIN/LOGOUT) with detailed reports
+ */
+app.post('/api/v1/agent/session', async (req, res) => {
+    try {
+        const data = req.body;
+
+        if (!data.type || !data.clientId) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Get dynamic pricing
+        const pricing = await getPricing();
+
+        // Calculate session charges if LOGOUT
+        let sessionCharges = null;
+        if (data.type === 'LOGOUT' && data.durationMinutes) {
+            // Calculate computer usage charge
+            const usageHours = data.durationMinutes / 60;
+            const usageCharge = Math.ceil(usageHours * pricing.computerUsage);
+
+            // Calculate print charges
+            let printBWPages = 0;
+            let printColorPages = 0;
+            if (data.printJobs && data.printJobs.length > 0) {
+                for (const job of data.printJobs) {
+                    // Use totalSheets if available (accounts for copies + duplex)
+                    // Otherwise compute: totalPages * copies
+                    const pages = job.totalSheets || ((job.totalPages || job.pages || 1) * (job.copies || 1));
+                    if (job.printType === 'color') {
+                        printColorPages += pages;
+                    } else {
+                        printBWPages += pages;
+                    }
+                }
+            }
+            const printBWCharge = printBWPages * pricing.printBW;
+            const printColorCharge = printColorPages * pricing.printColor;
+
+            sessionCharges = {
+                usage: {
+                    hours: parseFloat(usageHours.toFixed(2)),
+                    rate: pricing.computerUsage,
+                    total: usageCharge
+                },
+                printing: {
+                    bwPages: printBWPages,
+                    colorPages: printColorPages,
+                    bwRate: pricing.printBW,
+                    colorRate: pricing.printColor,
+                    bwTotal: printBWCharge,
+                    colorTotal: printColorCharge,
+                    total: printBWCharge + printColorCharge
+                },
+                grandTotal: usageCharge + printBWCharge + printColorCharge
+            };
+        }
+
+        // Store session record in MongoDB
+        const session = await Session.create({
+            ...data,
+            charges: sessionCharges,
+            receivedAt: new Date().toISOString()
+        });
+
+        // Broadcast session event to admin
+        io.emit('session-event', session);
+
+        // IMPORTANT: Record session charges as a transaction for revenue tracking
+        if (data.type === 'LOGOUT' && sessionCharges && sessionCharges.grandTotal > 0) {
+            const sessionTransaction = await Transaction.create({
+                id: 'txn-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+                type: 'session',
+                sessionId: data.sessionId,
+                description: `Session - ${data.user || 'Guest'} (${Math.round(sessionCharges.usage.hours * 60)} min)`,
+                amount: sessionCharges.grandTotal,
+                clientId: data.clientId,
+                hostname: data.hostname,
+                userId: data.user,
+                breakdown: {
+                    usage: sessionCharges.usage.total,
+                    printBW: sessionCharges.printing.bwTotal,
+                    printColor: sessionCharges.printing.colorTotal
+                }
+            });
+
+            // Emit transaction event
+            io.emit('transaction-created', sessionTransaction);
+            console.log(`[TRANSACTION] Session revenue: KSH ${sessionCharges.grandTotal} from ${data.hostname}`);
+        }
+
+        console.log(`[SESSION] ${data.type} - ${data.hostname || data.clientId} - User: ${data.user || 'N/A'}${sessionCharges ? ` - Total: KSH ${sessionCharges.grandTotal}` : ''}`);
+
+        res.json({ success: true, sessionId: data.sessionId, charges: sessionCharges });
+    } catch (error) {
+        console.error('Session Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+
+/**
+ * POST /api/v1/agent/log
+ * Receives specific event logs (print, browser, browser_time, file, usb) in real-time
+ */
+app.post('/api/v1/agent/log', async (req, res) => {
+    try {
+        const { type, clientId, hostname, sessionId, sessionUser, data } = req.body;
+
+        if (!clientId || !type) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        // Enhance browser log with category if not provided
+        let enhancedData = data;
+        if ((type === 'browser' || type === 'browser_time') && data && !data.category) {
+            enhancedData = {
+                ...data,
+                category: categorizeUrl(data.url)
+            };
+        }
+
+        // Handle browser_time: update existing browser log entry with time data
+        if (type === 'browser_time' && enhancedData?.url) {
+            const tenMinutesAgo = new Date(Date.now() - 600 * 1000);
+
+            // Find the matching browser entry and update with time spent
+            const updated = await Log.findOneAndUpdate(
+                {
+                    type: 'browser',
+                    clientId,
+                    'data.url': enhancedData.url,
+                    receivedAt: { $gte: tenMinutesAgo }
+                },
+                {
+                    $set: {
+                        'data.timeSpentSeconds': enhancedData.timeSpentSeconds,
+                        'data.startTime': enhancedData.startTime,
+                        'data.endTime': enhancedData.endTime
+                    }
+                },
+                { sort: { receivedAt: -1 }, new: true }
+            );
+
+            if (updated) {
+                // Broadcast the time update to admin dashboard
+                io.emit('browser-time-update', {
+                    logId: updated._id,
+                    clientId,
+                    url: enhancedData.url,
+                    timeSpentSeconds: enhancedData.timeSpentSeconds
+                });
+                return res.json({ success: true, updated: true, id: updated._id });
+            }
+
+            // No matching browser entry found — create a new combined entry
+            const logEntry = await Log.create({
+                type: 'browser',
+                clientId,
+                hostname,
+                sessionId,
+                sessionUser,
+                data: {
+                    ...enhancedData,
+                    source: 'time_tracking'
+                },
+                receivedAt: new Date()
+            });
+            io.emit('new-log', logEntry);
+            return res.json({ success: true, created: true, id: logEntry._id });
+        }
+
+        // Deduplicate browser logs: skip if same clientId+url was logged within the last 3 minutes
+        if (type === 'browser' && enhancedData?.url) {
+            const threeMinutesAgo = new Date(Date.now() - 180 * 1000);
+            const duplicate = await Log.findOne({
+                type: 'browser',
+                clientId,
+                'data.url': enhancedData.url,
+                receivedAt: { $gte: threeMinutesAgo }
+            });
+            if (duplicate) {
+                return res.json({ success: true, deduplicated: true });
+            }
+        }
+
+        // Deduplicate print jobs: skip if same jobId from same client was logged recently
+        // If the new data has better page info, update the existing record instead
+        if (type === 'print' && enhancedData?.jobId) {
+            const fiveMinutesAgo = new Date(Date.now() - 300 * 1000);
+            const existingPrintJob = await Log.findOne({
+                type: 'print',
+                clientId,
+                'data.jobId': enhancedData.jobId,
+                receivedAt: { $gte: fiveMinutesAgo }
+            });
+            if (existingPrintJob) {
+                // Check if new data has better (higher) page count — update if so
+                const existingPages = existingPrintJob.data?.totalPages || 0;
+                const existingSheets = existingPrintJob.data?.totalSheets || 0;
+                const newPages = enhancedData.totalPages || 0;
+                const newSheets = enhancedData.totalSheets || 0;
+                const newCopies = enhancedData.copies || 1;
+                const existingCopies = existingPrintJob.data?.copies || 1;
+
+                const isStatusUpdateToPrinted = enhancedData.status === 'Printed' && existingPrintJob.data?.status !== 'Printed';
+
+                if (newPages > existingPages || newSheets > existingSheets || newCopies > existingCopies || isStatusUpdateToPrinted) {
+                    // Update existing record with better data or completed status
+                    const updateFields = {};
+                    if (newPages > existingPages) {
+                        updateFields['data.totalPages'] = newPages;
+                        updateFields['data.pagesPrinted'] = enhancedData.pagesPrinted || newPages;
+                    }
+                    if (newCopies > existingCopies) {
+                        updateFields['data.copies'] = newCopies;
+                    }
+                    if (newSheets > existingSheets) {
+                        updateFields['data.totalSheets'] = newSheets;
+                    }
+
+                    if (enhancedData.status === 'Printed' || enhancedData.status === 'completed') {
+                        updateFields['data.status'] = 'Printed';
+                    }
+
+                    // Also update source if the new source is more reliable
+                    if (enhancedData.source === 'event_log_307' || enhancedData.source === 'event_log_only') {
+                        updateFields['data.source'] = enhancedData.source;
+                    }
+
+                    const updatedDoc = await Log.findByIdAndUpdate(existingPrintJob._id, { $set: updateFields }, { new: true });
+                    console.log(`[PRINT DEDUP] Updated job ${enhancedData.jobId}: status -> Printed, pages ${existingPages}->${Math.max(existingPages, newPages)}, copies ${existingCopies}->${Math.max(existingCopies, newCopies)}`);
+
+                    // Tell sockets this print log was updated so the UI updates
+                    if (updatedDoc) {
+                        io.emit('new-log', updatedDoc);
+                    }
+                    return res.json({ success: true, updated: true, id: existingPrintJob._id });
+                }
+
+                // Exact duplicate — skip
+                return res.json({ success: true, deduplicated: true });
+            }
+        }
+
+        const logEntry = await Log.create({
+            type,
+            clientId,
+            hostname,
+            sessionId,
+            sessionUser,
+            data: enhancedData,
+            receivedAt: new Date()
+        });
+
+        // Broadcast to admin dashboard for real-time updates
+        io.emit('new-log', logEntry);
+
+        res.json({ success: true, id: logEntry._id });
+    } catch (error) {
+        console.error('Log Ingestion Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * Categorize a URL based on its domain
+ */
+function categorizeUrl(url) {
+    if (!url) return 'other';
+
+    const CATEGORY_DOMAINS = {
+        search: ['google.com', 'bing.com', 'duckduckgo.com', 'yahoo.com', 'baidu.com', 'yandex.com'],
+        social: ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com', 'tiktok.com', 'reddit.com', 'pinterest.com', 'snapchat.com', 'whatsapp.com', 'telegram.org', 'discord.com'],
+        video: ['youtube.com', 'vimeo.com', 'netflix.com', 'twitch.tv', 'dailymotion.com', 'hulu.com', 'disneyplus.com', 'primevideo.com'],
+        education: ['wikipedia.org', 'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org', 'medium.com', 'stackoverflow.com', 'w3schools.com', 'freecodecamp.org', 'udacity.com', 'netacad.com', 'skillsforall.com', 'cisco.com'],
+        development: ['github.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com', 'pypi.org', 'developer.mozilla.org', 'codepen.io', 'jsfiddle.net', 'replit.com', 'vercel.com', 'netlify.com', 'heroku.com'],
+        productivity: ['docs.google.com', 'sheets.google.com', 'slides.google.com', 'drive.google.com', 'notion.so', 'trello.com', 'asana.com', 'slack.com', 'zoom.us', 'meet.google.com', 'teams.microsoft.com', 'office.com'],
+        shopping: ['amazon.com', 'ebay.com', 'aliexpress.com', 'alibaba.com', 'etsy.com', 'shopify.com', 'walmart.com', 'target.com', 'jumia.co.ke'],
+        entertainment: ['spotify.com', 'soundcloud.com', 'pandora.com', 'crunchyroll.com', 'funimation.com'],
+        news: ['cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'theguardian.com', 'reuters.com', 'apnews.com', 'aljazeera.com']
+    };
+
+    try {
+        const hostname = new URL(url).hostname.replace('www.', '');
+
+        for (const [category, domains] of Object.entries(CATEGORY_DOMAINS)) {
+            for (const domain of domains) {
+                if (hostname === domain || hostname.endsWith('.' + domain)) {
+                    return category;
+                }
+            }
+        }
+    } catch (e) {
+        // URL parsing failed
+    }
+
+    return 'other';
+}
+
+// User authentication middleware is defined later in the file
+
+// ==================== ADMIN API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/download-agent
+ * Download the latest desktop agent installer
+ */
+app.get('/api/v1/admin/download-agent', (req, res) => {
+    try {
+        const files = fs.readdirSync(DOWNLOADS_DIR);
+        const agentFile = files.find(f => f.endsWith('.exe') || f.endsWith('.msi') || f.endsWith('.zip'));
+
+        if (!agentFile) {
+            return res.status(404).json({ error: 'Agent installer not found on server' });
+        }
+
+        const filePath = path.join(DOWNLOADS_DIR, agentFile);
+        res.download(filePath, agentFile);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to access downloads' });
+    }
+});
+
+// NOTE: Inventory management routes are defined later in the file (around line 4700+)
+// with proper authentication, email alerts, and enhanced features.
+// See the "INVENTORY MANAGEMENT" section near the end of the file.
+
+/**
+ * GET /api/v1/admin/computers
+ * Returns list of all computers and their real-time status
+ */
+app.get('/api/v1/admin/computers', async (req, res) => {
+    try {
+        const computerDocs = await Computer.find();
+        const now = new Date();
+        const computerList = computerDocs.map(c => {
+            const doc = c.toObject();
+            return {
+                ...doc,
+                isOnline: (now - new Date(doc.lastSeen)) < 45000
+            };
+        });
+        res.json(computerList);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch computers' });
+    }
+});
+
+
+/**
+ * GET /api/v1/admin/computers/:clientId
+ * Returns detailed info for a specific computer
+ */
+app.get('/api/v1/admin/computers/:clientId', async (req, res) => {
+    try {
+        const computer = await Computer.findOne({ clientId: req.params.clientId });
+        if (!computer) {
+            return res.status(404).json({ error: 'Computer not found' });
+        }
+
+        // Include recent activity for this computer from Log model
+        const recentActivity = await Log.find({ clientId: req.params.clientId, type: 'activity' })
+            .sort({ receivedAt: -1 })
+            .limit(20);
+
+        res.json({ ...computer.toObject(), recentActivity });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch computer details' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/sessions
+ * Returns session records with filtering
+ */
+app.get('/api/v1/admin/sessions', async (req, res) => {
+    try {
+        const { limit = 100, clientId, user, type } = req.query;
+
+        const query = {};
+        if (clientId) query.clientId = clientId;
+        if (user) query.user = { $regex: user, $options: 'i' };
+        if (type) query.type = type;
+
+        const sessionDocs = await Session.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(sessionDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
+});
+
+
+/**
+ * GET /api/v1/admin/print-jobs
+ * Returns print job records with filtering
+ */
+/**
+ * GET /api/v1/admin/print-jobs
+ * Returns print job records with filtering from Logs
+ */
+app.get('/api/v1/admin/print-jobs', async (req, res) => {
+    try {
+        // Always fetch fresh pricing from DB (reflects admin changes immediately)
+        const currentPricing = await getPricing();
+        const { limit = 500, clientId, user, printType, startDate, endDate } = req.query;
+
+        const query = { type: 'print' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
+        if (startDate || endDate) {
+            query.receivedAt = {};
+            if (startDate) query.receivedAt.$gte = new Date(startDate + 'T00:00:00');
+            if (endDate) query.receivedAt.$lte = new Date(endDate + 'T23:59:59');
+        }
+
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        const jobs = logs.map(l => {
+            const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
+            // Calculate per-job pricing
+            const sheets = logData.totalSheets || ((logData.totalPages || logData.pages || 1) * (logData.copies || 1));
+            const isColor = logData.printType === 'color';
+            const pricePerPage = isColor ? currentPricing.printColor : currentPricing.printBW;
+            const totalPrice = sheets * pricePerPage;
+            return {
+                ...logData,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt,
+                pricePerPage,
+                totalPrice
+            };
+        });
+
+        // Filter by printType if requested (since it's inside data field)
+        const finalJobs = printType ? jobs.filter(j => j.printType === printType) : jobs;
+
+        // Calculate totals — use totalSheets (accounts for copies + duplex) when available
+        // Fall back to totalPages * copies, then totalPages alone
+        const totals = {
+            totalJobs: finalJobs.length,
+            bwPages: finalJobs.filter(j => j.printType === 'bw').reduce((sum, j) => {
+                return sum + (j.totalSheets || ((j.totalPages || j.pages || 1) * (j.copies || 1)));
+            }, 0),
+            colorPages: finalJobs.filter(j => j.printType === 'color').reduce((sum, j) => {
+                return sum + (j.totalSheets || ((j.totalPages || j.pages || 1) * (j.copies || 1)));
+            }, 0),
+            bwRevenue: 0,
+            colorRevenue: 0
+        };
+        totals.totalPages = totals.bwPages + totals.colorPages;
+        totals.bwRevenue = totals.bwPages * currentPricing.printBW;
+        totals.colorRevenue = totals.colorPages * currentPricing.printColor;
+        totals.totalRevenue = totals.bwRevenue + totals.colorRevenue;
+
+        res.json({
+            jobs: finalJobs,
+            totals
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch print jobs' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/printers
+ * Returns latest connected printers per computer with page counters and usage stats
+ */
+app.get('/api/v1/admin/printers', async (req, res) => {
+    try {
+        const { clientId } = req.query;
+
+        // Find the latest printer log for each client
+        const query = { type: 'printers' };
+        if (clientId) query.clientId = clientId;
+
+        // Aggregate to get the most recent printer log per clientId
+        const printerLogs = await Log.aggregate([
+            { $match: query },
+            { $sort: { receivedAt: -1 } },
+            {
+                $group: {
+                    _id: '$clientId',
+                    hostname: { $first: '$hostname' },
+                    printers: { $first: '$data.printers' },
+                    summary: { $first: '$data.summary' },
+                    lastUpdated: { $first: '$receivedAt' }
+                }
+            },
+            {
+                $project: {
+                    clientId: '$_id',
+                    hostname: 1,
+                    printers: 1,
+                    summary: 1,
+                    lastUpdated: 1,
+                    _id: 0
+                }
+            }
+        ]);
+
+        // Enrich with today's print job statistics from Log collection
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const clientIds = printerLogs.map(p => p.clientId);
+
+        // Get today's print job logs for these clients
+        const todayPrintQuery = {
+            type: 'print',
+            receivedAt: { $gte: todayStart }
+        };
+        if (clientId) {
+            todayPrintQuery.clientId = clientId;
+        } else if (clientIds.length > 0) {
+            todayPrintQuery.clientId = { $in: clientIds };
+        }
+
+        const todayPrintLogs = await Log.find(todayPrintQuery).lean();
+
+        // Aggregate today's stats per client and per printer (case-insensitive keys)
+        const clientPrinterStats = {};
+        for (const log of todayPrintLogs) {
+            const cId = log.clientId;
+            const printerName = log.data?.printer || 'Unknown';
+            // Use case-insensitive key so "EPSON L3250 Series" matches "Epson L3250 Series"
+            const key = `${cId}::${printerName.toLowerCase().trim()}`;
+
+            if (!clientPrinterStats[key]) {
+                clientPrinterStats[key] = {
+                    clientId: cId,
+                    printerName,
+                    totalPages: 0,
+                    bwPages: 0,
+                    colorPages: 0,
+                    totalJobs: 0
+                };
+            }
+
+            const pages = log.data?.totalSheets || ((log.data?.totalPages || log.data?.pages || 1) * (log.data?.copies || 1));
+            clientPrinterStats[key].totalPages += pages;
+            clientPrinterStats[key].totalJobs += 1;
+
+            if (log.data?.printType === 'color') {
+                clientPrinterStats[key].colorPages += pages;
+            } else {
+                clientPrinterStats[key].bwPages += pages;
+            }
+        }
+
+        // Merge today's stats into printer data + deduplicate printers by name
+        const enrichedPrinterLogs = printerLogs.map(client => {
+            // Deduplicate: keep only the first occurrence of each printer name
+            const seenNames = new Set();
+            const uniquePrinters = (client.printers || []).filter(printer => {
+                const normalizedName = (printer.name || '').trim().toLowerCase();
+                if (seenNames.has(normalizedName)) return false;
+                seenNames.add(normalizedName);
+                return true;
+            });
+
+            const enrichedPrinters = uniquePrinters.map(printer => {
+                // Case-insensitive lookup to match print job logs
+                const key = `${client.clientId}::${(printer.name || '').toLowerCase().trim()}`;
+                const serverStats = clientPrinterStats[key] || {
+                    totalPages: 0, bwPages: 0, colorPages: 0, totalJobs: 0
+                };
+
+                // Agent sends last24h stats from the local Windows Event Log
+                // which is always accurate. Use these as a supplement when
+                // server-side stats are incomplete (jobs not synced yet).
+                const agentStats = printer.last24h || {
+                    totalPages: 0, bwPages: 0, colorPages: 0, totalJobs: 0
+                };
+
+                // Merge: use the HIGHER count from either source to ensure
+                // we never under-report. Server stats are authoritative when
+                // available; agent stats fill in the gaps for unsynced jobs.
+                const todayStats = {
+                    totalPages: Math.max(serverStats.totalPages || 0, agentStats.totalPages || 0),
+                    bwPages: Math.max(serverStats.bwPages || 0, agentStats.bwPages || 0),
+                    colorPages: Math.max(serverStats.colorPages || 0, agentStats.colorPages || 0),
+                    totalJobs: Math.max(serverStats.totalJobs || 0, agentStats.totalJobs || 0),
+                    serverSynced: serverStats.totalJobs || 0,
+                    agentReported: agentStats.totalJobs || 0
+                };
+
+                return {
+                    ...printer,
+                    todayStats
+                };
+            });
+
+            return {
+                ...client,
+                printers: enrichedPrinters
+            };
+        });
+
+        res.json(enrichedPrinterLogs);
+    } catch (error) {
+        console.error('Fetch Printers Error:', error);
+        res.status(500).json({ error: 'Failed to fetch printers' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printers/single
+ * Remove a specific printer from a specific client's printer log
+ * Body: { clientId, printerName }
+ */
+app.delete('/api/v1/admin/printers/single', requireAdminAuth, async (req, res) => {
+    try {
+        const { clientId, printerName } = req.body;
+        if (!clientId || !printerName) {
+            return res.status(400).json({ error: 'clientId and printerName are required' });
+        }
+
+        // Find all printer logs for this client and remove the specific printer from the array
+        const result = await Log.updateMany(
+            { type: 'printers', clientId },
+            { $pull: { 'data.printers': { name: printerName } } }
+        );
+
+        console.log(`[PRINTERS] Admin removed printer "${printerName}" from client "${clientId}": ${result.modifiedCount} logs updated`);
+
+        res.json({
+            success: true,
+            message: `Printer "${printerName}" removed from ${clientId}`,
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        console.error('[PRINTERS] Remove single printer failed:', error);
+        res.status(500).json({ error: 'Failed to remove printer' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printer-data
+ * Deletes all printer-related data (print jobs and printer discovery logs)
+ * Used for system cleanup from admin settings
+ */
+app.delete('/api/v1/admin/printer-data', requireAdminAuth, async (req, res) => {
+    try {
+        // Delete all print job logs
+        const printJobsResult = await Log.deleteMany({ type: 'print' });
+        // Delete all printer discovery/status logs
+        const printersResult = await Log.deleteMany({ type: 'printers' });
+
+        const totalDeleted = (printJobsResult.deletedCount || 0) + (printersResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin deleted printer data: ${printJobsResult.deletedCount} print jobs, ${printersResult.deletedCount} printer records`);
+
+        res.json({
+            success: true,
+            deleted: {
+                printJobs: printJobsResult.deletedCount || 0,
+                printers: printersResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Printer Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete printer data' });
+    }
+});
+
+// ==================== AGENT: AUTOMATIC PAGE COUNTER COLLECTION ====================
+
+/**
+ * POST /api/v1/agent/page-counter
+ * Agent submits automatic page counter readings from printer hardware.
+ * Deduplicates by only storing when the counter value has changed.
+ * Body: { clientId, hostname, counters: [{ printerName, totalPages, colorPages, bwPages, ... }] }
+ */
+app.post('/api/v1/agent/page-counter', async (req, res) => {
+    try {
+        const { clientId, hostname, counters, trigger } = req.body;
+
+        if (!clientId || !counters || !Array.isArray(counters)) {
+            return res.status(400).json({ error: 'clientId and counters array are required' });
+        }
+
+        const results = [];
+
+        for (const counter of counters) {
+            // ONLY accept readings with valid totalSheets from POI dialog
+            // Tag36/registry data (totalPages only) is NOT used for photocopy tracking
+            const hasTotalSheets = counter.totalSheets !== null && counter.totalSheets !== undefined && counter.totalSheets > 0;
+            
+            if (!counter.printerName || !hasTotalSheets) {
+                continue; // Skip printers without hardware sheet counter data
+            }
+
+            // Normalize printer name: strip "(Copy N)" suffix so all copies
+            // of the same physical printer consolidate into one reading
+            const normalizedName = counter.printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
+
+            // Use totalSheets (hardware counter from "Printer and Option Information") as the ONLY counter
+            // It includes ALL physical sheets: prints + photocopies
+            const totalSheetsValue = Math.round(counter.totalSheets);
+            const primaryCounter = totalSheetsValue;
+            if (primaryCounter <= 0) continue;
+
+            // Check the last reading for this printer (by normalized name) to avoid duplicate entries
+            const lastReading = await PageCounterReading.findOne({ printerName: normalizedName })
+                .sort({ recordedAt: -1 });
+
+            // Only store if counter has changed (new pages printed since last reading)
+            if (lastReading && lastReading.counterValue === primaryCounter && 
+                (!totalSheetsValue || lastReading.totalSheets === totalSheetsValue)) {
+                results.push({ printerName: normalizedName, status: 'unchanged', counterValue: primaryCounter });
+                continue;
+            }
+
+            // Validate counter is >= last reading (counters only go up)
+            if (lastReading && primaryCounter < lastReading.counterValue) {
+                // Allow if we are transitioning from a potentially inaccurate source (like STM3 tag36) 
+                // to a more accurate hardware source (like POI dialog)
+                const isTag36ToPOI = (lastReading.notes && lastReading.notes.includes('tag36')) && 
+                                     (counter.source && counter.source.includes('poi'));
+                
+                if (!isTag36ToPOI) {
+                    results.push({
+                        printerName: normalizedName,
+                        status: 'skipped',
+                        reason: `New value (${primaryCounter}) < last (${lastReading.counterValue})`,
+                        counterValue: primaryCounter
+                    });
+                    continue;
+                }
+            }
+
+            const activeTrigger = trigger || counter.source || 'auto';
+            const reading = await PageCounterReading.create({
+                printerName: normalizedName,
+                counterValue: primaryCounter,
+                colorPages: counter.colorPages || null,
+                bwPages: counter.bwPages || null,
+                blankPages: counter.blankPages || null,
+                borderlessColor: counter.borderlessColor || null,
+                borderlessBW: counter.borderlessBW || null,
+                withBorderColor: counter.withBorderColor || null,
+                withBorderBW: counter.withBorderBW || null,
+                totalSheets: totalSheetsValue,
+                borderlessSheets: counter.borderlessSheets || null,
+                firstPrintDate: counter.firstPrintDate || null,
+                source: activeTrigger,
+                clientId: clientId,
+                hostname: hostname,
+                printerOnline: counter.isOnline === true,
+                notes: `Auto-collected by agent (${activeTrigger})${totalSheetsValue ? ' [HW sheets: ' + totalSheetsValue + ']' : ''}`,
+                recordedBy: 'agent',
+                recordedAt: new Date()
+            });
+
+            const pagesSinceLast = lastReading ? primaryCounter - lastReading.counterValue : 0;
+            console.log(`[PAGE COUNTER] Auto: ${normalizedName} = ${primaryCounter}${totalSheetsValue ? ' (HW sheets)' : ' (registry)'} (+${pagesSinceLast}) via ${activeTrigger} from ${clientId}`);
+
+            results.push({
+                printerName: normalizedName,
+                status: 'stored',
+                counterValue: primaryCounter,
+                pagesSinceLast,
+                readingId: reading._id
+            });
+        }
+
+        io.emit('new-log', { type: 'photocopy' });
+        res.json({ success: true, results });
+    } catch (error) {
+        console.error('Agent Page Counter Error:', error);
+        res.status(500).json({ error: 'Failed to process page counter data' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/page-counter-readings
+ * Agent fetches its own page counter readings (no admin auth required).
+ * Query params: clientId (required), limit (optional, default 100)
+ * Returns recent readings for display in the portal's photocopy tab.
+ */
+app.get('/api/v1/agent/page-counter-readings', async (req, res) => {
+    try {
+        const { clientId, limit = 100 } = req.query;
+
+        if (!clientId) {
+            return res.status(400).json({ error: 'clientId is required' });
+        }
+
+        const readings = await PageCounterReading.find({ clientId })
+            .sort({ recordedAt: -1 })
+            .limit(parseInt(limit));
+
+        // Transform to the format the portal expects
+        const transformed = readings.map(r => ({
+            printerName: r.printerName,
+            totalSheets: r.totalSheets || r.counterValue,
+            totalPages: r.counterValue,
+            borderlessSheets: r.borderlessSheets || null,
+            isOnline: r.printerOnline !== false,
+            source: r.source || 'api',
+            timestamp: r.recordedAt || r.createdAt
+        }));
+
+        res.json({ success: true, readings: transformed });
+    } catch (error) {
+        console.error('Agent Page Counter Readings Error:', error);
+        res.status(500).json({ error: 'Failed to fetch page counter readings' });
+    }
+});
+
+// ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
+
+/**
+ * POST /api/v1/admin/page-counter-readings
+ * Record a new page counter reading from the printer's physical counter
+ */
+app.post('/api/v1/admin/page-counter-readings', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName, counterValue, notes } = req.body;
+
+        if (!printerName || counterValue === undefined || counterValue === null) {
+            return res.status(400).json({ error: 'printerName and counterValue are required' });
+        }
+
+        if (typeof counterValue !== 'number' || counterValue < 0) {
+            return res.status(400).json({ error: 'counterValue must be a non-negative number' });
+        }
+
+        // Validate that the new reading is >= the last reading for this printer
+        const lastReading = await PageCounterReading.findOne({ printerName })
+            .sort({ recordedAt: -1 });
+
+        if (lastReading && counterValue < lastReading.counterValue) {
+            return res.status(400).json({
+                error: `New counter value (${counterValue}) cannot be less than the last reading (${lastReading.counterValue})`,
+                lastReading: lastReading.counterValue
+            });
+        }
+
+        const reading = await PageCounterReading.create({
+            printerName,
+            counterValue: Math.round(counterValue),
+            notes: notes || '',
+            recordedBy: req.admin?.username || 'admin',
+            recordedAt: new Date()
+        });
+
+        console.log(`[PAGE COUNTER] New reading for "${printerName}": ${counterValue} by ${req.admin?.username}`);
+
+        res.json({ success: true, reading });
+    } catch (error) {
+        console.error('Page Counter Reading Error:', error);
+        res.status(500).json({ error: 'Failed to save page counter reading' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/page-counter-readings
+ * Get page counter readings, optionally filtered by printer
+ */
+app.get('/api/v1/admin/page-counter-readings', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName, limit = 50 } = req.query;
+        const query = {};
+        if (printerName) {
+            // Use regex to match base name - e.g. "EPSON L3250 Series" matches "EPSON L3250 Series (Copy 2)"
+            const escapedName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            query.printerName = { $regex: new RegExp(escapedName, 'i') };
+        }
+
+        const readings = await PageCounterReading.find(query)
+            .sort({ recordedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json({ readings });
+    } catch (error) {
+        console.error('Get Page Counter Readings Error:', error);
+        res.status(500).json({ error: 'Failed to fetch page counter readings' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/page-counter-readings/:id
+ * Delete a single page counter reading
+ */
+app.delete('/api/v1/admin/page-counter-readings/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await PageCounterReading.findByIdAndDelete(req.params.id);
+        if (!result) {
+            return res.status(404).json({ error: 'Reading not found' });
+        }
+        console.log(`[PAGE COUNTER] Deleted reading ${req.params.id}`);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete Page Counter Reading Error:', error);
+        res.status(500).json({ error: 'Failed to delete page counter reading' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/photocopy-data
+ * Calculate photocopies between two readings by subtracting tracked print jobs.
+ * 
+ * Key insight: When the counter comes from the POI dialog "Total Sheets",
+ * it counts PHYSICAL SHEETS (paper fed). So we subtract d.totalSheets from
+ * print jobs (which accounts for duplex: 2 pages on 1 sheet = 1 sheet).
+ * When the counter comes from STM3 Tag36 (page impressions), we subtract
+ * totalPages × copies instead.
+ * 
+ * BW/Color breakdown uses Tag36 withBorderBW/withBorderColor (page impressions),
+ * so those always subtract page impressions from print jobs.
+ * 
+ * Query params: printerName (required)
+ * Returns: readings, print jobs in each interval, and calculated photocopy counts
+ */
+app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
+    try {
+        const { printerName } = req.query;
+        if (!printerName) {
+            return res.status(400).json({ error: 'printerName is required' });
+        }
+
+        // Get all readings for this printer, ordered oldest first
+        // Use regex to match base name + variants like (Copy 1), (Copy 2)
+        const escapedPName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const printerQuery = { printerName: { $regex: new RegExp(escapedPName, 'i') } };
+        const readings = await PageCounterReading.find(printerQuery)
+            .sort({ recordedAt: 1 });
+
+        if (readings.length < 2) {
+            return res.json({
+                printerName,
+                readings,
+                intervals: [],
+                summary: { totalPhotocopies: 0, photocopiesBW: 0, photocopiesColor: 0, totalCounterDiff: 0, totalPrintPages: 0 },
+                message: readings.length === 0
+                    ? 'No page counter readings found. Record at least 2 readings to calculate photocopies.'
+                    : 'Need at least 2 readings to calculate photocopies.'
+            });
+        }
+
+        const currentPricing = await getPricing();
+        const intervals = [];
+        let totalPhotocopies = 0;
+        let totalPhotocopiesBW = 0;
+        let totalPhotocopiesColor = 0;
+        let totalCounterDiff = 0;
+        let totalPrintPages = 0;
+
+        // Build a regex that matches printer names flexibly for print job lookups
+        const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
+        const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        const printerMatchConditions = [
+            { 'data.printer': printerName },
+            { 'data.printer': { $regex: new RegExp('^' + escName + '$', 'i') } }
+        ];
+        if (baseName !== printerName) {
+            printerMatchConditions.push(
+                { 'data.printer': baseName },
+                { 'data.printer': { $regex: new RegExp('^' + escBase + '$', 'i') } },
+                { 'data.printer': { $regex: new RegExp('^' + escBase + '(\\s*\\(Copy\\s*\\d+\\))?$', 'i') } }
+            );
+        }
+
+        // GROUP readings by exact printer name so we never compare Copy 1 with Copy 2
+        const readingsByPrinter = {};
+        for (const r of readings) {
+            const key = r.printerName;
+            if (!readingsByPrinter[key]) readingsByPrinter[key] = [];
+            readingsByPrinter[key].push(r);
+        }
+
+        // For each printer variant, calculate intervals from consecutive readings
+        for (const [pName, pReadings] of Object.entries(readingsByPrinter)) {
+            // Need at least 2 readings for the same printer to form an interval
+            if (pReadings.length < 2) continue;
+
+            for (let i = 0; i < pReadings.length - 1; i++) {
+                const startReading = pReadings[i];
+                const endReading = pReadings[i + 1];
+                const counterDiff = endReading.counterValue - startReading.counterValue;
+
+                // Skip negative diffs (shouldn't happen but guard against it)
+                if (counterDiff < 0) continue;
+
+            // BW/Color counter diffs (from detailed Tag 0x36 data)
+            const startBW = (startReading.withBorderBW || 0) + (startReading.borderlessBW || 0);
+            const endBW = (endReading.withBorderBW || 0) + (endReading.borderlessBW || 0);
+            const startColor = (startReading.withBorderColor || 0) + (startReading.borderlessColor || 0);
+            const endColor = (endReading.withBorderColor || 0) + (endReading.borderlessColor || 0);
+            const counterDiffBW = (startBW > 0 && endBW > 0) ? endBW - startBW : 0;
+            const counterDiffColor = (startColor > 0 && endColor > 0) ? endColor - startColor : 0;
+            const hasDetailedCounters = counterDiffBW > 0 || counterDiffColor > 0;
+
+            // Count print job SHEETS between these two readings
+            // IMPORTANT: When counterValue comes from "Total Sheets" (POI dialog),
+            // it counts physical sheets (paper fed). So we must subtract physical
+            // sheets from print jobs, NOT page impressions. The agent sends
+            // d.totalSheets which already accounts for duplex (2 pages = 1 sheet).
+            // If counterValue came from STM3 tag36 (page impressions), we use
+            // totalPages * copies instead.
+            const counterIsSheets = endReading.totalSheets > 0 || startReading.totalSheets > 0;
+            const printLogs = await Log.find({
+                type: 'print',
+                receivedAt: { $gte: startReading.recordedAt, $lte: endReading.recordedAt },
+                $or: printerMatchConditions
+            });
+
+            let printSheetsBW = 0;
+            let printSheetsColor = 0;
+            // Also track page impressions for BW/Color breakdown (Tag36 counters use pages, not sheets)
+            let printImpressionsBW = 0;
+            let printImpressionsColor = 0;
+            for (const log of printLogs) {
+                const d = log.data || {};
+                const pageImpressions = (d.totalPages || d.pages || 1) * (d.copies || 1);
+                // Use totalSheets (physical paper) when counter tracks sheets,
+                // otherwise use page impressions
+                const sheets = counterIsSheets && d.totalSheets > 0
+                    ? d.totalSheets
+                    : pageImpressions;
+                if (d.printType === 'color' || d.isColorPrint) {
+                    printSheetsColor += sheets;
+                    printImpressionsColor += pageImpressions;
+                } else {
+                    printSheetsBW += sheets;
+                    printImpressionsBW += pageImpressions;
+                }
+            }
+            const printPages = printSheetsBW + printSheetsColor;
+
+            // Calculate photocopies = counter increase - tracked print sheets
+            const photocopies = Math.max(0, counterDiff - printPages);
+
+            // BW/Color photocopy breakdown
+            // Tag36 counters (withBorderBW etc.) track page impressions, NOT sheets,
+            // so we must subtract page impressions here, not sheets
+            let photocopiesBW = 0;
+            let photocopiesColor = 0;
+            if (hasDetailedCounters) {
+                photocopiesBW = Math.max(0, counterDiffBW - printImpressionsBW);
+                photocopiesColor = Math.max(0, counterDiffColor - printImpressionsColor);
+            } else {
+                photocopiesBW = photocopies;
+            }
+
+            totalCounterDiff += counterDiff;
+            totalPrintPages += printPages;
+            totalPhotocopies += photocopies;
+            totalPhotocopiesBW += photocopiesBW;
+            totalPhotocopiesColor += photocopiesColor;
+
+            intervals.push({
+                printerName: pName,
+                startReading: {
+                    id: startReading._id,
+                    counterValue: startReading.counterValue,
+                    totalSheets: startReading.totalSheets,
+                    withBorderBW: startReading.withBorderBW,
+                    withBorderColor: startReading.withBorderColor,
+                    recordedAt: startReading.recordedAt,
+                    source: startReading.source,
+                    notes: startReading.notes
+                },
+                endReading: {
+                    id: endReading._id,
+                    counterValue: endReading.counterValue,
+                    totalSheets: endReading.totalSheets,
+                    withBorderBW: endReading.withBorderBW,
+                    withBorderColor: endReading.withBorderColor,
+                    recordedAt: endReading.recordedAt,
+                    source: endReading.source,
+                    notes: endReading.notes
+                },
+                counterDiff,
+                counterDiffBW,
+                counterDiffColor,
+                printPages,
+                printPagesBW: printSheetsBW,
+                printPagesColor: printSheetsColor,
+                printJobCount: printLogs.length,
+                photocopies,
+                photocopiesBW,
+                photocopiesColor,
+                photocopyRevenueBW: photocopiesBW * (currentPricing.photocopyBW || 8),
+                photocopyRevenueColor: photocopiesColor * (currentPricing.photocopyColor || 40),
+                photocopyRevenue: (photocopiesBW * (currentPricing.photocopyBW || 8)) + (photocopiesColor * (currentPricing.photocopyColor || 40))
+            });
+            }
+        }
+
+        res.json({
+            printerName,
+            readings,
+            intervals,
+            summary: {
+                totalPhotocopies,
+                photocopiesBW: totalPhotocopiesBW,
+                photocopiesColor: totalPhotocopiesColor,
+                totalCounterDiff,
+                totalPrintPages,
+                photocopyRateBW: currentPricing.photocopyBW || 8,
+                photocopyRateColor: currentPricing.photocopyColor || 40,
+                estimatedRevenueBW: totalPhotocopiesBW * (currentPricing.photocopyBW || 8),
+                estimatedRevenueColor: totalPhotocopiesColor * (currentPricing.photocopyColor || 40),
+                estimatedRevenue: (totalPhotocopiesBW * (currentPricing.photocopyBW || 8)) + (totalPhotocopiesColor * (currentPricing.photocopyColor || 40))
+            }
+        });
+    } catch (error) {
+        console.error('Photocopy Data Error:', error);
+        res.status(500).json({ error: 'Failed to calculate photocopy data' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/browser-data
+ * Deletes all browser history data and online services data
+ */
+app.delete('/api/v1/admin/browser-data', async (req, res) => {
+    try {
+        const result = await Log.deleteMany({ type: 'browser' });
+        const serviceResult = await OnlineService.deleteMany({});
+        
+        console.log(`[CLEANUP] Admin deleted browser data: ${result.deletedCount} records, Online services: ${serviceResult.deletedCount}`);
+        res.json({
+            success: true,
+            deleted: { 
+                browserLogs: result.deletedCount || 0,
+                onlineServices: serviceResult.deletedCount || 0 
+            }
+        });
+    } catch (error) {
+        console.error('Delete Browser Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete browser data' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/landing-document-data
+ * Deletes all landing page document requests and document data
+ */
+app.delete('/api/v1/admin/landing-document-data', async (req, res) => {
+    try {
+        const docRequestsResult = await DocumentRequest.deleteMany({});
+        const sharedDocResult = await SharedDocument.deleteMany({});
+        
+        console.log(`[CLEANUP] Admin deleted landing and document data: reqs=${docRequestsResult.deletedCount}, docs=${sharedDocResult.deletedCount}`);
+        
+        res.json({
+            success: true,
+            deleted: {
+                requests: docRequestsResult.deletedCount || 0,
+                documents: sharedDocResult.deletedCount || 0
+            }
+        });
+    } catch (error) {
+        console.error('Delete Landing/Document Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete landing and document data' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/online-services
+ * Agent logs detected online service PDFs
+ */
+app.post('/api/v1/agent/online-services', async (req, res) => {
+    try {
+        const { clientId, hostname, sessionId, sessionUser, service, fileName, path, timestamp } = req.body;
+        if (!clientId || !service) return res.status(400).json({ error: 'Missing required fields' });
+
+        const serviceDoc = new OnlineService({
+            clientId,
+            hostname,
+            sessionId,
+            sessionUser,
+            service,
+            fileName,
+            path,
+            timestamp: timestamp || new Date()
+        });
+        await serviceDoc.save();
+
+        // Notify admin via socket
+        io.emit('online-service-detected', serviceDoc);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Agent Online Service Log Error:', error);
+        res.status(500).json({ error: 'Failed' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/online-services
+ * Admin fetches all online service logs
+ */
+app.get('/api/v1/admin/online-services', async (req, res) => {
+    try {
+        const services = await OnlineService.find().sort({ timestamp: -1 }).limit(100);
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed' });
+    }
+});
+
+// ==================== TRACKABLE SERVICES (Admin-defined services with shortcuts) ====================
+
+/**
+ * GET /api/v1/admin/trackable-services
+ * Admin fetches all trackable services
+ */
+app.get('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const services = await TrackableService.find().sort({ createdAt: -1 });
+        res.json(services);
+    } catch (error) {
+        console.error('Get trackable services error:', error);
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/trackable-services
+ * Admin creates a new trackable service
+ */
+app.post('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, unit, keyboardShortcut, icon, category, color, isActive } = req.body;
+        if (!name || price === undefined) {
+            return res.status(400).json({ error: 'Name and price are required' });
+        }
+        // Check for duplicate shortcut
+        if (keyboardShortcut) {
+            const existing = await TrackableService.findOne({ keyboardShortcut, isActive: true });
+            if (existing) {
+                return res.status(400).json({ error: `Shortcut "${keyboardShortcut}" is already assigned to "${existing.name}"` });
+            }
+        }
+        const service = await TrackableService.create({
+            name, description, price, unit: unit || 'per_item',
+            keyboardShortcut: keyboardShortcut || '', icon: icon || '📋',
+            category: category || 'General', color: color || '#00B4D8',
+            isActive: isActive !== false
+        });
+        // Broadcast to agents so they pick up the new shortcut
+        io.emit('trackable-services-updated');
+        res.json({ success: true, service });
+    } catch (error) {
+        console.error('Create trackable service error:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/trackable-services/:id
+ * Admin updates a trackable service
+ */
+app.put('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+        // Check for duplicate shortcut (exclude self)
+        if (updates.keyboardShortcut) {
+            const existing = await TrackableService.findOne({
+                keyboardShortcut: updates.keyboardShortcut, isActive: true, _id: { $ne: id }
+            });
+            if (existing) {
+                return res.status(400).json({ error: `Shortcut "${updates.keyboardShortcut}" is already assigned to "${existing.name}"` });
+            }
+        }
+        updates.updatedAt = new Date();
+        const service = await TrackableService.findByIdAndUpdate(id, updates, { new: true });
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        io.emit('trackable-services-updated');
+        res.json({ success: true, service });
+    } catch (error) {
+        console.error('Update trackable service error:', error);
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/trackable-services/:id
+ * Admin deletes a trackable service
+ */
+app.delete('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        await TrackableService.findByIdAndDelete(id);
+        io.emit('trackable-services-updated');
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete trackable service error:', error);
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+/**
+ * GET /api/v1/trackable-services
+ * Agent-facing: fetch active trackable services (no admin auth required)
+ */
+app.get('/api/v1/trackable-services', async (req, res) => {
+    try {
+        const services = await TrackableService.find({ isActive: true }).sort({ name: 1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+// ==================== ACTIVITY RECORDS (Agent daily submissions) ====================
+
+/**
+ * POST /api/v1/agent/activity-records
+ * Agent submits a batch of daily activity records
+ */
+app.post('/api/v1/agent/activity-records', async (req, res) => {
+    try {
+        const { records, agentUser, clientId, hostname, date } = req.body;
+        if (!records || !Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({ error: 'No records provided' });
+        }
+        const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const recordDate = date || new Date().toISOString().split('T')[0];
+        const docs = records.map(r => ({
+            serviceId: r.serviceId || null,
+            serviceName: r.serviceName,
+            quantity: r.quantity || 1,
+            unitPrice: r.unitPrice || 0,
+            totalAmount: r.totalAmount || (r.quantity * r.unitPrice),
+            agentUser: r.agentUser || agentUser || 'unknown',
+            clientId: r.clientId || clientId || '',
+            hostname: r.hostname || hostname || '',
+            date: r.date || recordDate,
+            notes: r.notes || '',
+            customerName: r.customerName || '',
+            paymentMethod: r.paymentMethod || 'cash',
+            batchId
+        }));
+        const saved = await ActivityRecord.insertMany(docs);
+        console.log(`[ACTIVITY] ${saved.length} records submitted by ${agentUser} from ${clientId}`);
+        // Notify admin dashboard
+        io.emit('activity-records-submitted', {
+            agentUser, clientId, hostname, date: recordDate,
+            count: saved.length,
+            total: docs.reduce((s, r) => s + r.totalAmount, 0)
+        });
+        res.json({ success: true, count: saved.length, batchId });
+    } catch (error) {
+        console.error('Submit activity records error:', error);
+        res.status(500).json({ error: 'Failed to submit records' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/activity-records
+ * Admin fetches activity records with filtering
+ */
+app.get('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const { limit = 500, agentUser, date, clientId, startDate, endDate } = req.query;
+        const query = {};
+        if (agentUser) query.agentUser = agentUser;
+        if (date) query.date = date;
+        if (clientId) query.clientId = clientId;
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) query.date.$gte = startDate;
+            if (endDate) query.date.$lte = endDate;
+        }
+        const records = await ActivityRecord.find(query)
+            .sort({ submittedAt: -1 })
+            .limit(parseInt(limit));
+        res.json(records);
+    } catch (error) {
+        console.error('Get activity records error:', error);
+        res.status(500).json({ error: 'Failed to fetch records' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/activity-records
+ * Admin clears all activity records
+ */
+app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await ActivityRecord.deleteMany({});
+        res.json({ success: true, deleted: result.deletedCount });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear records' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/browser-history
+ * Returns browser history records
+ */
+/**
+ * GET /api/v1/admin/browser-history
+ * Returns browser history records from Logs
+ */
+app.get('/api/v1/admin/browser-history', async (req, res) => {
+    try {
+        const { limit = 200, clientId, user } = req.query;
+
+        const query = { type: 'browser' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
+
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        const history = logs.map(l => {
+            const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
+            return {
+                ...logData,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        });
+
+        res.json(history);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch browser history' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/file-activity
+ * Returns file creation/modification logs with category support
+ */
+/**
+ * GET /api/v1/admin/file-activity
+ * Returns file creation/modification logs from database
+ */
+app.get('/api/v1/admin/file-activity', async (req, res) => {
+    try {
+        const { limit = 200, clientId, user, category, groupByCategory } = req.query;
+
+        const query = { type: 'file' };
+        if (clientId) query.clientId = clientId;
+        if (user) query.sessionUser = { $regex: user, $options: 'i' };
+
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        let filtered = logs.map(l => {
+            const doc = l.toObject();
+            const logData = (doc.data && typeof doc.data === 'object') ? doc.data : {};
+            return {
+                ...logData,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        });
+
+        if (category) {
+            filtered = filtered.filter(f => f.category === category);
+        }
+
+        // Group by category if requested
+        if (groupByCategory === 'true') {
+            const grouped = {};
+            for (const file of filtered) {
+                const cat = file.category || 'other';
+                if (!grouped[cat]) {
+                    grouped[cat] = { count: 0, totalSize: 0, files: [] };
+                }
+                grouped[cat].count++;
+                grouped[cat].totalSize += file.sizeBytes || 0;
+                grouped[cat].files.push({
+                    name: file.name,
+                    size: file.size,
+                    folder: file.folder,
+                    user: file.sessionUser,
+                    computer: file.hostname,
+                    timestamp: file.timestamp || file.receivedAt
+                });
+            }
+
+            // Format sizes
+            for (const cat of Object.keys(grouped)) {
+                const bytes = grouped[cat].totalSize;
+                grouped[cat].totalSizeFormatted = formatBytes(bytes);
+                grouped[cat].files = grouped[cat].files.slice(0, 20); // Limit files per category
+            }
+
+            res.json({
+                categories: grouped,
+                totalFiles: filtered.length
+            });
+        } else {
+            res.json(filtered);
+        }
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch file activity' });
+    }
+});
+
+// Helper function for byte formatting
+function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
+ * GET /api/v1/admin/file-stats
+ * Returns aggregated file statistics by category from database
+ */
+app.get('/api/v1/admin/file-stats', async (req, res) => {
+    try {
+        const { clientId } = req.query;
+
+        const query = { type: 'file' };
+        if (clientId) query.clientId = clientId;
+
+        const logs = await Log.find(query).sort({ receivedAt: -1 });
+
+        const filtered = logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        });
+
+        // Aggregate by category AND source
+        const categoryStats = {};
+        const sourceStats = {};
+
+        for (const file of filtered) {
+            // Category Stats
+            const cat = file.category || 'other';
+            if (!categoryStats[cat]) {
+                categoryStats[cat] = {
+                    category: cat,
+                    count: 0,
+                    totalSizeBytes: 0,
+                    extensions: new Set()
+                };
+            }
+            categoryStats[cat].count++;
+            categoryStats[cat].totalSizeBytes += file.sizeBytes || 0;
+            if (file.extension) categoryStats[cat].extensions.add(file.extension);
+
+            // Source Stats (Infer from path/folder)
+            let source = 'Other';
+            const folderLower = (file.folder || '').toLowerCase();
+            const pathLower = (file.path || '').toLowerCase();
+
+            if (pathLower.includes('whatsapp') || folderLower.includes('whatsapp')) source = 'WhatsApp';
+            else if (pathLower.includes('telegram') || folderLower.includes('telegram')) source = 'Telegram';
+            else if (folderLower === 'downloads' || pathLower.includes('downloads')) source = 'Downloads';
+            else if (folderLower === 'desktop' || pathLower.includes('desktop')) source = 'Desktop';
+            else if (folderLower === 'documents' || pathLower.includes('documents')) source = 'Documents';
+            else if (pathLower.match(/^[a-z]:\\/i) && !pathLower.startsWith('c:\\')) source = 'USB / External'; // Drive letters other than C:
+
+            if (!sourceStats[source]) {
+                sourceStats[source] = {
+                    source: source,
+                    count: 0,
+                    totalSizeBytes: 0
+                };
+            }
+            sourceStats[source].count++;
+            sourceStats[source].totalSizeBytes += file.sizeBytes || 0;
+        }
+
+        // Convert to array and format
+        const stats = Object.values(categoryStats).map(c => ({
+            category: c.category,
+            count: c.count,
+            totalSize: formatBytes(c.totalSizeBytes),
+            totalSizeBytes: c.totalSizeBytes,
+            extensions: Array.from(c.extensions)
+        })).sort((a, b) => b.count - a.count);
+
+        const sources = Object.values(sourceStats).map(s => ({
+            source: s.source,
+            count: s.count,
+            totalSize: formatBytes(s.totalSizeBytes),
+            totalSizeBytes: s.totalSizeBytes
+        })).sort((a, b) => b.count - a.count);
+
+        // Recent files by type
+        const recentByCategory = {};
+        const categories = ['documents', 'spreadsheets', 'images', 'videos', 'audio', 'archives'];
+        for (const cat of categories) {
+            recentByCategory[cat] = filtered
+                .filter(f => f.category === cat)
+                .slice(0, 5)
+                .map(f => ({
+                    name: f.name,
+                    size: f.size,
+                    user: f.sessionUser,
+                    computer: f.hostname,
+                    source: f.folder || 'Unknown', // Pass folder as source hint
+                    timestamp: f.timestamp || f.receivedAt
+                }));
+        }
+
+        res.json({
+            totalFiles: filtered.length,
+            totalSize: formatBytes(filtered.reduce((s, f) => s + (f.sizeBytes || 0), 0)),
+            categoryStats: stats,
+            sourceStats: sources,
+            recentByCategory: recentByCategory
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch file stats' });
+    }
+});
+
+// ==================== REMOTE MONITORING & CONTROL ====================
+
+/**
+ * POST /api/v1/admin/computers/:clientId/screenshot
+ * Request a screenshot from a specific computer
+ */
+app.post('/api/v1/admin/computers/:clientId/screenshot', requireAdminAuth, (req, res) => {
+    try {
+        const { clientId } = req.params;
+        const socketId = agentSockets.get(clientId);
+
+        if (!socketId) {
+            return res.status(404).json({ error: 'Computer not connected or agent not registered' });
+        }
+
+        // Send command to agent via socket
+        io.to(socketId).emit('agent-command', {
+            command: 'screenshot',
+            clientId: clientId
+        });
+
+        console.log(`[ADMIN] Requested screenshot from: ${clientId}`);
+        res.json({ success: true, message: 'Screenshot requested' });
+    } catch (error) {
+        console.error('[ADMIN] Screenshot request failed:', error);
+        res.status(500).json({ error: 'Failed to request screenshot' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/screenshot
+ * Receive a screenshot from an agent (HTTP fallback for socket delivery)
+ */
+app.post('/api/v1/agent/screenshot', express.json({ limit: '20mb' }), (req, res) => {
+    try {
+        const { clientId, hostname, screenshot, timestamp } = req.body;
+
+        if (!clientId || !screenshot) {
+            return res.status(400).json({ error: 'Missing clientId or screenshot data' });
+        }
+
+        console.log(`[SCREENSHOT] Received via HTTP from ${clientId} (${hostname}), size: ${screenshot.length} chars`);
+
+        // Broadcast to admin dashboards
+        io.emit('agent-screenshot', {
+            clientId,
+            hostname,
+            screenshot,
+            timestamp: timestamp || new Date().toISOString()
+        });
+
+        res.json({ success: true, message: 'Screenshot received and broadcast' });
+    } catch (error) {
+        console.error('[SCREENSHOT] HTTP receive failed:', error);
+        res.status(500).json({ error: 'Failed to process screenshot' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/usb-events
+ * Returns USB device connection events
+ */
+/**
+ * GET /api/v1/admin/usb-events
+ * Returns USB device connection events from database
+ */
+app.get('/api/v1/admin/usb-events', async (req, res) => {
+    try {
+        const { limit = 100, clientId } = req.query;
+
+        const query = { type: 'usb' };
+        if (clientId) query.clientId = clientId;
+
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(logs.map(l => {
+            const doc = l.toObject();
+            return {
+                ...doc.data,
+                id: doc._id,
+                clientId: doc.clientId,
+                hostname: doc.hostname,
+                sessionUser: doc.sessionUser,
+                receivedAt: doc.receivedAt
+            };
+        }));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch USB events' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/activity
+ * Returns recent activity logs
+ */
+/**
+ * GET /api/v1/admin/activity
+ * Returns recent activity logs from database
+ */
+app.get('/api/v1/admin/activity', async (req, res) => {
+    try {
+        const { limit = 50, clientId } = req.query;
+
+        const query = { type: 'activity' };
+        if (clientId) query.clientId = clientId;
+
+        const logs = await Log.find(query)
+            .sort({ receivedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(logs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch activity logs' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/stats
+ * Returns aggregate dashboard statistics from database
+ */
+app.get('/api/v1/admin/stats', async (req, res) => {
+    try {
+        // Fetch real-time count from DB for reliability
+        const computerDocs = await Computer.find();
+        const now = new Date();
+        const allComputers = computerDocs.map(c => ({
+            ...c.toObject(),
+            isOnline: (now - new Date(c.lastSeen)) < 45000 // 45s grace period
+        }));
+
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        // Fetch statistics from DB
+        const [todaySessions, todayPrintJobs] = await Promise.all([
+            Session.find({ receivedAt: { $gte: todayStart } }),
+            Log.find({ type: 'print', receivedAt: { $gte: todayStart } })
+        ]);
+
+        // Calculate session revenues
+        const todaySessionRevenue = todaySessions
+            .filter(s => s.type === 'LOGOUT' && s.charges)
+            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+
+        // Calculate printing revenues (using totalSheets which accounts for copies)
+        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+            const data = j.data || {};
+            const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
+            const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
+            return sum + (sheets * rate);
+        }, 0);
+
+        res.json({
+            computers: {
+                total: allComputers.length,
+                online: allComputers.filter(c => c.isOnline).length,
+                busy: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length,
+                offline: allComputers.filter(c => !c.isOnline).length
+            },
+            revenue: {
+                today: todaySessionRevenue + todayPrintRevenue,
+                sessions: todaySessionRevenue,
+                printing: todayPrintRevenue
+            },
+            sessions: {
+                today: todaySessions.filter(s => s.type === 'LOGIN').length,
+                active: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length
+            },
+            recentActivity: todaySessions.slice(0, 10),
+            pricing: pricing
+        });
+    } catch (error) {
+        console.error('Stats Error:', error);
+        res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/command
+ * Send a command to a specific agent
+ */
+app.post('/api/v1/admin/command', (req, res) => {
+    const { clientId, command, params } = req.body;
+
+    io.emit('agent-command', { clientId, command, params });
+    console.log(`[COMMAND] ${command} -> ${clientId}`);
+
+    res.json({ success: true, message: 'Command sent' });
+});
+
+/**
+ * GET /api/v1/admin/pricing
+ * Returns current pricing configuration
+ */
+app.get('/api/v1/admin/pricing', (req, res) => {
+    res.json(pricing);
+});
+
+/**
+ * PUT /api/v1/admin/pricing
+ * Updates pricing configuration
+ */
+app.put('/api/v1/admin/pricing', (req, res) => {
+    const updates = req.body;
+    Object.assign(pricing, updates);
+    io.emit('pricing-updated', pricing);
+    res.json({ success: true, pricing });
+});
+
+// ==================== DOCUMENT SHARING TO COMPUTERS ====================
+
+/**
+ * POST /api/v1/documents/send-to-computer
+ * Send a file directly to a specific computer
+ */
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), async (req, res) => {
+    try {
+        const { targetClientId, targetHostname, message } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!targetClientId) {
+            return res.status(400).json({ error: 'Target client ID required' });
+        }
+
+        const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+        // Create SharedDocument record
+        const docRecord = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: (req.file.size / 1024).toFixed(1) + ' KB', // Simple format
+            mimetype: req.file.mimetype,
+            from: {
+                user: 'Admin',
+                clientId: 'admin'
+            },
+            to: {
+                user: targetHostname || 'Computer',
+                clientId: targetClientId
+            },
+            message: message || 'File from Admin',
+            status: 'pending' // pending until downloaded
+        });
+
+        // Emit to the specific agent
+        io.emit('document-for-agent', {
+            targetClientId: targetClientId,
+            document: {
+                id: docRecord.id, // Include ID for tracking download status
+                filename: req.file.originalname,
+                downloadUrl: fileUrl,
+                message: message || 'File from Admin',
+                size: req.file.size,
+                mimetype: req.file.mimetype
+            }
+        });
+
+        // Emit to admin dashboard to update Documents list
+        io.emit('document-shared', docRecord);
+
+        console.log(`[DOCUMENT] Sent ${req.file.originalname} to ${targetHostname || targetClientId}`);
+
+        res.json({
+            success: true,
+            message: `File sent to ${targetHostname || targetClientId}`,
+            document: {
+                filename: req.file.originalname,
+                url: fileUrl,
+                size: req.file.size
+            }
+        });
+    } catch (error) {
+        console.error('Send to Computer Error:', error);
+        res.status(500).json({ error: 'Failed to send file' });
+    }
+});
+
+// ==================== SERVICE CATALOG ====================
+
+/**
+ * GET /api/v1/admin/services
+ * List all services with pricing
+ */
+app.get('/api/v1/admin/services', async (req, res) => {
+    try {
+        const serviceDocs = await Service.find({ isActive: true });
+        res.json(serviceDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/services
+ * Create a new service
+ */
+app.post('/api/v1/admin/services', async (req, res) => {
+    try {
+        const { name, category, price, unit, description } = req.body;
+
+        if (!name || !price) {
+            return res.status(400).json({ error: 'Name and price required' });
+        }
+
+        const newService = await Service.create({
+            id: 'svc-' + Date.now(),
+            name,
+            category: category || 'custom',
+            description: description || '',
+            price: parseFloat(price),
+            unit: unit || 'flat',
+            isActive: true
+        });
+
+        io.emit('service-created', newService);
+        res.json({ success: true, service: newService });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/services/:id
+ * Update a service
+ */
+app.put('/api/v1/admin/services/:id', async (req, res) => {
+    try {
+        const updatedService = await Service.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
+
+        if (!updatedService) return res.status(404).json({ error: 'Service not found' });
+
+        io.emit('service-updated', updatedService);
+        res.json({ success: true, service: updatedService });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/services/:id
+ * Delete a service
+ */
+app.delete('/api/v1/admin/services/:id', async (req, res) => {
+    try {
+        const deleted = await Service.findOneAndDelete({ id: req.params.id });
+
+        if (!deleted) return res.status(404).json({ error: 'Service not found' });
+
+        io.emit('service-deleted', { id: deleted.id });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+
+
+
+
+// ==================== TASK MANAGEMENT ====================
+
+/**
+ * GET /api/v1/admin/tasks
+ * List all tasks with optional filters
+ */
+app.get('/api/v1/admin/tasks', async (req, res) => {
+    try {
+        const { status, clientId, userId, limit = 100 } = req.query;
+
+        const query = {};
+        if (status) query.status = status;
+        if (clientId) query['assignedTo.clientId'] = clientId;
+        if (userId) query['assignedTo.userId'] = userId;
+
+        const taskDocs = await Task.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+        res.json(taskDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch tasks' });
+    }
+});
+
+
+/**
+ * POST /api/v1/admin/tasks
+ * Create a new task in database
+ */
+app.post('/api/v1/admin/tasks', async (req, res) => {
+    try {
+        const { title, description, serviceId, price, priority, dueAt, assignTo } = req.body;
+
+        if (!title) {
+            return res.status(400).json({ error: 'Title required' });
+        }
+
+        // Get price from service if serviceId provided
+        let taskPrice = price || 0;
+        let serviceName = null;
+        if (serviceId) {
+            const service = await Service.findOne({ id: serviceId });
+            if (service) {
+                taskPrice = service.price;
+                serviceName = service.name;
+            }
+        }
+
+        const taskData = {
+            id: 'task-' + Date.now() + Math.random().toString(36).substr(2, 5),
+            title,
+            description: description || '',
+            serviceId: serviceId || null,
+            serviceName,
+            price: taskPrice,
+            priority: priority || 'normal',
+            status: assignTo ? 'assigned' : 'available',
+            assignedTo: assignTo ? {
+                userId: assignTo.userId || null,
+                clientId: assignTo.clientId || null,
+                hostname: assignTo.hostname || null,
+                userName: assignTo.userName || null
+            } : null,
+            assignedAt: assignTo ? new Date().toISOString() : null,
+            dueAt: dueAt || null,
+            createdAt: new Date().toISOString()
+        };
+
+        const task = await Task.create(taskData);
+
+        // Notify if assigned to a computer
+        if (task.assignedTo?.clientId) {
+            io.emit('task-assigned', {
+                targetClientId: task.assignedTo.clientId,
+                task: {
+                    id: task.id,
+                    title: task.title,
+                    price: task.price,
+                    priority: task.priority,
+                    dueAt: task.dueAt
+                }
+            });
+        }
+
+        console.log(`[TASK] Created in DB: ${task.title} - KSH ${task.price}`);
+        res.json({ success: true, task });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create task' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/tasks/:id
+ * Update a task in database
+ */
+app.put('/api/v1/admin/tasks/:id', async (req, res) => {
+    try {
+        const task = await Task.findOne({ id: req.params.id });
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const oldStatus = task.status;
+        const updates = { ...req.body, updatedAt: new Date().toISOString() };
+
+        if (updates.status === 'completed' && oldStatus !== 'completed') {
+            updates.completedAt = new Date().toISOString();
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: updates },
+            { new: true }
+        );
+
+        // If status changed to completed, record transaction
+        if (updates.status === 'completed' && oldStatus !== 'completed') {
+            const transaction = await Transaction.create({
+                id: 'txn-' + Date.now(),
+                type: 'task_completion',
+                taskId: updatedTask.id,
+                description: updatedTask.title,
+                amount: updatedTask.price,
+                clientId: updatedTask.assignedTo?.clientId,
+                userId: updatedTask.assignedTo?.userId,
+                hostname: updatedTask.assignedTo?.hostname,
+                createdAt: new Date().toISOString()
+            });
+            io.emit('transaction-created', transaction);
+        }
+
+        io.emit('task-updated', updatedTask);
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update task' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/tasks/:id
+ * Delete a task
+ */
+app.delete('/api/v1/admin/tasks/:id', (req, res) => {
+    const idx = tasks.findIndex(t => t.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+
+    const deleted = tasks.splice(idx, 1)[0];
+    io.emit('task-deleted', { id: deleted.id });
+    res.json({ success: true });
+});
+
+/**
+ * POST /api/v1/admin/tasks/:id/assign
+ * Assign a task to a user/computer in database
+ */
+app.post('/api/v1/admin/tasks/:id/assign', async (req, res) => {
+    try {
+        const { clientId, hostname, userId, userName } = req.body;
+
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            {
+                $set: {
+                    status: 'assigned',
+                    assignedTo: { clientId, hostname, userId, userName },
+                    assignedAt: new Date().toISOString()
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedTask) return res.status(404).json({ error: 'Task not found' });
+
+        // Notify the assigned computer
+        io.emit('task-assigned', {
+            targetClientId: clientId,
+            task: {
+                id: updatedTask.id,
+                title: updatedTask.title,
+                price: updatedTask.price,
+                priority: updatedTask.priority,
+                dueAt: updatedTask.dueAt
+            }
+        });
+
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to assign task' });
+    }
+});
+
+// ==================== USER TASKS (for user portal) ====================
+
+/**
+ * GET /api/v1/user/tasks
+ * Get tasks for a specific user/computer from database
+ */
+app.get('/api/v1/user/tasks', requireUserAuth, async (req, res) => {
+    try {
+        const { clientId, userId, status, period } = req.query;
+
+        const query = {};
+        if (clientId || userId) {
+            query.$or = [
+                { 'assignedTo.clientId': clientId },
+                { 'assignedTo.userId': userId }
+            ];
+        }
+
+        if (status) query.status = status;
+
+        if (period) {
+            const now = new Date();
+            let startDate;
+            switch (period) {
+                case 'today':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'week':
+                    startDate = new Date(now);
+                    startDate.setDate(startDate.getDate() - 7);
+                    break;
+                case 'month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    break;
+            }
+            if (startDate) {
+                query.createdAt = { $gte: startDate };
+            }
+        }
+
+        const taskDocs = await Task.find(query).sort({ createdAt: -1 });
+        res.json(taskDocs);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch user tasks' });
+    }
+});
+
+/**
+ * PUT /api/v1/user/tasks/:id/status
+ * Update task status in database
+ */
+app.put('/api/v1/user/tasks/:id/status', requireUserAuth, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const task = await Task.findOne({ id: req.params.id });
+
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+
+        const oldStatus = task.status;
+        const updates = { status, updatedAt: new Date().toISOString() };
+
+        if (status === 'in-progress' && !task.startedAt) {
+            updates.startedAt = new Date().toISOString();
+        }
+
+        if (status === 'completed' && oldStatus !== 'completed') {
+            updates.completedAt = new Date().toISOString();
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: updates },
+            { new: true }
+        );
+
+        if (status === 'completed' && oldStatus !== 'completed') {
+            // Create transaction in DB
+            const transaction = await Transaction.create({
+                id: 'txn-' + Date.now(),
+                type: 'task_completion',
+                taskId: updatedTask.id,
+                description: updatedTask.title,
+                amount: updatedTask.price,
+                clientId: updatedTask.assignedTo?.clientId,
+                userId: updatedTask.assignedTo?.userId,
+                createdAt: new Date().toISOString()
+            });
+            io.emit('transaction-created', transaction);
+        }
+
+        io.emit('task-updated', updatedTask);
+        res.json({ success: true, task: updatedTask });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update task status' });
+    }
+});
+
+// ==================== PUBLIC SERVICES (No Auth Required) ====================
+
+/**
+ * GET /api/v1/services
+ * Get all active services (public)
+ */
+app.get('/api/v1/services', async (req, res) => {
+    try {
+        const services = await Service.find({ isActive: { $ne: false } })
+            .sort({ displayOrder: 1, category: 1, name: 1 });
+        res.json(services);
+    } catch (error) {
+        console.error('[PUBLIC SERVICES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get services' });
+    }
+});
+
+/**
+ * GET /api/v1/service-categories
+ * Get all active service categories (public)
+ */
+app.get('/api/v1/service-categories', async (req, res) => {
+    try {
+        const categories = await ServiceCategory.find({ isActive: { $ne: false } })
+            .sort({ displayOrder: 1, name: 1 });
+        res.json(categories);
+    } catch (error) {
+        console.error('[PUBLIC SERVICE CATEGORIES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get categories' });
+    }
+});
+
+
+// ==================== ADMIN SERVICES ====================
+
+/**
+ * GET /api/v1/admin/services
+ * Get all services
+ */
+app.get('/api/v1/admin/services', async (req, res) => {
+    try {
+        const services = await Service.find().sort({ displayOrder: 1, category: 1, name: 1 });
+        res.json(services);
+    } catch (error) {
+        console.error('[SERVICES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get services' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/services
+ * Create a new service
+ */
+app.post('/api/v1/admin/services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, category, subcategory, description, price, unit, icon, color, displayOrder } = req.body;
+
+        if (!name || !category || price === undefined) {
+            return res.status(400).json({ error: 'Name, category, and price are required' });
+        }
+
+        // Generate unique ID
+        const id = `svc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const service = await Service.create({
+            id,
+            name,
+            category,
+            subcategory,
+            description,
+            price,
+            unit: unit || 'flat',
+            icon,
+            color,
+            displayOrder: displayOrder || 0
+        });
+
+        console.log(`[SERVICES] Created: ${name}`);
+        res.json(service);
+    } catch (error) {
+        console.error('[SERVICES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/services/:id
+ * Update a service
+ */
+app.put('/api/v1/admin/services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await Service.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
+
+        if (!service) {
+            return res.status(404).json({ error: 'Service not found' });
+        }
+
+        console.log(`[SERVICES] Updated: ${service.name}`);
+        res.json(service);
+    } catch (error) {
+        console.error('[SERVICES] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/services/:id
+ * Delete a service
+ */
+app.delete('/api/v1/admin/services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await Service.findOneAndDelete({ id: req.params.id });
+
+        if (!service) {
+            return res.status(404).json({ error: 'Service not found' });
+        }
+
+        console.log(`[SERVICES] Deleted: ${service.name}`);
+        res.json({ success: true, message: 'Service deleted' });
+    } catch (error) {
+        console.error('[SERVICES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+
+// ==================== SERVICE CATEGORIES ====================
+
+/**
+ * GET /api/v1/admin/service-categories
+ * Get all service categories
+ */
+app.get('/api/v1/admin/service-categories', async (req, res) => {
+    try {
+        const categories = await ServiceCategory.find().sort({ displayOrder: 1, name: 1 });
+        res.json(categories);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get categories' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/service-categories
+ * Create a new service category
+ */
+app.post('/api/v1/admin/service-categories', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, key, icon, color, description, parentCategory, displayOrder } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ error: 'Name is required' });
+        }
+
+        // Generate key from name if not provided
+        const categoryKey = key || name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+        const categoryId = `cat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const category = await ServiceCategory.create({
+            id: categoryId,
+            name,
+            key: categoryKey,
+            icon: icon || 'folder',
+            color: color || '#00B4D8',
+            description,
+            parentCategory,
+            displayOrder: displayOrder || 0
+        });
+
+        console.log(`[SERVICE CATEGORIES] Created: ${name}`);
+        res.json(category);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Create failed:', error);
+        if (error.code === 11000) {
+            return res.status(400).json({ error: 'Category with this key already exists' });
+        }
+        res.status(500).json({ error: 'Failed to create category' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/service-categories/:id
+ * Update a service category
+ */
+app.put('/api/v1/admin/service-categories/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const category = await ServiceCategory.findOneAndUpdate(
+            { id: req.params.id },
+            { $set: req.body },
+            { new: true }
+        );
+
+        if (!category) {
+            return res.status(404).json({ error: 'Category not found' });
+        }
+
+        console.log(`[SERVICE CATEGORIES] Updated: ${category.name}`);
+        res.json(category);
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update category' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/service-categories/:id
+ * Delete a service category
+ */
+app.delete('/api/v1/admin/service-categories/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const category = await ServiceCategory.findOneAndDelete({ id: req.params.id });
+
+        if (!category) {
+            return res.status(404).json({ error: 'Category not found' });
+        }
+
+        console.log(`[SERVICE CATEGORIES] Deleted: ${category.name}`);
+        res.json({ success: true, message: 'Category deleted' });
+    } catch (error) {
+        console.error('[SERVICE CATEGORIES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete category' });
+    }
+});
+
+
+// ==================== TRANSACTIONS ====================
+
+/**
+ * DELETE /api/v1/admin/finance-data
+ * Clear all finance data: transactions and related session billing logs
+ */
+app.delete('/api/v1/admin/finance-data', requireAdminAuth, async (req, res) => {
+    try {
+        // Delete all transactions
+        const txnResult = await Transaction.deleteMany({});
+        // Delete session billing logs (type: 'session-end' logs that contain billing info)
+        const sessionBillingResult = await Log.deleteMany({ type: 'session-end' });
+
+        const totalDeleted = (txnResult.deletedCount || 0) + (sessionBillingResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin cleared finance data: ${txnResult.deletedCount} transactions, ${sessionBillingResult.deletedCount} session billing logs`);
+
+        res.json({
+            success: true,
+            deleted: {
+                transactions: txnResult.deletedCount || 0,
+                sessionBillingLogs: sessionBillingResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Finance Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete finance data' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/reports-data
+ * Clear all reports/monitoring data: activity logs, session logs, file activity, USB events
+ */
+app.delete('/api/v1/admin/reports-data', requireAdminAuth, async (req, res) => {
+    try {
+        // Delete activity logs
+        const activityResult = await Log.deleteMany({ type: 'activity' });
+        // Delete session logs (session start/end tracking)
+        const sessionResult = await Log.deleteMany({ type: 'session' });
+        // Delete file activity logs
+        const fileResult = await Log.deleteMany({ type: 'file' });
+        // Delete USB event logs
+        const usbResult = await Log.deleteMany({ type: 'usb' });
+
+        const totalDeleted = (activityResult.deletedCount || 0) + (sessionResult.deletedCount || 0) +
+            (fileResult.deletedCount || 0) + (usbResult.deletedCount || 0);
+
+        console.log(`[CLEANUP] Admin cleared reports data: ${activityResult.deletedCount} activity, ${sessionResult.deletedCount} session, ${fileResult.deletedCount} file, ${usbResult.deletedCount} USB logs`);
+
+        res.json({
+            success: true,
+            deleted: {
+                activityLogs: activityResult.deletedCount || 0,
+                sessionLogs: sessionResult.deletedCount || 0,
+                fileActivity: fileResult.deletedCount || 0,
+                usbEvents: usbResult.deletedCount || 0,
+                total: totalDeleted
+            }
+        });
+    } catch (error) {
+        console.error('Delete Reports Data Error:', error);
+        res.status(500).json({ error: 'Failed to delete reports data' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/transactions
+ * List all transactions from database
+ */
+app.get('/api/v1/admin/transactions', async (req, res) => {
+    try {
+        const { type, clientId, limit = 100, period } = req.query;
+
+        const query = {};
+        if (type) query.type = type;
+        if (clientId) query.clientId = clientId;
+
+        // Filter by period
+        if (period) {
+            const now = new Date();
+            let startDate;
+            switch (period) {
+                case 'today':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    break;
+                case 'week':
+                    startDate = new Date(now);
+                    startDate.setDate(startDate.getDate() - 7);
+                    break;
+                case 'month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    break;
+            }
+            if (startDate) {
+                query.createdAt = { $gte: startDate };
+            }
+        }
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch transactions' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/transactions/summary
+ * Get transaction summary/totals
+ */
+/**
+ * GET /api/v1/admin/transactions/summary
+ * Get transaction summary/totals from database
+ */
+app.get('/api/v1/admin/transactions/summary', async (req, res) => {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(now);
+        weekStart.setDate(weekStart.getDate() - 7);
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        const [
+            todayTxns, weekTxns, monthTxns,
+            todaySessions, weekSessions, monthSessions
+        ] = await Promise.all([
+            Transaction.find({ createdAt: { $gte: todayStart } }),
+            Transaction.find({ createdAt: { $gte: weekStart } }),
+            Transaction.find({ createdAt: { $gte: monthStart } }),
+            Session.find({ receivedAt: { $gte: todayStart }, type: 'LOGOUT' }),
+            Session.find({ receivedAt: { $gte: weekStart }, type: 'LOGOUT' }),
+            Session.find({ receivedAt: { $gte: monthStart }, type: 'LOGOUT' })
+        ]);
+
+        const calculateRevenue = (txns, sessions) => {
+            const txnTotal = txns.reduce((sum, t) => sum + (t.amount || 0), 0);
+            const sessionTotal = sessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
+            return {
+                sessions: sessions.length,
+                sessionRevenue: sessionTotal,
+                tasks: txns.length,
+                taskRevenue: txnTotal,
+                totalRevenue: txnTotal + sessionTotal
+            };
+        };
+
+        res.json({
+            today: calculateRevenue(todayTxns, todaySessions),
+            week: calculateRevenue(weekTxns, weekSessions),
+            month: calculateRevenue(monthTxns, monthSessions)
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch transaction summary' });
+    }
+});
+
+
+// ==================== DOCUMENT SHARING ====================
+
+/**
+ * POST /api/v1/documents/upload
+ * Upload a document to share with users or admin
+ */
+app.post('/api/v1/documents/upload', upload.single('file'), (req, res) => {
+    try {
+        const { fromUser, fromClientId, toUser, toClientId, message } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const document = {
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: `/uploads/${req.file.filename}`,
+            size: req.file.size,
+            sizeFormatted: formatBytes(req.file.size),
+            mimetype: req.file.mimetype,
+            from: {
+                user: fromUser || 'Admin',
+                clientId: fromClientId || 'admin'
+            },
+            to: {
+                user: toUser || 'all',
+                clientId: toClientId || 'all'
+            },
+            message: message || '',
+            status: 'pending', // pending, downloaded, expired
+            uploadedAt: new Date().toISOString(),
+            downloadedAt: null
+        };
+
+        sharedDocuments.unshift(document);
+        if (sharedDocuments.length > 500) sharedDocuments.pop();
+
+        // Notify recipient via WebSocket
+        io.emit('document-received', {
+            ...document,
+            path: undefined, // Don't expose server path
+            storedName: undefined
+        });
+
+        console.log(`[DOCUMENT] ${document.from.user} -> ${document.to.user}: ${document.filename}`);
+
+        res.json({ success: true, documentId: document.id, document });
+    } catch (error) {
+        console.error('Upload Error:', error);
+        res.status(500).json({ error: 'Upload failed' });
+    }
+});
+
+/**
+ * GET /api/v1/documents
+ * List documents (filtered by user/client)
+ */
+app.get('/api/v1/documents', (req, res) => {
+    const { clientId, user, direction } = req.query;
+
+    let filtered = sharedDocuments;
+
+    if (clientId || user) {
+        if (direction === 'sent') {
+            // Documents sent by this user
+            filtered = filtered.filter(d =>
+                d.from.clientId === clientId || d.from.user === user
+            );
+        } else if (direction === 'received') {
+            // Documents sent TO this user
+            filtered = filtered.filter(d =>
+                d.to.clientId === clientId ||
+                d.to.user === user ||
+                d.to.user === 'all' ||
+                d.to.clientId === 'all'
+            );
+        } else {
+            // All documents involving this user
+            filtered = filtered.filter(d =>
+                d.from.clientId === clientId ||
+                d.from.user === user ||
+                d.to.clientId === clientId ||
+                d.to.user === user ||
+                d.to.user === 'all'
+            );
+        }
+    }
+
+    res.json(filtered.map(d => ({
+        ...d,
+        storedName: undefined // Hide internal filename
+    })));
+});
+
+/**
+ * GET /api/v1/documents/:id/download
+ * Download a specific document
+ */
+app.get('/api/v1/documents/:id/download', (req, res) => {
+    const doc = sharedDocuments.find(d => d.id === req.params.id);
+
+    if (!doc) {
+        return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const filePath = path.join(UPLOADS_DIR, doc.storedName);
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found on server' });
+    }
+
+    // Mark as downloaded
+    doc.status = 'downloaded';
+    doc.downloadedAt = new Date().toISOString();
+
+    // Notify sender
+    io.emit('document-downloaded', { id: doc.id, downloadedBy: req.query.user || 'Unknown' });
+
+    res.download(filePath, doc.filename);
+});
+
+/**
+ * DELETE /api/v1/documents/:id
+ * Delete a shared document
+ */
+app.delete('/api/v1/documents/:id', (req, res) => {
+    const index = sharedDocuments.findIndex(d => d.id === req.params.id);
+
+    if (index === -1) {
+        return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const doc = sharedDocuments[index];
+
+    // Delete file from disk
+    const filePath = path.join(UPLOADS_DIR, doc.storedName);
+    if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+    }
+
+    sharedDocuments.splice(index, 1);
+
+    io.emit('document-deleted', { id: doc.id });
+
+    res.json({ success: true });
+});
+
+/**
+ * POST /api/v1/documents/send-to-computer
+ * Admin sends document to specific computer
+ */
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), (req, res) => {
+    const { targetClientId, targetHostname, message } = req.body;
+
+    if (!req.file || !targetClientId) {
+        return res.status(400).json({ error: 'File and target computer required' });
+    }
+
+    const document = {
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        filename: req.file.originalname,
+        storedName: req.file.filename,
+        path: `/uploads/${req.file.filename}`,
+        size: req.file.size,
+        sizeFormatted: formatBytes(req.file.size),
+        mimetype: req.file.mimetype,
+        from: { user: 'Admin', clientId: 'admin' },
+        to: { user: targetHostname || targetClientId, clientId: targetClientId },
+        message: message || 'Document from Admin',
+        status: 'pending',
+        uploadedAt: new Date().toISOString()
+    };
+
+    sharedDocuments.unshift(document);
+
+    // Emit to specific computer
+    io.emit('document-for-agent', {
+        targetClientId,
+        document: {
+            id: document.id,
+            filename: document.filename,
+            size: document.sizeFormatted,
+            from: 'Admin',
+            message: document.message,
+            downloadUrl: `http://localhost:5000/api/v1/documents/${document.id}/download`
+        }
+    });
+
+    console.log(`[DOCUMENT] Admin -> ${targetHostname || targetClientId}: ${document.filename}`);
+
+    res.json({ success: true, documentId: document.id });
+});
+
+/**
+ * GET /api/v1/documents/stats
+ * Document sharing statistics
+ */
+app.get('/api/v1/documents/stats', (req, res) => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const todayDocs = sharedDocuments.filter(d => new Date(d.uploadedAt) >= todayStart);
+
+    res.json({
+        total: sharedDocuments.length,
+        today: todayDocs.length,
+        pending: sharedDocuments.filter(d => d.status === 'pending').length,
+        downloaded: sharedDocuments.filter(d => d.status === 'downloaded').length,
+        totalSize: formatBytes(sharedDocuments.reduce((s, d) => s + d.size, 0))
+    });
+});
+
+
+// ==================== PUBLIC API (LANDING PAGE) ====================
+
+// Store for public document requests (Already declared at top)
+
+// Allowed file types for document uploads
+const ALLOWED_DOC_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
+const ALLOWED_DOC_MIMETYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+];
+
+// Helper to categorize files by document type
+const categorizeDocumentType = (filename, mimetype) => {
+    const ext = path.extname(filename).toLowerCase();
+    if (ext === '.pdf' || mimetype === 'application/pdf') return 'pdf';
+    if (['.doc', '.docx'].includes(ext) || mimetype?.includes('word')) return 'word';
+    if (['.xls', '.xlsx'].includes(ext) || mimetype?.includes('excel') || mimetype?.includes('spreadsheet')) return 'excel';
+    return 'other';
+};
+
+/**
+ * POST /api/v1/public/document-request
+ * Public endpoint for customers to submit document work requests
+ */
+app.post('/api/v1/public/document-request', upload.array('files', 10), async (req, res) => {
+    try {
+        const { serviceType, customerName, customerPhone, instructions, source } = req.body;
+        const files = req.files || [];
+
+        if (!serviceType || !customerName || !customerPhone) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        if (files.length === 0) {
+            return res.status(400).json({ error: 'Please upload at least one file' });
+        }
+
+        // Validate file types (server-side)
+        const invalidFiles = [];
+        for (const file of files) {
+            const ext = path.extname(file.originalname).toLowerCase();
+            const isAllowed = ALLOWED_DOC_EXTENSIONS.includes(ext) || ALLOWED_DOC_MIMETYPES.includes(file.mimetype);
+            if (!isAllowed) {
+                invalidFiles.push(file.originalname);
+            }
+        }
+
+        if (invalidFiles.length > 0) {
+            return res.status(400).json({
+                error: `Invalid file type(s): ${invalidFiles.join(', ')}. Only PDF, Word (.doc, .docx), and Excel (.xls, .xlsx) files are allowed.`
+            });
+        }
+
+        // Generate order ID
+        const orderId = 'HN-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 5).toUpperCase();
+
+        // Categorize files by type and add metadata
+        const categorizedFiles = files.map(f => {
+            const docType = categorizeDocumentType(f.originalname, f.mimetype);
+            return {
+                originalName: f.originalname,
+                filename: f.filename,
+                size: f.size,
+                sizeFormatted: formatBytes(f.size),
+                mimetype: f.mimetype,
+                path: f.path,
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                docType: docType, // pdf, word, excel
+                type: docType // Frontend compatibility
+            };
+        });
+
+        // Count by type for summary
+        const typeSummary = {
+            pdf: categorizedFiles.filter(f => f.docType === 'pdf').length,
+            word: categorizedFiles.filter(f => f.docType === 'word').length,
+            excel: categorizedFiles.filter(f => f.docType === 'excel').length
+        };
+
+        // Create request record
+        const requestData = {
+            orderId,
+            serviceType,
+            customerName,
+            customerPhone: customerPhone.replace(/\s/g, ''),
+            instructions: instructions || '',
+            source: source || 'landing_page',
+            files: categorizedFiles,
+            typeSummary,
+            totalFiles: files.length,
+            totalSize: files.reduce((sum, f) => sum + f.size, 0),
+            totalSizeFormatted: formatBytes(files.reduce((sum, f) => sum + f.size, 0)),
+            status: 'pending',
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const newRequest = await DocumentRequest.create(requestData);
+
+        // =============================================
+        // NOTIFICATIONS
+        // =============================================
+
+        // 1. Emit to admin dashboard (new document request notification)
+        io.emit('new-document-request', {
+            ...newRequest.toObject(),
+            notification: {
+                title: 'New Document Upload',
+                message: `${customerName} uploaded ${files.length} file(s) for ${serviceType}`,
+                type: 'document',
+                timestamp: new Date().toISOString()
+            }
+        });
+
+        // 2. Emit to user portal (all users get notified about new work available)
+        io.emit('new-document-for-users', {
+            ...newRequest.toObject(),
+            notification: {
+                title: 'New Document Request',
+                message: `New ${serviceType} job: ${files.length} file(s) awaiting processing`,
+                type: 'work_available'
+            }
+        });
+
+        // 3. Notify Desktop Agents (immediate pop-up + auto-download)
+        io.emit('agent-public-document-notification', {
+            orderId: newRequest.orderId,
+            customerName,
+            customerPhone: newRequest.customerPhone,
+            serviceType,
+            instructions: instructions || '',
+            files: categorizedFiles.map(f => ({
+                filename: f.filename,
+                originalName: f.originalName,
+                downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`,
+                size: f.size,
+                docType: f.docType
+            })),
+            timestamp: newRequest.createdAt
+        });
+
+        console.log(`[PUBLIC] New document request saved to DB: ${orderId}`);
+
+        res.json({
+            success: true,
+            orderId,
+            message: 'Your request has been submitted. We will contact you shortly.'
+        });
+    } catch (error) {
+        console.error('Document request error:', error);
+        res.status(500).json({ error: 'Failed to submit request' });
+    }
+});
+
+/**
+ * GET /api/v1/public/document-requests
+ * Fetch all public document requests for user portal
+ */
+app.get('/api/v1/public/document-requests', async (req, res) => {
+    try {
+        const { limit = 50 } = req.query;
+        const requests = await DocumentRequest.find().sort({ createdAt: -1 }).limit(parseInt(limit));
+
+        // Add downloadURL to files for frontend
+        const mappedRequests = requests.map(req => {
+            const reqObj = req.toObject();
+            if (reqObj.files) {
+                reqObj.files = reqObj.files.map(f => ({
+                    ...f,
+                    type: f.docType || 'other', // Frontend compatibility
+                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (error) {
+        console.error('Fetch requests error:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
+ * GET /api/v1/public/track/:orderId
+ * Track status of a document request
+ */
+app.get('/api/v1/public/track/:orderId', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const request = await DocumentRequest.findOne({ orderId });
+
+        if (!request) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
+        res.json({
+            orderId: request.orderId,
+            status: request.status,
+            serviceType: request.serviceType,
+            filesCount: request.files ? request.files.length : 0,
+            resultFiles: (request.resultFiles || []).map(f => ({
+                filename: f.filename,
+                originalName: f.originalName,
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                type: f.mimeType
+            })),
+            createdAt: request.createdAt,
+            updatedAt: request.updatedAt
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests
+ * Admin endpoint to view all document requests
+ */
+app.get('/api/v1/admin/document-requests', async (req, res) => {
+    try {
+        const { status, limit = 50 } = req.query;
+        let query = {};
+        if (status) {
+            query.status = status;
+        }
+
+        const requests = await DocumentRequest.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        // Add downloadURL
+        const mappedRequests = requests.map(req => {
+            const reqObj = req.toObject();
+            if (reqObj.files) {
+                reqObj.files = reqObj.files.map(f => ({
+                    ...f,
+                    type: f.docType || 'other',
+                    downloadUrl: `${req.protocol}://${req.get('host')}/uploads/${f.filename}`
+                }));
+            }
+            return reqObj;
+        });
+
+        res.json(mappedRequests);
+    } catch (error) {
+        console.error('Admin Fetch requests error:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/status
+ * Update status of a document request
+ */
+app.put('/api/v1/admin/document-requests/:orderId/status', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status, notes } = req.body;
+
+        const validStatuses = ['pending', 'processing', 'ready', 'completed', 'cancelled'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+
+        const request = await DocumentRequest.findOne({ orderId });
+        if (!request) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        request.status = status;
+        if (notes !== undefined) request.notes = notes;
+        request.updatedAt = new Date();
+        await request.save();
+
+        // Emit update
+        io.emit('document-request-updated', { orderId, status, updatedAt: request.updatedAt });
+
+        console.log(`[PUBLIC] Order ${orderId} status updated to: ${status}`);
+
+        res.json({ success: true, request });
+    } catch (error) {
+        console.error('Update status error:', error);
+        res.status(500).json({ error: 'Failed to update status' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests/stats
+ * Document request statistics grouped by file type
+ */
+app.get('/api/v1/admin/document-requests/stats', async (req, res) => {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(now);
+        weekStart.setDate(weekStart.getDate() - 7);
+
+        // Fetch all requests from DB
+        const allRequests = await DocumentRequest.find();
+
+        const todayRequests = allRequests.filter(r => new Date(r.createdAt) >= todayStart);
+        const weekRequests = allRequests.filter(r => new Date(r.createdAt) >= weekStart);
+
+        // Calculate totals by document type
+        const calculateTypeTotals = (requests) => {
+            let pdf = 0, word = 0, excel = 0, totalFiles = 0, totalSize = 0;
+
+            for (const request of requests) {
+                const files = request.files || [];
+
+                // Count from files array since typeSummary might not be persisted in all records
+                // Use safe checking for docType
+                pdf += files.filter(f => (f.docType || '').toLowerCase().includes('pdf')).length;
+                word += files.filter(f => (f.docType || '').toLowerCase().includes('word') || (f.docType || '').toLowerCase().includes('document')).length;
+                excel += files.filter(f => (f.docType || '').toLowerCase().includes('excel') || (f.docType || '').toLowerCase().includes('sheet')).length;
+
+                totalFiles += files.length;
+
+                // Use stored totalSize or recalculate
+                let currentTotalSize = request.totalSize || 0;
+                if (currentTotalSize === 0 && files.length > 0) {
+                    currentTotalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+                }
+                totalSize += currentTotalSize;
+            }
+
+            return { pdf, word, excel, totalFiles, totalSize, totalSizeFormatted: formatBytes(totalSize) };
+        };
+
+        // Status breakdown
+        const statusBreakdown = {
+            pending: allRequests.filter(r => r.status === 'pending').length,
+            processing: allRequests.filter(r => r.status === 'processing').length,
+            ready: allRequests.filter(r => r.status === 'ready').length,
+            completed: allRequests.filter(r => r.status === 'completed').length,
+            cancelled: allRequests.filter(r => r.status === 'cancelled').length
+        };
+
+        // Service type breakdown
+        const serviceBreakdown = {};
+        for (const request of allRequests) {
+            const svc = request.serviceType || 'other';
+            serviceBreakdown[svc] = (serviceBreakdown[svc] || 0) + 1;
+        }
+
+        res.json({
+            totalRequests: allRequests.length,
+            today: {
+                requests: todayRequests.length,
+                ...calculateTypeTotals(todayRequests)
+            },
+            week: {
+                requests: weekRequests.length,
+                ...calculateTypeTotals(weekRequests)
+            },
+            all: {
+                requests: allRequests.length,
+                ...calculateTypeTotals(allRequests)
+            },
+            byStatus: statusBreakdown,
+            byService: serviceBreakdown,
+            // Quick summary for dashboard cards
+            summary: {
+                totalPdf: calculateTypeTotals(allRequests).pdf,
+                totalWord: calculateTypeTotals(allRequests).word,
+                totalExcel: calculateTypeTotals(allRequests).excel,
+                pendingJobs: statusBreakdown.pending,
+                processingJobs: statusBreakdown.processing,
+                completedToday: todayRequests.filter(r => r.status === 'completed').length
+            }
+        });
+    } catch (error) {
+        console.error('Document stats error:', error);
+        res.status(500).json({ error: 'Failed to fetch document stats' });
+    }
+});
+
+// NOTE: User management routes are defined earlier with requireAdminAuth protection (lines 805-971)
+// Do NOT add unprotected user routes here
+
+// ==================== DOCUMENT SHARING ====================
+
+// Helper: Format bytes
+const formatFileSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
+/**
+ * GET /api/v1/documents
+ * List all shared documents
+ */
+app.get('/api/v1/documents', async (req, res) => {
+    try {
+        const { clientId, limit = 100 } = req.query;
+
+        const query = {};
+        if (clientId) {
+            query.$or = [
+                { 'from.clientId': clientId },
+                { 'to.clientId': clientId }
+            ];
+        }
+
+        const docs = await SharedDocument.find(query)
+            .sort({ uploadedAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(docs);
+    } catch (error) {
+        console.error('Get documents error:', error);
+        res.status(500).json({ error: 'Failed to fetch documents' });
+    }
+});
+
+/**
+ * GET /api/v1/documents/stats
+ * Get document sharing statistics
+ */
+app.get('/api/v1/documents/stats', async (req, res) => {
+    try {
+        const totalDocs = await SharedDocument.countDocuments();
+        const pendingDocs = await SharedDocument.countDocuments({ status: 'pending' });
+        const downloadedDocs = await SharedDocument.countDocuments({ status: 'downloaded' });
+
+        // Get total size
+        const docs = await SharedDocument.find({}, { size: 1 });
+        const totalSize = docs.reduce((sum, d) => sum + (d.size || 0), 0);
+
+        res.json({
+            total: totalDocs,
+            pending: pendingDocs,
+            downloaded: downloadedDocs,
+            totalSize: formatFileSize(totalSize),
+            totalSizeBytes: totalSize
+        });
+    } catch (error) {
+        console.error('Get document stats error:', error);
+        res.status(500).json({ error: 'Failed to fetch document stats' });
+    }
+});
+
+/**
+ * POST /api/v1/documents/upload
+ * Upload a document to the server
+ */
+app.post('/api/v1/documents/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const { message, fromUser, fromClientId } = req.body;
+
+        const doc = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: formatFileSize(req.file.size),
+            mimetype: req.file.mimetype,
+            from: {
+                user: fromUser || 'Admin',
+                clientId: fromClientId || null
+            },
+            message: message || '',
+            status: 'uploaded'
+        });
+
+        console.log(`[DOCUMENT] Uploaded: ${doc.filename} (${doc.sizeFormatted})`);
+
+        res.json({ success: true, document: doc });
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: 'Failed to upload document' });
+    }
+});
+
+/**
+ * POST /api/v1/documents/send-to-computer
+ * Send a document directly to a computer
+ */
+app.post('/api/v1/documents/send-to-computer', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const { targetClientId, message } = req.body;
+
+        if (!targetClientId) {
+            return res.status(400).json({ error: 'Target computer (clientId) is required' });
+        }
+
+        // Create document record
+        const doc = await SharedDocument.create({
+            id: 'doc-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            filename: req.file.originalname,
+            storedName: req.file.filename,
+            path: req.file.path,
+            size: req.file.size,
+            sizeFormatted: formatFileSize(req.file.size),
+            mimetype: req.file.mimetype,
+            from: {
+                user: 'Admin',
+                clientId: null
+            },
+            to: {
+                clientId: targetClientId
+            },
+            message: message || 'File from Admin',
+            status: 'pending'
+        });
+
+        // Construct download URL
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+        const downloadUrl = `${baseUrl}/api/v1/documents/${doc.id}/download`;
+
+        // Send to agent via socket
+        io.emit('document-for-agent', {
+            targetClientId,
+            document: {
+                id: doc.id,
+                filename: doc.filename,
+                size: doc.sizeFormatted,
+                downloadUrl: downloadUrl,
+                message: doc.message
+            }
+        });
+
+        console.log(`[DOCUMENT] Sent to ${targetClientId}: ${doc.filename}`);
+
+        res.json({ success: true, document: doc, message: 'Document sent to computer' });
+    } catch (error) {
+        console.error('Send to computer error:', error);
+        res.status(500).json({ error: 'Failed to send document' });
+    }
+});
+
+/**
+ * GET /api/v1/documents/:id/download
+ * Download a document
+ */
+app.get('/api/v1/documents/:id/download', async (req, res) => {
+    try {
+        const doc = await SharedDocument.findOne({ id: req.params.id });
+
+        if (!doc) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        // Check if file exists
+        if (!fs.existsSync(doc.path)) {
+            return res.status(404).json({ error: 'File not found on server' });
+        }
+
+        // Mark as downloaded
+        doc.status = 'downloaded';
+        doc.downloadedAt = new Date();
+        await doc.save();
+
+        // Emit event
+        io.emit('document-downloaded', { id: doc.id, downloadedAt: doc.downloadedAt });
+
+        res.download(doc.path, doc.filename);
+    } catch (error) {
+        console.error('Download error:', error);
+        res.status(500).json({ error: 'Failed to download document' });
+    }
+});
+
+/**
+ * DELETE /api/v1/documents/:id
+ * Delete a document
+ */
+app.delete('/api/v1/documents/:id', async (req, res) => {
+    try {
+        const doc = await SharedDocument.findOne({ id: req.params.id });
+
+        if (!doc) {
+            return res.status(404).json({ error: 'Document not found' });
+        }
+
+        // Delete file from disk
+        if (fs.existsSync(doc.path)) {
+            fs.unlinkSync(doc.path);
+        }
+
+        // Delete from database
+        await SharedDocument.deleteOne({ id: req.params.id });
+
+        // Emit event
+        io.emit('document-deleted', { id: req.params.id });
+
+        console.log(`[DOCUMENT] Deleted: ${doc.filename}`);
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Delete error:', error);
+        res.status(500).json({ error: 'Failed to delete document' });
+    }
+});
+
+// ==================== TEMPLATES MANAGEMENT ====================
+
+// GET /api/v1/templates (Public)
+app.get('/api/v1/templates', async (req, res) => {
+    try {
+        const templates = await Template.find().sort({ createdAt: -1 });
+        res.json(templates);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/templates (Admin)
+app.post('/api/v1/admin/templates', async (req, res) => {
+    try {
+        const template = await Template.create(req.body);
+        res.json(template);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/templates/:id (Admin)
+app.delete('/api/v1/admin/templates/:id', async (req, res) => {
+    try {
+        await Template.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== LEARNING / COURSES MANAGEMENT ====================
+
+// GET /api/v1/courses (Public)
+app.get('/api/v1/courses', async (req, res) => {
+    try {
+        const courses = await Course.find().sort({ createdAt: -1 });
+        res.json(courses);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/courses (Admin)
+app.post('/api/v1/admin/courses', async (req, res) => {
+    try {
+        const course = await Course.create(req.body);
+        res.json(course);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/courses/:id (Admin)
+app.delete('/api/v1/admin/courses/:id', async (req, res) => {
+    try {
+        await Course.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== GUIDANCE / GUIDES MANAGEMENT ====================
+
+// GET /api/v1/guides (Public)
+app.get('/api/v1/guides', async (req, res) => {
+    try {
+        const guides = await Guide.find().sort({ createdAt: -1 });
+        res.json(guides);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/v1/admin/guides (Admin)
+app.post('/api/v1/admin/guides', async (req, res) => {
+    try {
+        const guide = await Guide.create(req.body);
+        res.json(guide);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// DELETE /api/v1/admin/guides/:id (Admin)
+app.delete('/api/v1/admin/guides/:id', async (req, res) => {
+    try {
+        await Guide.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==================== SOCKET.IO ====================
+
+// Track connected agents by clientId
+const connectedAgents = new Map(); // clientId -> socket.id
+
+io.on('connection', async (socket) => {
+    try {
+        console.log(`[SOCKET] Client connected: ${socket.id}`);
+
+        // Handle agent registration
+        socket.on('agent-register', (data) => {
+            const { clientId, hostname } = data;
+            connectedAgents.set(clientId, socket.id);
+            socket.clientId = clientId;
+            socket.isAgent = true;
+            console.log(`[SOCKET] Agent registered: ${clientId} (${hostname}) -> ${socket.id}`);
+
+            // Notify admin dashboard
+            io.emit('agent-connected', { clientId, hostname, socketId: socket.id });
+        });
+
+        // NOTE: agent-response is handled by the primary io.on('connection') handler above
+        // (which covers screenshot, error, and document-downloaded events comprehensively)
+
+        // If not an agent, treat as admin dashboard
+        if (!socket.isAgent) {
+            // Fetch all computers from DB for initial state
+            const [computerDocs, recentSessions] = await Promise.all([
+                Computer.find(),
+                Session.find().sort({ receivedAt: -1 }).limit(20)
+            ]).catch(() => [[], []]);
+
+            const now = new Date();
+            const initialComputers = computerDocs.map(c => ({
+                ...c.toObject(),
+                isOnline: (now - new Date(c.lastSeen)) < 45000
+            }));
+
+            // Send current state on connect
+            socket.emit('init-data', {
+                computers: initialComputers,
+                recentSessions: recentSessions,
+                pricing: pricing,
+                connectedAgents: Array.from(connectedAgents.keys())
+            });
+        }
+    } catch (error) {
+        console.error('[SOCKET ERROR] Initialization failed:', error);
+    }
+
+    socket.on('disconnect', () => {
+        if (socket.isAgent && socket.clientId) {
+            connectedAgents.delete(socket.clientId);
+            console.log(`[SOCKET] Agent disconnected: ${socket.clientId}`);
+            io.emit('agent-disconnected', { clientId: socket.clientId });
+        } else {
+            console.log(`[SOCKET] Admin disconnected: ${socket.id}`);
+        }
+    });
+});
+
+// ==================== CONTENT MANAGEMENT: TEMPLATES ====================
+
+/**
+ * GET /api/v1/templates
+ * Get all templates (public)
+ */
+app.get('/api/v1/templates', async (req, res) => {
+    try {
+        const templates = await Template.find().sort({ createdAt: -1 });
+        res.json(templates);
+    } catch (error) {
+        console.error('[TEMPLATES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get templates' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/templates
+ * Create a new template with file upload
+ */
+app.post('/api/v1/admin/templates', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, type, featured } = req.body;
+
+        if (!title || !category || !type) {
+            return res.status(400).json({ error: 'Title, category, and type are required' });
+        }
+
+        const templateData = {
+            title,
+            description,
+            category,
+            type,
+            featured: featured === 'true',
+            downloads: 0
+        };
+
+        // Handle file upload
+        if (req.file) {
+            templateData.fileUrl = `/uploads/${req.file.filename}`;
+            templateData.fileOriginalName = req.file.originalname;
+            templateData.fileSize = req.file.size;
+            templateData.fileMimeType = req.file.mimetype;
+        }
+
+        const template = await Template.create(templateData);
+        console.log(`[TEMPLATES] Created: ${title} ${req.file ? '(with file)' : ''}`);
+        res.json(template);
+    } catch (error) {
+        console.error('[TEMPLATES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create template' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/templates/:id
+ * Delete a template
+ */
+app.delete('/api/v1/admin/templates/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const template = await Template.findByIdAndDelete(req.params.id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+
+        // TODO: Delete file from disk if exists
+        console.log(`[TEMPLATES] Deleted: ${template.title}`);
+        res.json({ success: true, message: 'Template deleted' });
+    } catch (error) {
+        console.error('[TEMPLATES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete template' });
+    }
+});
+
+/**
+ * GET /api/v1/templates/:id/download
+ * Download a template file
+ */
+/**
+ * GET /api/v1/templates/:id/download
+ * Download a template file (secure)
+ */
+app.get('/api/v1/templates/:id/download', async (req, res) => {
+    try {
+        const template = await Template.findById(req.params.id);
+        if (!template || !template.fileUrl) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        // Increment download count
+        await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
+
+        const filePath = path.join(__dirname, template.fileUrl);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, template.fileOriginalName || 'download');
+        } else {
+            res.status(404).json({ error: 'File not found on server' });
+        }
+    } catch (error) {
+        console.error('[TEMPLATES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download' });
+    }
+});
+
+
+// ==================== CONTENT MANAGEMENT: COURSES (LEARNING) ====================
+
+/**
+ * GET /api/v1/courses
+ * Get all courses (public)
+ */
+app.get('/api/v1/courses', async (req, res) => {
+    try {
+        const courses = await Course.find().sort({ createdAt: -1 });
+        res.json(courses);
+    } catch (error) {
+        console.error('[COURSES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get courses' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/courses
+ * Create a new course with file upload
+ */
+app.post('/api/v1/admin/courses', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, level, duration, instructor } = req.body;
+
+        if (!title || !category) {
+            return res.status(400).json({ error: 'Title and category are required' });
+        }
+
+        const courseData = {
+            title,
+            description,
+            category,
+            level: level || 'beginner',
+            duration: duration || '1 hour',
+            instructor: instructor || 'HawkNine Team'
+        };
+
+        // Handle file upload
+        if (req.file) {
+            courseData.fileUrl = `/uploads/${req.file.filename}`;
+            courseData.fileOriginalName = req.file.originalname;
+            courseData.fileSize = req.file.size;
+            courseData.fileMimeType = req.file.mimetype;
+        }
+
+        const course = await Course.create(courseData);
+        console.log(`[COURSES] Created: ${title} ${req.file ? '(with file)' : ''}`);
+        res.json(course);
+    } catch (error) {
+        console.error('[COURSES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create course' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/courses/:id
+ * Delete a course
+ */
+app.delete('/api/v1/admin/courses/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const course = await Course.findByIdAndDelete(req.params.id);
+        if (!course) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+        console.log(`[COURSES] Deleted: ${course.title}`);
+        res.json({ success: true, message: 'Course deleted' });
+    } catch (error) {
+        console.error('[COURSES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete course' });
+    }
+});
+
+/**
+ * GET /api/v1/courses/:id/download
+ * Download a course file
+ */
+/**
+ * GET /api/v1/courses/:id/download
+ * Download a course file (secure)
+ */
+app.get('/api/v1/courses/:id/download', async (req, res) => {
+    try {
+        const course = await Course.findById(req.params.id);
+        if (!course || !course.fileUrl) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const filePath = path.join(__dirname, course.fileUrl);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, course.fileOriginalName || 'download');
+        } else {
+            res.status(404).json({ error: 'File not found on server' });
+        }
+    } catch (error) {
+        console.error('[COURSES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download' });
+    }
+});
+
+
+// ==================== CONTENT MANAGEMENT: GUIDES (GUIDANCE) ====================
+
+/**
+ * GET /api/v1/guides
+ * Get all guides (public)
+ */
+app.get('/api/v1/guides', async (req, res) => {
+    try {
+        const guides = await Guide.find().sort({ createdAt: -1 });
+        res.json(guides);
+    } catch (error) {
+        console.error('[GUIDES] Get failed:', error);
+        res.status(500).json({ error: 'Failed to get guides' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/guides
+ * Create a new guide with file upload
+ */
+app.post('/api/v1/admin/guides', requireAdminAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, difficulty, readTime } = req.body;
+
+        if (!title || !category) {
+            return res.status(400).json({ error: 'Title and category are required' });
+        }
+
+        const guideData = {
+            title,
+            description,
+            category,
+            difficulty: difficulty || 'beginner',
+            readTime: readTime || '5 min'
+        };
+
+        // Handle file upload
+        if (req.file) {
+            guideData.fileUrl = `/uploads/${req.file.filename}`;
+            guideData.fileOriginalName = req.file.originalname;
+            guideData.fileSize = req.file.size;
+            guideData.fileMimeType = req.file.mimetype;
+        }
+
+        const guide = await Guide.create(guideData);
+        console.log(`[GUIDES] Created: ${title} ${req.file ? '(with file)' : ''}`);
+        res.json(guide);
+    } catch (error) {
+        console.error('[GUIDES] Create failed:', error);
+        res.status(500).json({ error: 'Failed to create guide' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/guides/:id
+ * Delete a guide
+ */
+app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const guide = await Guide.findByIdAndDelete(req.params.id);
+        if (!guide) {
+            return res.status(404).json({ error: 'Guide not found' });
+        }
+        console.log(`[GUIDES] Deleted: ${guide.title}`);
+        res.json({ success: true, message: 'Guide deleted' });
+    } catch (error) {
+        console.error('[GUIDES] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete guide' });
+    }
+});
+
+/**
+ * GET /api/v1/guides/:id/download
+ * Download a guide file
+ */
+app.get('/api/v1/guides/:id/download', async (req, res) => {
+    try {
+        const guide = await Guide.findById(req.params.id);
+        if (!guide || !guide.fileUrl) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const filePath = path.join(__dirname, guide.fileUrl);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, guide.fileOriginalName || 'download');
+        } else {
+            res.status(404).json({ error: 'File not found on server' });
+        }
+    } catch (error) {
+        console.error('[GUIDES] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download' });
+    }
+});
+
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+/**
+ * GET /api/v1/inventory
+ * Get all inventory items - filtered by user access control
+ * If a portal/agent user is authenticated, items are filtered based on:
+ *   - hiddenFromUsers: items hidden from specific users
+ *   - visibilityMode: 'all' (default) or 'whitelist' (only allowedUsers can see)
+ *   - stockLimitForUsers: per-user stock cap (they see min(actual stock, maxVisible))
+ * Admin users see everything unfiltered.
+ */
+app.get('/api/v1/inventory', async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true }).sort({ name: 1 });
+
+        // Try to identify the requesting user from their auth token
+        let requestingUser = null;
+        let isAdminRequest = false;
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                // Check admin session
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    isAdminRequest = true;
+                    requestingUser = session.username;
+                } else {
+                    // Check portal user session
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        requestingUser = session.username;
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical: proceed without user context
+        }
+
+        // Fallback: desktop agent passes username via query param or header
+        // (agent doesn't have a Bearer token, it passes the logged-in user's name)
+        if (!requestingUser && !isAdminRequest) {
+            requestingUser = req.query.username || req.headers['x-agent-user'] || null;
+        }
+
+        // Admin requests get unfiltered results
+        if (isAdminRequest) {
+            return res.json(items);
+        }
+
+        // Filter items for non-admin users
+        const filteredItems = items
+            .filter(item => {
+                // Check if hidden from this user
+                if (requestingUser && item.hiddenFromUsers && item.hiddenFromUsers.includes(requestingUser)) {
+                    return false;
+                }
+                // Check whitelist mode
+                if (item.visibilityMode === 'whitelist') {
+                    if (!requestingUser || !item.allowedUsers || !item.allowedUsers.includes(requestingUser)) {
+                        return false;
+                    }
+                }
+                return true;
+            })
+            .map(item => {
+                const itemObj = item.toObject();
+                // Apply per-user stock limit
+                if (requestingUser && item.stockLimitForUsers && item.stockLimitForUsers.length > 0) {
+                    const userLimit = item.stockLimitForUsers.find(sl => sl.username === requestingUser);
+                    if (userLimit) {
+                        itemObj.stock = Math.min(item.stock, userLimit.maxVisible);
+                    }
+                }
+                // Remove access control fields from response to non-admin users
+                delete itemObj.hiddenFromUsers;
+                delete itemObj.stockLimitForUsers;
+                delete itemObj.allowedUsers;
+                delete itemObj.visibilityMode;
+                return itemObj;
+            });
+
+        res.json(filteredItems);
+    } catch (error) {
+        console.error('[INVENTORY] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch inventory' });
+    }
+});
+
+/**
+ * GET /api/v1/inventory/settings
+ * Get inventory settings
+ */
+app.get('/api/v1/inventory/settings', async (req, res) => {
+    try {
+        let settings = await Settings.findOne({ key: 'inventory' });
+        if (!settings) {
+            settings = { showTotalItemsToUser: true, lowStockEmailEnabled: true };
+        }
+        res.json(settings.value || settings);
+    } catch (error) {
+        console.error('[INVENTORY] Settings fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/inventory/settings
+ * Update inventory settings
+ */
+app.put('/api/v1/admin/inventory/settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = await Settings.findOneAndUpdate(
+            { key: 'inventory' },
+            {
+                key: 'inventory',
+                value: req.body,
+                updatedAt: new Date()
+            },
+            { upsert: true, new: true }
+        );
+        res.json(settings.value);
+    } catch (error) {
+        console.error('[INVENTORY] Settings update failed:', error);
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/inventory
+ * Add a new inventory item
+ */
+app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, stock, lowStockThreshold, category } = req.body;
+
+        if (!name || price === undefined || stock === undefined) {
+            return res.status(400).json({ error: 'Name, price, and stock are required' });
+        }
+
+        const item = await InventoryItem.create({
+            name,
+            description: description || '',
+            price: parseFloat(price) || 0,
+            stock: parseInt(stock) || 0,
+            lowStockThreshold: parseInt(lowStockThreshold) || 5,
+            category: category || 'General',
+            isActive: true
+        });
+
+        console.log(`[INVENTORY] Added: ${name} (Stock: ${stock}, Price: KSH ${price})`);
+        res.status(201).json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Add failed:', error);
+        res.status(500).json({ error: 'Failed to add item' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/inventory/:id
+ * Update an inventory item
+ */
+app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, stock, lowStockThreshold, category, isActive } = req.body;
+
+        const item = await InventoryItem.findByIdAndUpdate(
+            req.params.id,
+            {
+                name,
+                description,
+                price: parseFloat(price) || 0,
+                stock: parseInt(stock) || 0,
+                lowStockThreshold: parseInt(lowStockThreshold) || 5,
+                category: category || 'General',
+                isActive: isActive !== false,
+                updatedAt: new Date()
+            },
+            { new: true }
+        );
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        console.log(`[INVENTORY] Updated: ${item.name}`);
+        res.json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Update failed:', error);
+        res.status(500).json({ error: 'Failed to update item' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/all
+ * Clear all inventory items
+ * IMPORTANT: This route MUST be before /:id to avoid Express matching "all" as an id
+ */
+app.delete('/api/v1/admin/inventory/all', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await InventoryItem.deleteMany({});
+        console.log(`[INVENTORY] Admin cleared all inventory: ${result.deletedCount} items deleted`);
+        res.json({
+            success: true,
+            message: `All inventory cleared`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Clear all failed:', error);
+        res.status(500).json({ error: 'Failed to clear inventory' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/sales-history
+ * Clear all inventory sale transaction records
+ * IMPORTANT: This route MUST be before /:id to avoid Express matching "sales-history" as an id
+ */
+app.delete('/api/v1/admin/inventory/sales-history', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await Transaction.deleteMany({ type: 'inventory-sale' });
+        console.log(`[INVENTORY] Admin cleared sales history: ${result.deletedCount} records deleted`);
+        res.json({
+            success: true,
+            message: `Sales history cleared`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Clear sales history failed:', error);
+        res.status(500).json({ error: 'Failed to clear sales history' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/printers/connected
+ * Remove all connected printer records (logs of type 'printers')
+ */
+app.delete('/api/v1/admin/printers/connected', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await Log.deleteMany({ type: 'printers' });
+        console.log(`[PRINTERS] Admin removed connected printers: ${result.deletedCount} records deleted`);
+        res.json({
+            success: true,
+            message: `Connected printer records removed`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[PRINTERS] Remove connected failed:', error);
+        res.status(500).json({ error: 'Failed to remove connected printers' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/inventory/:id
+ * Delete a single inventory item
+ * IMPORTANT: This parameterized route MUST come AFTER all specific inventory DELETE routes
+ */
+app.delete('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const item = await InventoryItem.findByIdAndDelete(req.params.id);
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+        console.log(`[INVENTORY] Deleted: ${item.name}`);
+        res.json({ success: true, message: 'Item deleted' });
+    } catch (error) {
+        console.error('[INVENTORY] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete item' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/inventory/:id/access-control
+ * Update access control settings for an inventory item
+ */
+app.put('/api/v1/admin/inventory/:id/access-control', requireAdminAuth, async (req, res) => {
+    try {
+        const { hiddenFromUsers, stockLimitForUsers, visibilityMode, allowedUsers } = req.body;
+
+        const updateData = { updatedAt: new Date() };
+        if (hiddenFromUsers !== undefined) updateData.hiddenFromUsers = hiddenFromUsers;
+        if (stockLimitForUsers !== undefined) updateData.stockLimitForUsers = stockLimitForUsers;
+        if (visibilityMode !== undefined) updateData.visibilityMode = visibilityMode;
+        if (allowedUsers !== undefined) updateData.allowedUsers = allowedUsers;
+
+        const item = await InventoryItem.findByIdAndUpdate(
+            req.params.id,
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        console.log(`[INVENTORY] Access control updated for: ${item.name}`);
+        io.emit('inventory-update', { itemId: item._id, stock: item.stock, name: item.name });
+        res.json(item);
+    } catch (error) {
+        console.error('[INVENTORY] Access control update failed:', error);
+        res.status(500).json({ error: 'Failed to update access control' });
+    }
+});
+
+/**
+ * POST /api/v1/inventory/:id/sell
+ * Record a sale - decrements stock and creates a transaction record
+ * Tries to identify the seller from auth token (admin or portal user)
+ */
+app.post('/api/v1/inventory/:id/sell', async (req, res) => {
+    try {
+        const { quantity = 1, reason, clientId, paymentMethod, sessionUser } = req.body;
+        const item = await InventoryItem.findById(req.params.id);
+
+        if (!item) {
+            return res.status(404).json({ error: 'Item not found' });
+        }
+
+        if (item.stock < quantity) {
+            return res.status(400).json({ error: 'Insufficient stock' });
+        }
+
+        // Try to identify the seller from auth token, fallback to explicit sessionUser, then clientId
+        let sellerName = sessionUser || clientId || 'admin';
+        let sellerType = 'unknown';
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                // Check admin session first
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    sellerName = session.name || session.username;
+                    sellerType = 'admin';
+                } else {
+                    // Check portal user session
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        sellerName = session.name || session.username;
+                        sellerType = 'portal-user';
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical: proceed with clientId as seller
+            console.log('[INVENTORY] Could not identify seller from token:', authErr.message);
+        }
+
+        // Decrement stock
+        const previousStock = item.stock;
+        item.stock -= quantity;
+        item.updatedAt = new Date();
+        await item.save();
+
+        // Create a transaction record for the sale
+        const transaction = await Transaction.create({
+            id: `txn-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            type: 'inventory-sale',
+            amount: item.price * quantity,
+            description: `Sold ${quantity}x ${item.name} @ KSH ${item.price.toLocaleString()} each = KSH ${(item.price * quantity).toLocaleString()}`,
+            itemId: item._id,
+            itemName: item.name,
+            quantity: quantity,
+            seller: sellerName,
+            reason: reason || 'Direct Sale',
+            paymentMethod: paymentMethod || 'cash',
+            clientId: clientId || null,
+            userId: sellerName,
+            createdAt: new Date(),
+            status: 'completed'
+        });
+
+        console.log(`[INVENTORY] Sale: ${quantity}x ${item.name} by ${sellerName} (${sellerType}) (Stock: ${previousStock} → ${item.stock})`);
+
+        // Emit real-time updates for admin dashboard
+        io.emit('inventory-update', { itemId: item._id, stock: item.stock, name: item.name });
+        io.emit('transaction-created', transaction);
+
+        // Check for low stock alert
+        if (item.stock <= item.lowStockThreshold && previousStock > item.lowStockThreshold) {
+            console.log(`[INVENTORY] ⚠️ LOW STOCK ALERT: ${item.name} (${item.stock} remaining)`);
+
+            // Send email alert to admin
+            try {
+                const settings = await Settings.findOne({ key: 'inventory' });
+                const emailEnabled = settings?.value?.lowStockEmailEnabled !== false;
+
+                if (emailEnabled && process.env.ADMIN_EMAIL) {
+                    await transporter.sendMail({
+                        from: `"HawkNine Inventory Alert" <${process.env.EMAIL_USER}>`,
+                        to: process.env.ADMIN_EMAIL,
+                        subject: `⚠️ Low Stock Alert: ${item.name}`,
+                        html: `
+                            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8f9fa; border-radius: 10px;">
+                                <h2 style="color: #dc3545; margin-bottom: 20px;">⚠️ Low Stock Alert</h2>
+                                <div style="background-color: #fff; padding: 20px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                                    <p style="font-size: 16px; margin-bottom: 10px;">
+                                        <strong>${item.name}</strong> is running low on stock!
+                                    </p>
+                                    <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Current Stock:</td>
+                                            <td style="padding: 8px 0; font-weight: bold; color: #dc3545;">${item.stock} units</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Alert Threshold:</td>
+                                            <td style="padding: 8px 0;">${item.lowStockThreshold} units</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Category:</td>
+                                            <td style="padding: 8px 0;">${item.category}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; color: #666;">Unit Price:</td>
+                                            <td style="padding: 8px 0;">KSH ${item.price}</td>
+                                        </tr>
+                                    </table>
+                                    <p style="margin-top: 20px; font-size: 14px; color: #666;">
+                                        Please restock this item soon to avoid running out.
+                                    </p>
+                                </div>
+                                <p style="text-align: center; color: #888; font-size: 12px; margin-top: 20px;">
+                                    HawkNine Inventory Management System
+                                </p>
+                            </div>
+                        `
+                    });
+                    console.log(`[INVENTORY] Low stock email sent for: ${item.name}`);
+                }
+            } catch (emailError) {
+                console.error('[INVENTORY] Failed to send low stock email:', emailError);
+            }
+
+            // Notify via socket
+            io.emit('low-stock-alert', {
+                itemId: item._id,
+                itemName: item.name,
+                currentStock: item.stock,
+                threshold: item.lowStockThreshold,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Sold ${quantity}x ${item.name}`,
+            item: {
+                id: item._id,
+                name: item.name,
+                previousStock,
+                currentStock: item.stock,
+                unitPrice: item.price,
+                totalAmount: item.price * quantity,
+                lowStockAlert: item.stock <= item.lowStockThreshold
+            },
+            transaction: {
+                id: transaction.id,
+                seller: sellerName,
+                quantity: quantity,
+                unitPrice: item.price,
+                totalAmount: item.price * quantity,
+                description: transaction.description,
+                createdAt: transaction.createdAt
+            }
+        });
+
+    } catch (error) {
+        console.error('[INVENTORY] Sale failed:', error);
+        res.status(500).json({ error: 'Failed to process sale' });
+    }
+});
+
+/**
+ * POST /api/v1/inventory/sale/:transactionId/correct
+ * Correct/reverse a sale within the 5-minute correction window.
+ * Restores stock, marks original transaction as 'corrected', and creates a reversal transaction.
+ */
+app.post('/api/v1/inventory/sale/:transactionId/correct', async (req, res) => {
+    try {
+        const { correctionReason, correctedBy } = req.body;
+        const transactionId = req.params.transactionId;
+
+        // Find the original sale transaction
+        const originalTxn = await Transaction.findOne({
+            $or: [{ id: transactionId }, { _id: transactionId }],
+            type: 'inventory-sale'
+        });
+
+        if (!originalTxn) {
+            return res.status(404).json({ error: 'Sale transaction not found' });
+        }
+
+        // Check if already corrected
+        if (originalTxn.status === 'corrected') {
+            return res.status(400).json({ error: 'This sale has already been corrected' });
+        }
+
+        // Check 5-minute window
+        const saleTime = new Date(originalTxn.createdAt).getTime();
+        const now = Date.now();
+        const FIVE_MINUTES_MS = 5 * 60 * 1000;
+        const timeElapsed = now - saleTime;
+
+        if (timeElapsed > FIVE_MINUTES_MS) {
+            const minutesAgo = Math.round(timeElapsed / 60000);
+            return res.status(400).json({
+                error: `Correction window expired. This sale was ${minutesAgo} minute(s) ago. Corrections must be made within 5 minutes.`,
+                expiredAt: new Date(saleTime + FIVE_MINUTES_MS).toISOString(),
+                saleTime: originalTxn.createdAt
+            });
+        }
+
+        // Restore stock to the inventory item
+        const item = await InventoryItem.findById(originalTxn.itemId);
+        if (item) {
+            item.stock += originalTxn.quantity;
+            item.updatedAt = new Date();
+            await item.save();
+            console.log(`[INVENTORY] Stock restored: ${item.name} +${originalTxn.quantity} (now ${item.stock})`);
+        }
+
+        // Determine who is correcting
+        let correctorName = correctedBy || originalTxn.seller || 'unknown';
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                let session = await AuthSession.findOne({ token, type: 'admin' });
+                if (session && Date.now() <= session.expiresAt) {
+                    correctorName = session.name || session.username;
+                } else {
+                    session = await AuthSession.findOne({ token, type: 'portal' });
+                    if (session && Date.now() <= session.expiresAt) {
+                        correctorName = session.name || session.username;
+                    }
+                }
+            }
+        } catch (authErr) {
+            // Non-critical
+        }
+
+        // Mark original transaction as corrected
+        originalTxn.status = 'corrected';
+        originalTxn.correctedAt = new Date();
+        originalTxn.correctionReason = correctionReason || 'Mistake correction';
+        originalTxn.correctedBy = correctorName;
+        await originalTxn.save();
+
+        // Create a reversal transaction for audit trail
+        const reversalTxn = await Transaction.create({
+            id: `txn-rev-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            type: 'inventory-sale-reversal',
+            amount: -(originalTxn.amount),
+            description: `CORRECTION: Reversed ${originalTxn.quantity}x ${originalTxn.itemName} — ${correctionReason || 'Mistake correction'}`,
+            itemId: originalTxn.itemId,
+            itemName: originalTxn.itemName,
+            quantity: -(originalTxn.quantity),
+            seller: correctorName,
+            reason: `Correction: ${correctionReason || 'Mistake'}`,
+            paymentMethod: originalTxn.paymentMethod,
+            clientId: originalTxn.clientId,
+            userId: correctorName,
+            originalTransactionId: originalTxn.id || originalTxn._id.toString(),
+            status: 'completed',
+            createdAt: new Date()
+        });
+
+        console.log(`[INVENTORY] Sale corrected: ${originalTxn.quantity}x ${originalTxn.itemName} by ${correctorName} (reason: ${correctionReason || 'Mistake correction'})`);
+
+        // Emit real-time updates
+        io.emit('inventory-update', { itemId: originalTxn.itemId, stock: item ? item.stock : null, name: originalTxn.itemName });
+        io.emit('transaction-created', reversalTxn);
+        io.emit('sale-corrected', {
+            originalTransactionId: originalTxn.id || originalTxn._id,
+            reversalTransactionId: reversalTxn.id,
+            itemName: originalTxn.itemName,
+            quantity: originalTxn.quantity,
+            correctedBy: correctorName,
+            reason: correctionReason
+        });
+
+        res.json({
+            success: true,
+            message: `Sale corrected: ${originalTxn.quantity}x ${originalTxn.itemName} — stock restored`,
+            correction: {
+                originalTransaction: originalTxn.id,
+                reversalTransaction: reversalTxn.id,
+                itemName: originalTxn.itemName,
+                quantityRestored: originalTxn.quantity,
+                amountReversed: originalTxn.amount,
+                newStock: item ? item.stock : null,
+                correctedBy: correctorName,
+                reason: correctionReason
+            }
+        });
+
+    } catch (error) {
+        console.error('[INVENTORY] Sale correction failed:', error);
+        res.status(500).json({ error: 'Failed to correct sale' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/sales-history
+ * Returns inventory sale transactions for the current agent/seller.
+ * Query params: seller (username), clientId, limit
+ */
+app.get('/api/v1/agent/sales-history', async (req, res) => {
+    try {
+        const { seller, clientId, limit = 100 } = req.query;
+
+        const query = { type: { $in: ['inventory-sale', 'inventory-sale-reversal'] } };
+        if (seller) {
+            query.seller = { $regex: seller, $options: 'i' };
+        }
+        if (clientId) {
+            query.clientId = clientId;
+        }
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        console.error('[INVENTORY] Agent sales history fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch sales history' });
+    }
+});
+
+
+/**
+ * GET /api/v1/admin/inventory/low-stock
+ * Get all items that are at or below low stock threshold
+ */
+app.get('/api/v1/admin/inventory/low-stock', requireAdminAuth, async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true });
+        const lowStockItems = items.filter(item => item.stock <= item.lowStockThreshold);
+        res.json(lowStockItems);
+    } catch (error) {
+        console.error('[INVENTORY] Low stock fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch low stock items' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/inventory/stats
+ * Get inventory statistics
+ */
+app.get('/api/v1/admin/inventory/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const items = await InventoryItem.find({ isActive: true });
+
+        const totalItems = items.length;
+        const totalStock = items.reduce((acc, item) => acc + item.stock, 0);
+        const totalValue = items.reduce((acc, item) => acc + (item.price * item.stock), 0);
+        const lowStockCount = items.filter(item => item.stock <= item.lowStockThreshold).length;
+        const outOfStockCount = items.filter(item => item.stock === 0).length;
+
+        // Get recent sales
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todaySales = await Transaction.aggregate([
+            { $match: { type: 'inventory-sale', timestamp: { $gte: today } } },
+            { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: '$quantity' } } }
+        ]);
+
+        res.json({
+            totalItems,
+            totalStock,
+            totalValue,
+            lowStockCount,
+            outOfStockCount,
+            todaySales: todaySales[0] || { total: 0, count: 0 }
+        });
+    } catch (error) {
+        console.error('[INVENTORY] Stats failed:', error);
+        res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/transactions
+ * Returns list of all transactions (sales, sessions, etc.)
+ */
+app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
+    try {
+        const { limit = 500, type, startDate, endDate } = req.query;
+        const query = {};
+        // Allow querying by specific transaction types (e.g. 'inventory-sale')
+        if (type) query.type = type;
+
+        // Date range filtering
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate + 'T00:00:00');
+            if (endDate) query.createdAt.$lte = new Date(endDate + 'T23:59:59');
+        }
+
+        const transactions = await Transaction.find(query)
+            .sort({ createdAt: -1 }) // Newest first
+            .limit(parseInt(limit));
+
+        res.json(transactions);
+    } catch (error) {
+        console.error('[TRANSACTIONS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch transactions' });
+    }
+});
+
+
+
+// ==================== PUBLIC DOCUMENT REQUESTS (LANDING PAGE) ====================
+
+// Helper for doc type
+const getDocType = (mime, name) => {
+    if (!mime || !name) return 'other';
+    const lowerName = name.toLowerCase();
+    const lowerMime = mime.toLowerCase();
+
+    if (lowerMime.includes('pdf') || lowerName.endsWith('.pdf')) return 'pdf';
+    if (lowerMime.includes('word') || lowerName.endsWith('.doc') || lowerName.endsWith('.docx')) return 'word';
+    if (lowerMime.includes('excel') || lowerMime.includes('sheet') || lowerName.endsWith('.xls') || lowerName.endsWith('.xlsx')) return 'excel';
+    return 'other';
+};
+
+/**
+ * POST /api/v1/public/document-request
+ * Public endpoint for guests/users to upload documents from landing page
+ */
+app.post('/api/v1/public/document-request', upload.array('files'), async (req, res) => {
+    try {
+        const { serviceType, customerName, customerPhone, instructions, email, userId } = req.body;
+        const files = req.files || [];
+
+        if (!files.length) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        // Generate Order ID: HN-XXXXXX-ABC
+        const randomSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
+        const timestamp = Date.now().toString().slice(-6);
+        const orderId = `HN-${timestamp}-${randomSuffix}`;
+
+        const newRequest = await DocumentRequest.create({
+            orderId,
+            customerName,
+            customerPhone,
+            email,
+            userId,
+            serviceType,
+            instructions,
+            files: files.map(f => ({
+                originalName: f.originalname,
+                filename: f.filename,
+                path: f.path,
+                mimeType: f.mimetype,
+                size: f.size,
+                docType: getDocType(f.mimetype, f.originalname)
+            })),
+            totalFiles: files.length,
+            totalSize: files.reduce((acc, f) => acc + f.size, 0),
+            status: 'pending'
+        });
+
+        // Notify admins
+        io.emit('new-document-request', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            serviceType: newRequest.serviceType,
+            notification: {
+                message: `New request ${orderId} from ${customerName}`,
+                type: 'info'
+            }
+        });
+
+        // Prepare summary for frontend
+        const typeSummary = { pdf: 0, word: 0, excel: 0, other: 0 };
+        files.forEach(f => {
+            const type = getDocType(f.mimetype, f.originalname);
+            if (typeSummary[type] !== undefined) typeSummary[type]++;
+            else typeSummary.other++;
+        });
+
+        // Get base URL for download links (production or from request)
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
+        // Notify user portal (e.g., reception desk view)
+        io.emit('new-document-for-users', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            customerPhone: newRequest.customerPhone,
+            serviceType: newRequest.serviceType,
+            fileCount: files.length,
+            typeSummary,
+            instructions: newRequest.instructions || '',
+            files: files.map(f => ({
+                filename: f.filename,
+                originalName: f.originalname || f.name, // Usually originalname from multer
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                type: getDocType(f.mimetype, f.originalname)
+            })),
+            instructions: newRequest.instructions || '',
+            notification: {
+                title: 'New Document Request',
+                message: `${files.length} file(s) from ${customerName} for ${serviceType}`
+            },
+            createdAt: newRequest.createdAt
+        });
+
+        console.log(`[DOCUMENT REQUEST] New request: ${orderId} by ${customerName} (emitted to users: ${io.engine.clientsCount})`);
+
+        // Notify Desktop Agents (with full context: instructions, service, phone)
+        io.emit('agent-public-document-notification', {
+            orderId: newRequest.orderId,
+            customerName: newRequest.customerName,
+            customerPhone: newRequest.customerPhone,
+            serviceType: newRequest.serviceType,
+            instructions: newRequest.instructions || '',
+            files: newRequest.files.map(f => ({
+                filename: f.filename,
+                originalName: f.originalName,
+                downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                size: f.size
+            })),
+            timestamp: newRequest.createdAt
+        });
+
+        res.status(201).json({ success: true, orderId: newRequest.orderId });
+    } catch (error) {
+        console.error('[DOCUMENT REQUEST] Error:', error);
+        res.status(500).json({ error: 'Submission failed' });
+    }
+});
+
+/**
+ * GET /api/v1/public/document-requests
+ * Fetch recent public document requests for user portal (reception view)
+ */
+app.get('/api/v1/public/document-requests', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 20;
+        const requests = await DocumentRequest.find({})
+            .sort({ createdAt: -1 })
+            .limit(limit);
+
+        // Get base URL for download links (production or from request)
+        const getBaseUrl = () => {
+            if (process.env.BASE_URL) return process.env.BASE_URL;
+            if (process.env.NODE_ENV === 'production') return 'https://api.hawkninegroup.com';
+            return `${req.protocol}://${req.get('host')}`;
+        };
+        const baseUrl = getBaseUrl();
+
+        // Format to match socket event payload
+        const formatted = requests.map(doc => {
+            const files = doc.files || [];
+            const typeSummary = { pdf: 0, word: 0, excel: 0, other: 0 };
+
+            files.forEach(f => {
+                // Handle both mimeType (from model) and mimetype (from multer)
+                const mime = f.mimeType || f.mimetype || '';
+                const name = f.originalName || f.originalname || f.filename || '';
+                const type = getDocType(mime, name);
+                if (typeSummary[type] !== undefined) typeSummary[type]++;
+                else typeSummary.other++;
+            });
+
+            return {
+                orderId: doc.orderId,
+                customerName: doc.customerName,
+                customerPhone: doc.customerPhone,
+                serviceType: doc.serviceType || 'General',
+                fileCount: files.length,
+                typeSummary,
+                instructions: doc.instructions || '',
+                files: files.map(f => {
+                    // Handle both mimeType (from model) and mimetype (from multer)
+                    const mime = f.mimeType || f.mimetype || '';
+                    const name = f.originalName || f.originalname || f.filename || '';
+                    return {
+                        filename: f.filename,
+                        originalName: f.originalName || f.originalname || f.name,
+                        downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                        type: getDocType(mime, name)
+                    };
+                }),
+                resultFiles: (doc.resultFiles || []).map(f => {
+                    return {
+                        filename: f.filename,
+                        originalName: f.originalName,
+                        downloadUrl: `${baseUrl}/uploads/${f.filename}`,
+                        type: f.mimeType
+                    };
+                }),
+                status: doc.status,
+                notification: {
+                    title: 'Document Request',
+                    message: `${files.length} file(s) from ${doc.customerName} for ${doc.serviceType}`
+                },
+                createdAt: doc.createdAt
+            };
+        });
+
+        res.json(formatted);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests
+ * Fetch all document requests for admin dashboard
+ */
+app.get('/api/v1/admin/document-requests', requireAdminAuth, async (req, res) => {
+    try {
+        const { status, limit = 50 } = req.query;
+        const query = status && status !== 'all' ? { status } : {};
+
+        const requests = await DocumentRequest.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+
+        res.json(requests);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch requests' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/status
+ * Update status (pending -> processing -> ready -> completed)
+ */
+app.put('/api/v1/admin/document-requests/:orderId/status', requireAdminAuth, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            { status, updatedAt: new Date() },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, status });
+
+        // Notify user portal too
+        if (status === 'ready' || status === 'completed') {
+            io.emit('document-request-status-changed', { orderId: request.orderId, status, customerName: request.customerName });
+        }
+
+        res.json(request);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Update failed:', error);
+        res.status(500).json({ error: 'Update failed' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/work
+ * Attach completed result files and optionally set status to completed
+ */
+app.put('/api/v1/admin/document-requests/:orderId/work', requireAdminAuth, upload.array('files'), async (req, res) => {
+    try {
+        const files = req.files || [];
+        if (!files.length) {
+            return res.status(400).json({ error: 'No files provided for upload' });
+        }
+
+        const newResultFiles = files.map(f => ({
+            originalName: f.originalname,
+            filename: f.filename,
+            path: f.path,
+            mimeType: f.mimetype,
+            size: f.size
+        }));
+
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            {
+                $push: { resultFiles: { $each: newResultFiles } }
+            },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, hasResults: true });
+
+        // Notify client portal
+        io.emit('document-request-status-changed', { orderId: request.orderId, status: request.status, customerName: request.customerName });
+
+        res.json({ success: true, resultFiles: request.resultFiles });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Attach work failed:', error);
+        res.status(500).json({ error: 'Failed to attach work to request' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests/stats
+ * Get comprehensive stats for admin dashboard
+ */
+app.get('/api/v1/admin/document-requests/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const requests = await DocumentRequest.find({});
+
+        const stats = {
+            summary: { totalPdf: 0, totalWord: 0, totalExcel: 0, pendingJobs: 0 },
+            all: { pdf: 0, word: 0, excel: 0, totalFiles: 0, totalSize: 0 },
+            byStatus: {}
+        };
+
+        for (const req of requests) {
+            if (req.status === 'pending') stats.summary.pendingJobs++;
+            stats.byStatus[req.status] = (stats.byStatus[req.status] || 0) + 1;
+
+            for (const file of req.files || []) {
+                stats.all.totalFiles++;
+                stats.all.totalSize += file.size || 0;
+
+                if (file.docType === 'pdf') {
+                    stats.all.pdf++;
+                    stats.summary.totalPdf++;
+                } else if (file.docType === 'word') {
+                    stats.all.word++;
+                    stats.summary.totalWord++;
+                } else if (file.docType === 'excel') {
+                    stats.all.excel++;
+                    stats.summary.totalExcel++;
+                }
+            }
+        }
+        res.json(stats);
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Stats failed:', error);
+        res.status(500).json({ error: 'Stats failed' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/document-requests/:orderId/received
+ * Mark that a document request was received by a specific agent/computer
+ */
+app.put('/api/v1/admin/document-requests/:orderId/received', async (req, res) => {
+    try {
+        const { hostname, clientId } = req.body;
+        const request = await DocumentRequest.findOneAndUpdate(
+            { orderId: req.params.orderId },
+            {
+                receivedBy: {
+                    hostname: hostname || 'Unknown',
+                    clientId: clientId || 'Unknown',
+                    receivedAt: new Date()
+                },
+                updatedAt: new Date()
+            },
+            { new: true }
+        );
+
+        if (!request) return res.status(404).json({ error: 'Request not found' });
+
+        io.emit('document-request-updated', { orderId: request.orderId, receivedBy: request.receivedBy });
+        console.log(`[DOCUMENT REQUEST] ${req.params.orderId} received by agent ${hostname} (${clientId})`);
+
+        res.json({ success: true, request });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Mark received failed:', error);
+        res.status(500).json({ error: 'Failed to mark as received' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/document-requests/analytics
+ * Comprehensive analytics for landing page document submissions
+ */
+app.get('/api/v1/admin/document-requests/analytics', requireAdminAuth, async (req, res) => {
+    try {
+        const requests = await DocumentRequest.find({}).sort({ createdAt: -1 });
+
+        // Basic counters
+        let totalSubmissions = requests.length;
+        let totalFiles = 0;
+        let totalSize = 0;
+        let receivedCount = 0;
+        let pendingCount = 0;
+        let processingCount = 0;
+        let completedCount = 0;
+
+        // By service type
+        const byServiceType = {};
+        // By agent/computer
+        const byAgent = {};
+        // By date (last 30 days)
+        const byDate = {};
+        // Top customers
+        const byCustomer = {};
+        // File type breakdown
+        const byFileType = { pdf: 0, word: 0, excel: 0, other: 0 };
+
+        // Today's date for "today" stats
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        let todaySubmissions = 0;
+        let todayFiles = 0;
+
+        // This week
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        let weekSubmissions = 0;
+
+        // This month
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        let monthSubmissions = 0;
+
+        for (const req of requests) {
+            const reqDate = new Date(req.createdAt);
+            const dateKey = reqDate.toISOString().split('T')[0]; // YYYY-MM-DD
+
+            // Date grouping (last 30 days)
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            if (reqDate >= thirtyDaysAgo) {
+                byDate[dateKey] = (byDate[dateKey] || 0) + 1;
+            }
+
+            // Today / Week / Month
+            if (reqDate >= today) {
+                todaySubmissions++;
+                todayFiles += req.totalFiles || 0;
+            }
+            if (reqDate >= weekStart) weekSubmissions++;
+            if (reqDate >= monthStart) monthSubmissions++;
+
+            // Status counts
+            if (req.status === 'pending') pendingCount++;
+            else if (req.status === 'processing') processingCount++;
+            else if (req.status === 'completed') completedCount++;
+
+            // Received by agent
+            if (req.receivedBy && req.receivedBy.hostname) {
+                receivedCount++;
+                const agentKey = req.receivedBy.hostname;
+                if (!byAgent[agentKey]) {
+                    byAgent[agentKey] = { hostname: agentKey, clientId: req.receivedBy.clientId, count: 0, files: 0 };
+                }
+                byAgent[agentKey].count++;
+                byAgent[agentKey].files += req.totalFiles || 0;
+            }
+
+            // Service type
+            const svcType = req.serviceType || 'unknown';
+            byServiceType[svcType] = (byServiceType[svcType] || 0) + 1;
+
+            // Customer
+            const custName = req.customerName || 'Unknown';
+            if (!byCustomer[custName]) {
+                byCustomer[custName] = { name: custName, phone: req.customerPhone, count: 0, files: 0 };
+            }
+            byCustomer[custName].count++;
+            byCustomer[custName].files += req.totalFiles || 0;
+
+            // Files
+            totalFiles += req.totalFiles || 0;
+            totalSize += req.totalSize || 0;
+
+            for (const file of req.files || []) {
+                const docType = file.docType || 'other';
+                if (byFileType[docType] !== undefined) byFileType[docType]++;
+                else byFileType.other++;
+            }
+        }
+
+        // Format size
+        const formatSize = (bytes) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+            return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+        };
+
+        // Sort date entries
+        const sortedDates = Object.entries(byDate)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, count]) => ({ date, count }));
+
+        // Sort agents by count
+        const sortedAgents = Object.values(byAgent)
+            .sort((a, b) => b.count - a.count);
+
+        // Sort customers by count (top 10)
+        const topCustomers = Object.values(byCustomer)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10);
+
+        // Service type array
+        const serviceTypes = Object.entries(byServiceType)
+            .map(([type, count]) => ({ type, count }))
+            .sort((a, b) => b.count - a.count);
+
+        // Recent submissions (last 10)
+        const recentSubmissions = requests.slice(0, 10).map(r => ({
+            orderId: r.orderId,
+            customerName: r.customerName,
+            customerPhone: r.customerPhone,
+            serviceType: r.serviceType,
+            totalFiles: r.totalFiles,
+            status: r.status,
+            receivedBy: r.receivedBy || null,
+            createdAt: r.createdAt
+        }));
+
+        res.json({
+            overview: {
+                totalSubmissions,
+                totalFiles,
+                totalSize: formatSize(totalSize),
+                receivedCount,
+                unreceived: totalSubmissions - receivedCount,
+                pendingCount,
+                processingCount,
+                completedCount
+            },
+            today: {
+                submissions: todaySubmissions,
+                files: todayFiles
+            },
+            thisWeek: weekSubmissions,
+            thisMonth: monthSubmissions,
+            byDate: sortedDates,
+            byAgent: sortedAgents,
+            byServiceType: serviceTypes,
+            byFileType,
+            topCustomers,
+            recentSubmissions
+        });
+    } catch (error) {
+        console.error('[DOCUMENT REQUESTS] Analytics failed:', error);
+        res.status(500).json({ error: 'Analytics failed' });
+    }
+});
+
+
+// ==================== USER DOCUMENT SUBMISSIONS ====================
+
+/**
+ * POST /api/v1/user/submissions
+ * User submits a document for admin approval (to become template or guidance)
+ */
+app.post('/api/v1/user/submissions', requireUserAuth, upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, targetType } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!title || !targetType) {
+            return res.status(400).json({ error: 'Title and target type are required' });
+        }
+
+        if (!['template', 'guidance'].includes(targetType)) {
+            return res.status(400).json({ error: 'Target type must be "template" or "guidance"' });
+        }
+
+        const submission = await UserSubmission.create({
+            title,
+            description: description || '',
+            category: category || 'general',
+            targetType,
+            fileUrl: `/uploads/${req.file.filename}`,
+            fileOriginalName: req.file.originalname,
+            fileMimeType: req.file.mimetype,
+            fileSize: req.file.size,
+            submittedBy: req.user.username,
+            submittedByName: req.user.name || req.user.username,
+            status: 'pending'
+        });
+
+        // Notify admins via socket
+        io.emit('new-user-submission', {
+            submissionId: submission._id,
+            title: submission.title,
+            targetType: submission.targetType,
+            submittedBy: submission.submittedByName,
+            timestamp: new Date().toISOString()
+        });
+
+        console.log(`[SUBMISSIONS] New submission: "${title}" by ${req.user.username} for ${targetType}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'Document submitted successfully for review',
+            submission: {
+                id: submission._id,
+                title: submission.title,
+                targetType: submission.targetType,
+                status: submission.status,
+                submittedAt: submission.submittedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('[SUBMISSIONS] Create failed:', error);
+        res.status(500).json({ error: 'Failed to submit document' });
+    }
+});
+
+/**
+ * GET /api/v1/user/submissions
+ * Get user's own submissions
+ */
+app.get('/api/v1/user/submissions', requireUserAuth, async (req, res) => {
+    try {
+        const submissions = await UserSubmission.find({ submittedBy: req.user.username })
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        console.error('[SUBMISSIONS] Fetch user submissions failed:', error);
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * DELETE /api/v1/user/submissions/:id
+ * User can delete their own pending submission
+ */
+app.delete('/api/v1/user/submissions/:id', requireUserAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findOne({
+            _id: req.params.id,
+            submittedBy: req.user.username,
+            status: 'pending'
+        });
+
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found or cannot be deleted' });
+        }
+
+        // Delete the file
+        if (submission.fileUrl) {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+
+        res.json({ success: true, message: 'Submission deleted' });
+    } catch (error) {
+        console.error('[SUBMISSIONS] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
+
+// ==================== ADMIN SUBMISSION MANAGEMENT ====================
+
+/**
+ * GET /api/v1/admin/submissions
+ * Get all user submissions for admin review
+ */
+app.get('/api/v1/admin/submissions', requireAdminAuth, async (req, res) => {
+    try {
+        const { status, targetType } = req.query;
+        const filter = {};
+
+        if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+            filter.status = status;
+        }
+        if (targetType && ['template', 'guidance'].includes(targetType)) {
+            filter.targetType = targetType;
+        }
+
+        const submissions = await UserSubmission.find(filter)
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Fetch failed:', error);
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/submissions/stats
+ * Get submission statistics
+ */
+app.get('/api/v1/admin/submissions/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const [total, pending, approved, rejected] = await Promise.all([
+            UserSubmission.countDocuments(),
+            UserSubmission.countDocuments({ status: 'pending' }),
+            UserSubmission.countDocuments({ status: 'approved' }),
+            UserSubmission.countDocuments({ status: 'rejected' })
+        ]);
+
+        res.json({ total, pending, approved, rejected });
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Stats failed:', error);
+        res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/submissions/:id/download
+ * Download submission file
+ */
+app.get('/api/v1/admin/submissions/:id/download', requireAdminAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission || !submission.fileUrl) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        const filePath = path.join(__dirname, submission.fileUrl);
+        if (fs.existsSync(filePath)) {
+            res.download(filePath, submission.fileOriginalName || 'download');
+        } else {
+            res.status(404).json({ error: 'File not found on server' });
+        }
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Download failed:', error);
+        res.status(500).json({ error: 'Failed to download file' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/submissions/:id/approve
+ * Approve a submission and create the resource (Template or Guide)
+ */
+app.put('/api/v1/admin/submissions/:id/approve', requireAdminAuth, async (req, res) => {
+    try {
+        const { notes, resourceData } = req.body;
+
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        if (submission.status !== 'pending') {
+            return res.status(400).json({ error: 'Submission has already been reviewed' });
+        }
+
+        let createdResource;
+
+        if (submission.targetType === 'template') {
+            // Create Template from submission
+            createdResource = await Template.create({
+                title: resourceData?.title || submission.title,
+                description: resourceData?.description || submission.description,
+                category: resourceData?.category || submission.category || 'general',
+                type: resourceData?.type || 'Document',
+                fileUrl: submission.fileUrl,
+                fileOriginalName: submission.fileOriginalName,
+                fileMimeType: submission.fileMimeType,
+                fileSize: submission.fileSize,
+                icon: resourceData?.icon || 'file',
+                featured: resourceData?.featured || false,
+                downloads: 0
+            });
+
+            console.log(`[SUBMISSIONS] Approved as Template: ${createdResource.title}`);
+
+        } else if (submission.targetType === 'guidance') {
+            // Create Guide from submission
+            createdResource = await Guide.create({
+                title: resourceData?.title || submission.title,
+                description: resourceData?.description || submission.description,
+                objective: resourceData?.objective || submission.category || 'general',
+                type: resourceData?.type || 'Guide',
+                duration: resourceData?.duration || '5 min read',
+                content: resourceData?.content || '',
+                icon: resourceData?.icon || 'book',
+                popular: resourceData?.popular || false,
+                fileUrl: submission.fileUrl,
+                fileOriginalName: submission.fileOriginalName,
+                fileMimeType: submission.fileMimeType,
+                fileSize: submission.fileSize
+            });
+
+            console.log(`[SUBMISSIONS] Approved as Guide: ${createdResource.title}`);
+        }
+
+        // Update submission status
+        submission.status = 'approved';
+        submission.reviewedBy = req.admin.username;
+        submission.reviewedAt = new Date();
+        submission.reviewNotes = notes || '';
+        submission.approvedResourceId = createdResource._id;
+        submission.approvedResourceType = submission.targetType === 'template' ? 'Template' : 'Guide';
+        await submission.save();
+
+        // Notify user via socket
+        io.emit('submission-reviewed', {
+            submissionId: submission._id,
+            status: 'approved',
+            submittedBy: submission.submittedBy,
+            title: submission.title,
+            resourceType: submission.approvedResourceType,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            message: `Submission approved and created as ${submission.approvedResourceType}`,
+            submission,
+            resource: createdResource
+        });
+
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Approve failed:', error);
+        res.status(500).json({ error: 'Failed to approve submission' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/submissions/:id/reject
+ * Reject a submission
+ */
+app.put('/api/v1/admin/submissions/:id/reject', requireAdminAuth, async (req, res) => {
+    try {
+        const { notes } = req.body;
+
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        if (submission.status !== 'pending') {
+            return res.status(400).json({ error: 'Submission has already been reviewed' });
+        }
+
+        submission.status = 'rejected';
+        submission.reviewedBy = req.admin.username;
+        submission.reviewedAt = new Date();
+        submission.reviewNotes = notes || '';
+        await submission.save();
+
+        console.log(`[SUBMISSIONS] Rejected: ${submission.title} - Reason: ${notes || 'No reason provided'}`);
+
+        // Notify user via socket
+        io.emit('submission-reviewed', {
+            submissionId: submission._id,
+            status: 'rejected',
+            submittedBy: submission.submittedBy,
+            title: submission.title,
+            notes: notes,
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            success: true,
+            message: 'Submission rejected',
+            submission
+        });
+
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Reject failed:', error);
+        res.status(500).json({ error: 'Failed to reject submission' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/submissions/:id
+ * Delete a submission (admin only)
+ */
+app.delete('/api/v1/admin/submissions/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const submission = await UserSubmission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+
+        // Delete the file if it exists and hasn't been approved (approved files are now used by resources)
+        if (submission.fileUrl && submission.status !== 'approved') {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+
+        res.json({ success: true, message: 'Submission deleted' });
+    } catch (error) {
+        console.error('[ADMIN SUBMISSIONS] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
+
+
+// ==================== AGENT SUBMISSIONS (NO AUTH REQUIRED FOR DESKTOP AGENT) ====================
+
+/**
+ * POST /api/v1/agent/submissions
+ * Agent submits a document (bypassing portal auth, relies on network trust/agent user)
+ */
+app.post('/api/v1/agent/submissions', upload.single('file'), async (req, res) => {
+    try {
+        const { title, description, category, targetType, username } = req.body;
+
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        if (!title || !targetType) {
+            return res.status(400).json({ error: 'Title and target type are required' });
+        }
+
+        if (!username) {
+            return res.status(400).json({ error: 'Agent username required' });
+        }
+
+        // Verify agent exists
+        const agentUser = await User.findOne({ username, type: 'agent' });
+        if (!agentUser) {
+            return res.status(404).json({ error: 'Agent user not found' });
+        }
+
+        const submission = await UserSubmission.create({
+            title,
+            description: description || '',
+            category: category || 'general',
+            targetType,
+            fileUrl: `/uploads/${req.file.filename}`,
+            fileOriginalName: req.file.originalname,
+            fileMimeType: req.file.mimetype,
+            fileSize: req.file.size,
+            submittedBy: agentUser.username,
+            submittedByName: agentUser.name || agentUser.username,
+            status: 'pending'
+        });
+
+        // Notify admins via socket
+        io.emit('new-user-submission', {
+            submissionId: submission._id,
+            title: submission.title,
+            targetType: submission.targetType,
+            submittedBy: submission.submittedBy,
+            timestamp: new Date().toISOString()
+        });
+
+        console.log(`[AGENT SUBMISSION] New submission: "${title}" by ${agentUser.username}`);
+
+        res.status(201).json({
+            success: true,
+            submission: {
+                id: submission._id,
+                title: submission.title,
+                status: submission.status
+            }
+        });
+
+    } catch (error) {
+        console.error('[AGENT SUBMISSIONS] Create failed:', error);
+        res.status(500).json({ error: 'Failed to submit document' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/submissions
+ * Get agent's submissions
+ */
+app.get('/api/v1/agent/submissions', async (req, res) => {
+    try {
+        const { username } = req.query;
+        if (!username) return res.status(400).json({ error: 'Username required' });
+
+        const submissions = await UserSubmission.find({ submittedBy: username })
+            .sort({ submittedAt: -1 });
+        res.json(submissions);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch submissions' });
+    }
+});
+
+/**
+ * GET /api/v1/agent/sales-history
+ * Get sales history for the agent portal (inventory sales)
+ */
+app.get('/api/v1/agent/sales-history', async (req, res) => {
+    try {
+        const { seller, clientId, limit = 200 } = req.query;
+        let query = {};
+        
+        if (seller) {
+            query.seller = seller;
+        } else if (clientId) {
+            query.clientId = clientId;
+        }
+
+        const sales = await Transaction.find(query)
+            .sort({ createdAt: -1 })
+            .limit(parseInt(limit));
+            
+        res.json(sales);
+    } catch (error) {
+        console.error('[AGENT] Failed to fetch sales history:', error);
+        res.status(500).json({ error: 'Failed to fetch sales history' });
+    }
+});
+
+/**
+ * DELETE /api/v1/agent/submissions/:id
+ * Agent deletes their submission
+ */
+app.delete('/api/v1/agent/submissions/:id', async (req, res) => {
+    try {
+        const { username } = req.query; // Pass username in query for validation
+
+        const submission = await UserSubmission.findOne({
+            _id: req.params.id,
+            submittedBy: username,
+            status: 'pending'
+        });
+
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found or cannot be deleted' });
+        }
+
+        if (submission.fileUrl) {
+            const filePath = path.join(__dirname, submission.fileUrl);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        }
+
+        await UserSubmission.deleteOne({ _id: submission._id });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete submission' });
+    }
+});
+
+// ==================== TRACKABLE SERVICES & ACTIVITY RECORDS ====================
+
+/**
+ * POST /api/v1/admin/trackable-services
+ * Admin creates a new trackable service
+ */
+app.post('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const { name, description, price, unit, keyboardShortcut, icon, category, color, isActive } = req.body;
+        if (!name || price == null) {
+            return res.status(400).json({ error: 'Name and price are required' });
+        }
+        const service = await TrackableService.create({
+            name, description, price, unit, keyboardShortcut, icon, category, color,
+            isActive: isActive !== false
+        });
+        // Broadcast to all connected agents so they re-fetch
+        io.emit('trackable-services-updated');
+        res.status(201).json(service);
+    } catch (error) {
+        console.error('Create trackable service error:', error);
+        res.status(500).json({ error: 'Failed to create service' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/trackable-services
+ * Admin lists all trackable services
+ */
+app.get('/api/v1/admin/trackable-services', requireAdminAuth, async (req, res) => {
+    try {
+        const services = await TrackableService.find().sort({ createdAt: -1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/trackable-services/:id
+ * Admin updates a trackable service
+ */
+app.put('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const updates = req.body;
+        updates.updatedAt = new Date();
+        const service = await TrackableService.findByIdAndUpdate(req.params.id, updates, { new: true });
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        // Broadcast update to agents
+        io.emit('trackable-services-updated');
+        res.json(service);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update service' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/trackable-services/:id
+ * Admin deletes a trackable service
+ */
+app.delete('/api/v1/admin/trackable-services/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const service = await TrackableService.findByIdAndDelete(req.params.id);
+        if (!service) return res.status(404).json({ error: 'Service not found' });
+        // Broadcast update to agents
+        io.emit('trackable-services-updated');
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete service' });
+    }
+});
+
+/**
+ * GET /api/v1/trackable-services
+ * Agent-facing: list active trackable services (no admin auth required)
+ */
+app.get('/api/v1/trackable-services', async (req, res) => {
+    try {
+        const services = await TrackableService.find({ isActive: true }).sort({ name: 1 });
+        res.json(services);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch services' });
+    }
+});
+
+/**
+ * POST /api/v1/agent/activity-records
+ * Agent submits a batch of daily activity records
+ */
+app.post('/api/v1/agent/activity-records', async (req, res) => {
+    try {
+        const { records, agentUser, clientId, hostname, date } = req.body;
+        if (!records || !Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({ error: 'No records provided' });
+        }
+        if (!agentUser) {
+            return res.status(400).json({ error: 'Agent user is required' });
+        }
+
+        const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const docs = records.map(r => ({
+            serviceId: r.serviceId || null,
+            serviceName: r.serviceName,
+            quantity: r.quantity,
+            unitPrice: r.unitPrice,
+            totalAmount: r.totalAmount,
+            agentUser: agentUser,
+            clientId: clientId || '',
+            hostname: hostname || '',
+            date: r.date || date || new Date().toISOString().split('T')[0],
+            notes: r.notes || '',
+            customerName: r.customerName || '',
+            paymentMethod: r.paymentMethod || 'cash',
+            batchId: batchId,
+            submittedAt: new Date()
+        }));
+
+        const inserted = await ActivityRecord.insertMany(docs);
+        console.log(`[ACTIVITY] ${inserted.length} records submitted by ${agentUser} (batch: ${batchId})`);
+
+        // Notify admin dashboards
+        io.emit('activity-records-updated', {
+            agentUser, count: inserted.length, date: date || new Date().toISOString().split('T')[0],
+            totalAmount: docs.reduce((s, r) => s + r.totalAmount, 0)
+        });
+
+        res.json({ success: true, count: inserted.length, batchId });
+    } catch (error) {
+        console.error('Activity record submission error:', error);
+        res.status(500).json({ error: 'Failed to submit records' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/activity-records
+ * Admin views activity records with optional filters
+ */
+app.get('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const { startDate, endDate, agentUser, limit } = req.query;
+        const filter = {};
+
+        if (startDate && endDate) {
+            filter.date = { $gte: startDate, $lte: endDate };
+        } else if (startDate) {
+            filter.date = { $gte: startDate };
+        } else if (endDate) {
+            filter.date = { $lte: endDate };
+        }
+
+        if (agentUser) {
+            filter.agentUser = agentUser;
+        }
+
+        const records = await ActivityRecord.find(filter)
+            .sort({ submittedAt: -1 })
+            .limit(parseInt(limit) || 500);
+
+        res.json(records);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch activity records' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/activity-records
+ * Admin clears all activity records
+ */
+app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await ActivityRecord.deleteMany({});
+        console.log(`[ACTIVITY] Admin cleared ${result.deletedCount} activity records`);
+        res.json({ success: true, deleted: result.deletedCount });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear records' });
+    }
+});
+
+// ==================== MPESA INTEGRATION ====================
+require('./mpesa-routes')(app, io);
+
+// ==================== SERVER START ====================
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+    console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║           HawkNine Backend API Server v2.0                    ║
+║           Running on http://localhost:${PORT}                    ║
+╠═══════════════════════════════════════════════════════════════╣
+║  Endpoints:                                                   ║
+║  • POST /api/v1/agent/sync        - Agent heartbeat           ║
+║  • POST /api/v1/agent/session     - Session events            ║
+║  • GET  /api/v1/admin/computers   - All computers             ║
+║  • GET  /api/v1/admin/sessions    - Session history           ║
+║  • GET  /api/v1/admin/print-jobs  - Print job records         ║
+║  • GET  /api/v1/admin/browser-history - Browser history       ║
+║  • GET  /api/v1/admin/file-activity   - File activity         ║
+║  • GET  /api/v1/admin/stats       - Dashboard stats           ║
+╚═══════════════════════════════════════════════════════════════╝
+    `);
+});

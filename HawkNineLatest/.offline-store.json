@@ -1,0 +1,179 @@
+{
+  "inventory": [],
+  "services": [
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb837",
+      "id": "svc-8",
+      "name": "CV Creation",
+      "category": "document",
+      "price": 500,
+      "unit": "flat",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.567Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb834",
+      "id": "svc-5",
+      "name": "Photocopying B&W",
+      "category": "photocopy",
+      "price": 8,
+      "unit": "per_copy",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.566Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb835",
+      "id": "svc-6",
+      "name": "Photocopying Color",
+      "category": "photocopy",
+      "price": 40,
+      "unit": "per_copy",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.566Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb831",
+      "id": "svc-2",
+      "name": "B&W Printing",
+      "category": "printing",
+      "price": 10,
+      "unit": "per_page",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.565Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb832",
+      "id": "svc-3",
+      "name": "Color Printing",
+      "category": "printing",
+      "price": 50,
+      "unit": "per_page",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.566Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb833",
+      "id": "svc-4",
+      "name": "Document Scanning",
+      "category": "scanning",
+      "price": 20,
+      "unit": "per_page",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.566Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb838",
+      "id": "svc-9",
+      "name": "Email Setup",
+      "category": "service",
+      "price": 200,
+      "unit": "flat",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.568Z",
+      "__v": 0
+    },
+    {
+      "displayOrder": 0,
+      "_id": "69793bef828eea92a29bb836",
+      "id": "svc-7",
+      "name": "Typing Services",
+      "category": "typing",
+      "price": 50,
+      "unit": "per_page",
+      "isActive": true,
+      "createdAt": "2026-01-27T22:27:59.567Z",
+      "__v": 0
+    }
+  ],
+  "templates": [
+    {
+      "_id": "69983963a623843f53692409",
+      "title": "hh",
+      "description": "ggg",
+      "category": "business",
+      "type": "Document",
+      "fileUrl": "/uploads/1771583712085-556742062-Thank you.pdf",
+      "fileOriginalName": "Thank you.pdf",
+      "fileMimeType": "application/pdf",
+      "fileSize": 155045,
+      "icon": "file",
+      "downloads": 2,
+      "featured": false,
+      "createdAt": "2026-02-20T10:37:23.731Z",
+      "__v": 0
+    },
+    {
+      "_id": "69830ede4ecc2f7dfa727f05",
+      "title": "Paassport Guide ",
+      "description": "This Guide helps one have a guide on getting a passport",
+      "category": "business",
+      "type": "PDF",
+      "fileUrl": "/uploads/1770196702558-866980827-whitepaper_imsicatchers_eff_0.pdf",
+      "fileOriginalName": "whitepaper_imsicatchers_eff_0.pdf",
+      "fileMimeType": "application/pdf",
+      "fileSize": 999909,
+      "downloads": 5,
+      "featured": false,
+      "createdAt": "2026-02-04T09:18:22.568Z",
+      "__v": 0
+    }
+  ],
+  "guides": [],
+  "submissions": [
+    {
+      "_id": "698f74654caa9d4d90f1f632",
+      "title": "Template",
+      "description": "check it",
+      "category": "general",
+      "fileUrl": "/uploads/1771009125110-647009982-fw2.pdf",
+      "fileOriginalName": "fw2.pdf",
+      "fileMimeType": "application/pdf",
+      "fileSize": 1349127,
+      "submittedBy": "brian",
+      "submittedByName": "brianoma",
+      "targetType": "template",
+      "status": "pending",
+      "submittedAt": "2026-02-13T18:58:45.130Z",
+      "__v": 0
+    }
+  ],
+  "settings": {
+    "showTotalItemsToUser": true,
+    "lowStockEmailEnabled": true
+  },
+  "lastSync": "2026-03-04T00:47:13.622Z",
+  "publicDocuments": [
+    {
+      "orderId": "HN-MMBBJMPXZ0O",
+      "customerName": "brak",
+      "customerPhone": "0724437856",
+      "serviceType": "printing-bw",
+      "instructions": "print now",
+      "files": [
+        {
+          "filename": "1772585341120-722779720-Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "originalName": "Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "downloadUrl": "http://api.hawkninegroup.com/uploads/1772585341120-722779720-Resume-Brian-Paul-Opondo-World-Vision.pdf",
+          "size": 108006,
+          "docType": "pdf",
+          "downloaded": true,
+          "downloadedAt": "2026-03-04T00:49:16.680Z"
+        }
+      ],
+      "timestamp": "2026-03-04T00:49:01.125Z"
+    }
+  ]
+}

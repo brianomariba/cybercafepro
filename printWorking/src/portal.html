@@ -1,0 +1,1669 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>HawkNine Portal</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
+    <style>
+        :root {
+            --primary: #00B4D8;
+            --primary-dark: #0077B6;
+            --bg-dark: #011627;
+            --surface: rgba(2, 48, 71, 0.95);
+            --card-bg: rgba(255, 255, 255, 0.05);
+            --text: #ffffff;
+            --text-secondary: #94A3B8;
+            --accent: #FFB703;
+            --success: #00C853;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #011627 0%, #023047 50%, #011627 100%);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        .header {
+            background: rgba(1, 22, 39, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 180, 216, 0.2);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-img {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+        }
+
+        .logo-text {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 180, 216, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .user-name {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .sync-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .sync-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .sync-dot.offline {
+            background: var(--warning);
+        }
+
+        /* Navigation */
+        .nav-tabs {
+            display: flex;
+            gap: 8px;
+            padding: 16px 24px;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            overflow-x: auto;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .nav-tab:hover {
+            background: rgba(0, 180, 216, 0.1);
+            color: var(--text);
+        }
+
+        .nav-tab.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .nav-tab .badge {
+            background: var(--danger);
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: 6px;
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .page-section {
+            display: none;
+        }
+
+        .page-section.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .grid-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .grid-4 {
+            grid-template-columns: repeat(4, 1fr);
+        }
+
+        @media (max-width: 1024px) {
+            .grid-4 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .grid-3 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 600px) {
+
+            .grid-4,
+            .grid-3,
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Stats Cards */
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Item Cards */
+        .item-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .item-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+
+        .item-card.out-of-stock {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .item-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .item-category {
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: rgba(0, 180, 216, 0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        .item-price {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--success);
+        }
+
+        .item-stock {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .item-stock.low {
+            color: var(--warning);
+        }
+
+        .item-stock.out {
+            color: var(--danger);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.02);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 450px;
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        /* Form */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* Quantity Selector */
+        .quantity-selector {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .qty-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: rgba(0, 180, 216, 0.1);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .qty-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .qty-value {
+            font-size: 20px;
+            font-weight: 700;
+            min-width: 60px;
+            width: 80px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 6px 4px;
+            -moz-appearance: textfield;
+        }
+
+        .qty-value::-webkit-outer-spin-button,
+        .qty-value::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        .qty-value:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
+        }
+
+        /* Service/Template Cards */
+        .service-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .service-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .service-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .service-price {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        /* Template Card */
+        .template-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .template-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(0, 180, 216, 0.1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .template-info {
+            flex: 1;
+        }
+
+        .template-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .template-type {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Pending Actions */
+        .pending-banner {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pending-text {
+            color: var(--warning);
+            font-size: 13px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 180, 216, 0.3);
+            border-radius: 3px;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-size: 11px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            margin-top: 40px;
+        }
+
+        .footer-logout {
+            margin-top: 12px;
+        }
+
+        /* Toast Notification */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: var(--surface);
+            border: 1px solid rgba(0, 180, 216, 0.3);
+            border-left: 4px solid var(--primary);
+            border-radius: 8px;
+            padding: 16px;
+            width: 320px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideInRight 0.3s ease;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        .toast.success {
+            border-left-color: var(--success);
+        }
+
+        .toast.error {
+            border-left-color: var(--danger);
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeOut {
+            to {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <img src="logo.jpg" alt="Logo" class="logo-img">
+            <span class="logo-text">HawkNine</span>
+        </div>
+        <div class="header-right">
+            <div class="sync-status">
+                <span class="sync-dot" id="syncDot"></span>
+                <span id="syncText">Online</span>
+            </div>
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">U</div>
+                <span class="user-name" id="userName">User</span>
+            </div>
+            <button class="btn btn-small btn-secondary" onclick="checkForUpdates()" title="Check for Updates">
+                🔃 Update
+            </button>
+        </div>
+    </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-tabs">
+        <button class="nav-tab active" data-section="store">🛒 Store</button>
+        <button class="nav-tab" data-section="services">💼 Services & Prices</button>
+        <button class="nav-tab" data-section="documents">📂 Documents <span class="badge" id="docsBadge"
+                style="display:none">0</span></button>
+        <button class="nav-tab" data-section="templates">📄 Templates</button>
+        <button class="nav-tab" data-section="guides">📚 Guides</button>
+        <button class="nav-tab" data-section="printers" style="display:none">🖨️ My Printers</button>
+        <button class="nav-tab" data-section="submissions">📤 Submissions</button>
+        <button class="nav-tab" data-section="pending" id="pendingTab" style="display:none">⏳ Pending <span
+                class="badge" id="pendingBadge" style="display:none">0</span></button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Pending Actions Banner -->
+        <div class="pending-banner" id="pendingBanner" style="display:none">
+            <span class="pending-text">⏳ You have <strong id="pendingCount">0</strong> pending sales that will sync when
+                online</span>
+            <button class="btn btn-small btn-secondary" onclick="syncPendingActions()">Sync Now</button>
+        </div>
+
+        <!-- Store Section -->
+        <div class="page-section active" id="section-store">
+            <div class="card">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+                    <h2 class="card-title">📦 Inventory Stock</h2>
+                    <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
+                        <input type="text" class="form-input btn-small" id="inventorySearch"
+                            placeholder="Search items..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="inventoryCategory" style="max-width: 150px;">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('inventory')">↻</button>
+                    </div>
+                </div>
+                <div class="grid grid-4" id="inventoryGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📦</div>
+                        <p>Loading inventory...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Services Section -->
+        <div class="page-section" id="section-services">
+            <div class="card">
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+                    <h2 class="card-title">💼 Services & Pricing</h2>
+                    <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
+                        <input type="text" class="form-input btn-small" id="serviceSearch"
+                            placeholder="Search services..." style="max-width: 200px;">
+                        <select class="form-input btn-small" id="serviceCategory" style="max-width: 150px;">
+                            <option value="all">All Categories</option>
+                        </select>
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('services')">↻</button>
+                    </div>
+                </div>
+                <div class="grid grid-3" id="servicesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">💼</div>
+                        <p>Loading services...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documents Section -->
+        <div class="page-section" id="section-documents">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📂 Uploaded Documents</h2>
+                    <button class="btn btn-small btn-secondary" onclick="loadAllData()">↻ Refresh</button>
+                </div>
+                <div id="documentsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📂</div>
+                        <p>No documents uploaded yet</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Templates Section -->
+        <div class="page-section" id="section-templates">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📄 Templates</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('templates')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="templatesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📄</div>
+                        <p>Loading templates...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guides Section -->
+        <div class="page-section" id="section-guides">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📚 Guides & Help</h2>
+                    <button class="btn btn-small btn-secondary" onclick="refreshData('guides')">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="guidesGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">📚</div>
+                        <p>Loading guides...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Printers Section -->
+        <div class="page-section" id="section-printers">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🖨️ Connected Printers</h2>
+                    <button class="btn btn-small btn-secondary" onclick="loadAllData()">↻ Refresh</button>
+                </div>
+                <div class="grid grid-3" id="printersGrid">
+                    <div class="empty-state">
+                        <div class="empty-icon">🖨️</div>
+                        <p>Loading printers...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Submissions Section -->
+        <div class="page-section" id="section-submissions">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📤 My Submissions</h2>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-small btn-secondary" onclick="refreshData('submissions')">↻
+                            Refresh</button>
+                        <button class="btn btn-small btn-primary" onclick="openSubmissionModal()">+ New
+                            Submission</button>
+                    </div>
+                </div>
+                <div id="submissionsList">
+                    <div class="empty-state">
+                        <div class="empty-icon">📤</div>
+                        <p>Loading submissions...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pending Section -->
+        <div class="page-section" id="section-pending">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">⏳ Pending Offline Actions</h2>
+                    <button class="btn btn-small btn-primary" onclick="syncPendingActions()">🔄 Sync All</button>
+                </div>
+                <div id="pendingList">
+                    <div class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <p>No pending actions</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div>HawkNine Desktop Portal • Last sync: <span id="lastSyncTime">Never</span></div>
+            <div class="footer-logout">
+                <button class="btn btn-danger" id="logoutBtn">🔒 End Session & Lock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Sale Modal -->
+    <div class="modal-overlay" id="saleModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Record Sale</h3>
+                <button class="modal-close" onclick="closeSaleModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <div style="font-size: 20px; font-weight: 700;" id="saleItemName">Item Name</div>
+                    <div style="font-size: 24px; color: var(--success); font-weight: 700;" id="saleItemPrice">KSH 0
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Quantity</label>
+                    <div class="quantity-selector">
+                        <button class="qty-btn" onclick="adjustQuantity(-1)">−</button>
+                        <input type="number" class="qty-value" id="saleQuantity" value="1" min="1" max="999"
+                            oninput="onQuantityInput(this)">
+                        <button class="qty-btn" onclick="adjustQuantity(1)">+</button>
+                    </div>
+                </div>
+
+                <div
+                    style="background: rgba(0, 200, 83, 0.1); padding: 16px; border-radius: 8px; text-align: center; margin: 16px 0;">
+                    <div style="font-size: 12px; color: var(--text-secondary);">Total Amount</div>
+                    <div style="font-size: 28px; font-weight: 700; color: var(--success);" id="saleTotal">KSH 0</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Payment Method</label>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" class="btn btn-small payment-method-btn active" id="pmCash"
+                            onclick="selectPaymentMethod('cash')"
+                            style="flex:1; padding: 10px; border: 2px solid var(--success); background: rgba(0,200,83,0.15); color: var(--success); font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            💵 Cash
+                        </button>
+                        <button type="button" class="btn btn-small payment-method-btn" id="pmMpesa"
+                            onclick="selectPaymentMethod('mpesa')"
+                            style="flex:1; padding: 10px; border: 2px solid rgba(255,255,255,0.15); background: transparent; color: var(--text-secondary); font-weight: 700; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                            📱 M-Pesa
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Note (optional)</label>
+                    <input type="text" class="form-input" id="saleNote" placeholder="e.g. Client name, PC number...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSaleModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirmSaleBtn" onclick="confirmSale()">Confirm Sale</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Submission Modal -->
+    <div class="modal-overlay" id="submissionModal">
+        <div class="modal" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 class="modal-title">📤 Submit Document</h3>
+                <button class="modal-close" onclick="closeSubmissionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Document Title</label>
+                    <input type="text" class="form-input" id="subTitle" placeholder="e.g. Professional CV Template">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-input" id="subDesc" rows="3"
+                        placeholder="Briefly describe the document..."></textarea>
+                </div>
+                <div class="grid grid-2">
+                    <div class="form-group">
+                        <label class="form-label">Type</label>
+                        <select class="form-input" id="subType">
+                            <option value="template">📄 Template</option>
+                            <option value="guidance">📚 Guidance/Guide</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Category</label>
+                        <select class="form-input" id="subCategory">
+                            <option value="general">General</option>
+                            <option value="resume">Resume/CV</option>
+                            <option value="business">Business</option>
+                            <option value="academic">Academic</option>
+                            <option value="legal">Legal</option>
+                            <option value="creative">Creative</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">File</label>
+                    <input type="file" class="form-input" id="subFile">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSubmissionModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="submitDocument()" id="btnSubmitDoc">Submit for Review</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        // State
+        let currentUser = null;
+        let selectedItem = null;
+        let saleQuantity = 1;
+        let isOnline = true;
+        let allInventory = [];
+        let allServices = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            setupNavigation();
+            loadAllData();
+            updatePendingCount();
+
+            // Check online status
+            setInterval(checkOnlineStatus, 5000);
+
+            // Search Listeners
+            document.getElementById('inventorySearch').addEventListener('input', filterAndRenderInventory);
+            document.getElementById('inventoryCategory').addEventListener('change', filterAndRenderInventory);
+            document.getElementById('serviceSearch').addEventListener('input', filterAndRenderServices);
+            document.getElementById('serviceCategory').addEventListener('change', filterAndRenderServices);
+        });
+
+        // Navigation
+        function setupNavigation() {
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const section = tab.dataset.section;
+                    showSection(section);
+                    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                });
+            });
+        }
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(`section-${sectionId}`).classList.add('active');
+        }
+
+        // Data Loading
+        function loadAllData() {
+            ipcRenderer.send('get-portal-data');
+        }
+
+        function refreshData(type) {
+            ipcRenderer.send('refresh-portal-data', { type });
+        }
+
+        // IPC Listeners
+        ipcRenderer.on('portal-data', (event, data) => {
+            if (data.user) {
+                currentUser = data.user;
+                document.getElementById('userName').textContent = data.user.name || data.user.username;
+                document.getElementById('userAvatar').textContent = (data.user.name || data.user.username || 'U').charAt(0).toUpperCase();
+            }
+
+            if (data.inventory) {
+                allInventory = data.inventory;
+                updateCategoryDropdown('inventoryCategory', allInventory);
+                filterAndRenderInventory();
+            }
+            if (data.services) {
+                allServices = data.services;
+                updateCategoryDropdown('serviceCategory', allServices);
+                filterAndRenderServices();
+            }
+            if (data.templates) renderTemplates(data.templates);
+            if (data.guides) renderGuides(data.guides);
+            if (data.printers) renderPrinters(data.printers);
+            if (data.pendingActions) updatePendingSection(data.pendingActions);
+            if (data.publicDocuments) renderDocuments(data.publicDocuments);
+            if (data.submissions) renderSubmissions(data.submissions);
+            if (data.lastSync) {
+                document.getElementById('lastSyncTime').textContent = new Date(data.lastSync).toLocaleString();
+            }
+
+            updateOnlineStatus(data.isOnline);
+        });
+
+        ipcRenderer.on('new-public-document', (event, data) => {
+            // If it's a fresh upload notification (not just a refresh signal)
+            if (data && !data.refreshOnly) {
+                const count = data.files ? data.files.length : 1;
+                const name = data.customerName || 'Customer';
+                showToast(`New Document Upload: ${name} sent ${count} file(s)`, 'success');
+
+                // Show badge
+                const badge = document.getElementById('docsBadge');
+                badge.style.display = 'inline';
+                badge.textContent = 'New';
+                setTimeout(() => { badge.style.display = 'none'; }, 5000);
+            }
+
+            // Refetch data to update list
+            loadAllData();
+        });
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <div>${type === 'success' ? '✅' : (type === 'error' ? '❌' : 'ℹ️')}</div>
+                <div style="flex:1; font-size: 13px;">${message}</div>
+            `;
+
+            container.appendChild(toast);
+
+            // Remove after 5 seconds
+            setTimeout(() => {
+                toast.style.animation = 'fadeOut 0.3s ease forwards';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+
+            toast.onclick = () => toast.remove();
+        }
+
+        ipcRenderer.on('sale-result', (event, result) => {
+            if (result.success) {
+                showToast(result.message, 'success');
+                closeSaleModal();
+                loadAllData();
+            } else {
+                showToast(result.message, 'error');
+            }
+        });
+
+        ipcRenderer.on('sync-result', (event, result) => {
+            if (result.success) {
+                showToast(`Synced ${result.synced} action(s)`, 'success');
+                loadAllData();
+            } else {
+                showToast('Sync failed: ' + result.message, 'error');
+            }
+        });
+
+        ipcRenderer.on('account-disabled', (event, data) => {
+            showToast(data.message || 'Your account has been disabled by the administrator.', 'error');
+        });
+
+        ipcRenderer.on('submission-result', (event, result) => {
+            const btn = document.getElementById('btnSubmitDoc');
+            if (btn) {
+                btn.textContent = 'Submit for Review';
+                btn.disabled = false;
+            }
+
+            if (result.success) {
+                showToast('Document submitted successfully!', 'success');
+                closeSubmissionModal();
+                refreshData('submissions');
+            } else {
+                showToast('Submission failed: ' + result.message, 'error');
+            }
+        });
+
+        ipcRenderer.on('delete-submission-result', (event, result) => {
+            if (result.success) {
+                showToast('Submission deleted', 'success');
+                refreshData('submissions');
+            } else {
+                showToast('Failed to delete: ' + result.message, 'error');
+            }
+        });
+
+        // Render Functions
+        function renderInventory(items) {
+            const grid = document.getElementById('inventoryGrid');
+            if (!items || items.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>No inventory items available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = items.map(item => {
+                const isLow = item.stock <= (item.lowStockThreshold || 5);
+                const isOut = item.stock <= 0;
+                const stockClass = isOut ? 'out' : (isLow ? 'low' : '');
+
+                return `
+                    <div class="item-card ${isOut ? 'out-of-stock' : ''}" onclick="${isOut ? '' : `openSaleModal('${item._id}', '${item.name}', ${item.price}, ${item.stock})`}">
+                        <div class="item-category">${item.category || 'General'}</div>
+                        <div class="item-name">${item.name}</div>
+                        <div class="item-price">KSH ${(item.price || 0).toLocaleString()}</div>
+                        <div class="item-stock ${stockClass}">${isOut ? 'Out of Stock' : `${item.stock} in stock`}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderServices(services) {
+            const grid = document.getElementById('servicesGrid');
+            if (!services || services.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">💼</div><p>No services available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = services.map(svc => `
+                <div class="service-card">
+                    <div class="service-name">${svc.name}</div>
+                    <div class="service-desc">${svc.description || 'No description'}</div>
+                    <div class="service-price">KSH ${(svc.price || 0).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderTemplates(templates) {
+            const grid = document.getElementById('templatesGrid');
+            if (!templates || templates.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📄</div><p>No templates available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = templates.map(tpl => `
+                <div class="template-card">
+                    <div class="template-icon">${getFileIcon(tpl.type)}</div>
+                    <div class="template-info">
+                        <div class="template-name">${tpl.title}</div>
+                        <div class="template-type">${tpl.category || 'General'} • ${tpl.type || 'Document'}</div>
+                        <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('templates', '${tpl._id}', '${tpl.title}')">📂 Open</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderGuides(guides) {
+            const grid = document.getElementById('guidesGrid');
+            if (!guides || guides.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📚</div><p>No guides available</p></div>';
+                return;
+            }
+
+            grid.innerHTML = guides.map(guide => `
+                <div class="template-card">
+                    <div class="template-icon">📖</div>
+                    <div class="template-info">
+                        <div class="template-name">${guide.title}</div>
+                        <div class="template-type">${guide.category || 'General'} • ${guide.readTime || '5 min read'}</div>
+                        <button class="btn btn-small btn-primary" style="margin-top: 8px;" onclick="openResource('guides', '${guide._id}', '${guide.title}')">📖 Read</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderPrinters(printers) {
+            const grid = document.getElementById('printersGrid');
+            if (!printers || printers.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-icon">🖨️</div><p>No printers found</p></div>';
+                return;
+            }
+
+            grid.innerHTML = printers.map(p => `
+                <div class="template-card">
+                    <div class="template-icon">🖨️</div>
+                    <div class="template-info">
+                        <div class="template-name">${p.name}</div>
+                        <div class="template-type">${p.driver} • ${p.isConnected !== false ? '✅ Ready' : '❌ Offline'}</div>
+                        <div style="font-size: 11px; margin-top: 4px; color: var(--text-secondary);">
+                            ${p.isColor ? '🌈 Color' : '⚫ B&W'} • ${p.port || 'USB/Network'}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function openResource(type, id, title) {
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = '⏳ Opening...';
+            btn.disabled = true;
+
+            ipcRenderer.send('open-resource', { type, id, title });
+
+            // Re-enable button after a few seconds (in case opening fails silently)
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }, 5000);
+        }
+
+        function getFileIcon(type) {
+            switch ((type || '').toLowerCase()) {
+                case 'word': return '📝';
+                case 'excel': return '📊';
+                case 'pdf': return '📕';
+                case 'powerpoint': return '📽️';
+                default: return '📄';
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function renderDocuments(docs) {
+            const list = document.getElementById('documentsList');
+            if (!docs || docs.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">📂</div><p>No documents uploaded yet</p></div>';
+                return;
+            }
+
+            list.innerHTML = docs.map(doc => {
+                const customerNameEscaped = escapeHtml(doc.customerName);
+                const orderIdEscaped = escapeHtml(doc.orderId);
+                const fileList = (doc.files || []).map(f => {
+                    const fileName = f.originalName || f.filename;
+                    const fileNameEscaped = escapeHtml(fileName);
+                    const downloadUrl = f.downloadUrl;
+                    // Note: downloadUrl is a URL, usually safe in onclick if properly quoted, but better to be safe.
+                    // However, we can't easily escape URL for onclick string context without being careful.
+                    // A better way is to attach event listeners, but for this simple app, let's just escape the string arguments.
+
+                    const downloaded = f.downloaded ? '✅' : '';
+                    const btnLabel = f.downloaded ? '⬇️ Save Again' : '⬇️ Save';
+                    const btnClass = f.downloaded ? 'btn btn-small btn-secondary' : 'btn btn-small btn-primary'; // Highlight new ones
+
+                    return `
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px;">
+                        <span style="font-size: 13px;">${downloaded} 📄 ${fileNameEscaped}</span>
+                        <button class="${btnClass}" onclick="downloadDocument('${downloadUrl}', '${fileNameEscaped.replace(/'/g, "\\'")}', '${customerNameEscaped.replace(/'/g, "\\'")}', '${orderIdEscaped}')">${btnLabel}</button>
+                    </div>`;
+                }).join('');
+
+                return `
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <div>
+                                <strong style="font-size: 15px;">👤 ${customerNameEscaped} ${doc.customerPhone ? `(📞 ${escapeHtml(doc.customerPhone)})` : ''}</strong>
+                                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                                    ${new Date(doc.timestamp || doc.createdAt).toLocaleString()} • Order: ${orderIdEscaped}
+                                </div>
+                            </div>
+                        </div>
+                        <div style="padding-left: 12px; border-left: 2px solid var(--primary);">
+                            ${fileList}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function downloadDocument(url, filename, customerName, orderId) {
+            ipcRenderer.send('download-public-doc', { url, filename, customerName, orderId });
+        }
+
+        // Submissions
+        function renderSubmissions(items) {
+            const list = document.getElementById('submissionsList');
+            if (!items || items.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">📤</div><p>No submissions yet</p></div>';
+                return;
+            }
+
+            list.innerHTML = items.map(item => {
+                const statusColor = item.status === 'approved' ? 'var(--success)' :
+                    (item.status === 'rejected' ? 'var(--danger)' : 'var(--warning)');
+                const statusIcon = item.status === 'approved' ? '✅' :
+                    (item.status === 'rejected' ? '❌' : '⏳');
+
+                return `
+                <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600; font-size: 15px;">${item.title}</div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">
+                            ${item.category || 'General'} • ${item.targetType === 'template' ? '📄 Template' : '📚 Guide'} • ${new Date(item.createdAt).toLocaleDateString()}
+                        </div>
+                        ${item.reviewNotes ? `<div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">📝 Note: ${item.reviewNotes}</div>` : ''}
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="color: ${statusColor}; font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 4px; justify-content: flex-end;">
+                            ${statusIcon} ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                        </div>
+                        ${item.status === 'pending' ?
+                        `<button class="btn btn-small btn-danger" style="margin-top: 8px;" onclick="deleteSubmission('${item._id}')">🗑️ Delete</button>` :
+                        ''}
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function openSubmissionModal() {
+            document.getElementById('subTitle').value = '';
+            document.getElementById('subDesc').value = '';
+            document.getElementById('subFile').value = '';
+            document.getElementById('submissionModal').classList.add('active');
+        }
+
+        function closeSubmissionModal() {
+            document.getElementById('submissionModal').classList.remove('active');
+        }
+
+        async function submitDocument() {
+            const title = document.getElementById('subTitle').value;
+            const description = document.getElementById('subDesc').value;
+            const targetType = document.getElementById('subType').value;
+            const category = document.getElementById('subCategory').value;
+            const fileInput = document.getElementById('subFile');
+
+            if (!title || !fileInput.files[0]) {
+                showToast('Please provide a title and select a file.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btnSubmitDoc');
+            btn.textContent = 'Uploading...';
+            btn.disabled = true;
+
+            // We need to read the file in the renderer and send it to main process
+            // simpler approach: send path if strict isolation is off, or read to buffer
+            // Since contextIsolation is false in createWindows options, we can probably use fs if we require it, 
+            // but ipcRenderer is safeguarding. standard way in electron without context isolation:
+            // Just pass the file path.
+
+            const file = fileInput.files[0];
+            // In electron with nodeIntegration: true, file object has 'path' property
+            const filePath = file.path;
+
+            ipcRenderer.send('submit-document', {
+                title,
+                description,
+                targetType,
+                category,
+                filePath
+            });
+        }
+
+        function deleteSubmission(id) {
+            if (confirm('Are you sure you want to delete this submission?')) {
+                ipcRenderer.send('delete-submission', { id });
+            }
+        }
+
+        // Sale Modal
+        function openSaleModal(id, name, price, stock) {
+            selectedItem = { id, name, price, stock };
+            saleQuantity = 1;
+            document.getElementById('saleItemName').textContent = name;
+            document.getElementById('saleItemPrice').textContent = `KSH ${price.toLocaleString()} / unit`;
+            const qtyInput = document.getElementById('saleQuantity');
+            qtyInput.value = 1;
+            qtyInput.max = stock;
+            document.getElementById('saleTotal').textContent = `KSH ${price.toLocaleString()}`;
+            document.getElementById('saleNote').value = '';
+            // Reset payment method to Cash
+            selectPaymentMethod('cash');
+            document.getElementById('saleModal').classList.add('active');
+            // Focus the quantity input so user can type immediately
+            setTimeout(() => qtyInput.select(), 100);
+        }
+
+        function selectPaymentMethod(method) {
+            const cashBtn = document.getElementById('pmCash');
+            const mpesaBtn = document.getElementById('pmMpesa');
+            if (method === 'mpesa') {
+                mpesaBtn.classList.add('active');
+                mpesaBtn.style.border = '2px solid #108ee9';
+                mpesaBtn.style.background = 'rgba(16,142,233,0.15)';
+                mpesaBtn.style.color = '#108ee9';
+                cashBtn.classList.remove('active');
+                cashBtn.style.border = '2px solid rgba(255,255,255,0.15)';
+                cashBtn.style.background = 'transparent';
+                cashBtn.style.color = 'var(--text-secondary)';
+            } else {
+                cashBtn.classList.add('active');
+                cashBtn.style.border = '2px solid var(--success)';
+                cashBtn.style.background = 'rgba(0,200,83,0.15)';
+                cashBtn.style.color = 'var(--success)';
+                mpesaBtn.classList.remove('active');
+                mpesaBtn.style.border = '2px solid rgba(255,255,255,0.15)';
+                mpesaBtn.style.background = 'transparent';
+                mpesaBtn.style.color = 'var(--text-secondary)';
+            }
+        }
+
+        function closeSaleModal() {
+            document.getElementById('saleModal').classList.remove('active');
+            selectedItem = null;
+            saleQuantity = 1;
+        }
+
+        function updateSaleTotal() {
+            if (!selectedItem) return;
+            document.getElementById('saleQuantity').value = saleQuantity;
+            document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
+        }
+
+        function adjustQuantity(delta) {
+            if (!selectedItem) return;
+            const newQty = saleQuantity + delta;
+            if (newQty < 1 || newQty > selectedItem.stock) return;
+            saleQuantity = newQty;
+            updateSaleTotal();
+        }
+
+        function onQuantityInput(input) {
+            if (!selectedItem) return;
+            let val = parseInt(input.value, 10);
+            if (isNaN(val) || val < 1) val = 1;
+            if (val > selectedItem.stock) val = selectedItem.stock;
+            saleQuantity = val;
+            // Don't overwrite while user is typing, just update total
+            document.getElementById('saleTotal').textContent = `KSH ${(selectedItem.price * saleQuantity).toLocaleString()}`;
+        }
+
+        function confirmSale() {
+            if (!selectedItem) return;
+            // Read final value from input in case user typed directly
+            const qtyInput = document.getElementById('saleQuantity');
+            let qty = parseInt(qtyInput.value, 10);
+            if (isNaN(qty) || qty < 1) qty = 1;
+            if (qty > selectedItem.stock) qty = selectedItem.stock;
+            saleQuantity = qty;
+            qtyInput.value = qty;
+
+            if (saleQuantity < 1) {
+                showToast('Please enter a valid quantity', 'error');
+                return;
+            }
+
+            const note = document.getElementById('saleNote').value;
+            const paymentMethod = document.querySelector('.payment-method-btn.active')?.id === 'pmMpesa' ? 'mpesa' : 'cash';
+            ipcRenderer.send('record-sale', {
+                itemId: selectedItem.id,
+                itemName: selectedItem.name,
+                quantity: saleQuantity,
+                unitPrice: selectedItem.price,
+                total: selectedItem.price * saleQuantity,
+                note,
+                paymentMethod
+            });
+        }
+
+        // Pending Actions
+        function updatePendingSection(actions) {
+            const list = document.getElementById('pendingList');
+            const badge = document.getElementById('pendingBadge');
+            const banner = document.getElementById('pendingBanner');
+            const countSpan = document.getElementById('pendingCount');
+
+            if (!actions || actions.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div><p>No pending actions - all synced!</p></div>';
+                badge.style.display = 'none';
+                banner.style.display = 'none';
+                return;
+            }
+
+            badge.textContent = actions.length;
+            badge.style.display = 'inline';
+            banner.style.display = 'flex';
+            countSpan.textContent = actions.length;
+
+            list.innerHTML = actions.map(action => `
+                <div class="card" style="margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${action.payload?.itemName || action.type}</strong>
+                            <div style="font-size: 12px; color: var(--text-secondary);">
+                                Qty: ${action.payload?.quantity || 1} • ${new Date(action.createdAt).toLocaleString()}
+                            </div>
+                        </div>
+                        <div style="color: var(--warning); font-size: 12px;">
+                            ⏳ Pending (${action.attempts || 0} attempts)
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updatePendingCount() {
+            ipcRenderer.send('get-pending-count');
+        }
+
+        function syncPendingActions() {
+            ipcRenderer.send('sync-pending-actions');
+        }
+
+        // Online Status
+        function checkOnlineStatus() {
+            ipcRenderer.send('check-online-status');
+        }
+
+        function updateOnlineStatus(online) {
+            isOnline = online;
+            const dot = document.getElementById('syncDot');
+            const text = document.getElementById('syncText');
+            if (online) {
+                dot.classList.remove('offline');
+                text.textContent = 'Online';
+            } else {
+                dot.classList.add('offline');
+                text.textContent = 'Offline';
+            }
+        }
+
+        ipcRenderer.on('online-status', (event, status) => {
+            updateOnlineStatus(status.isOnline);
+        });
+
+        // Search & Filter Logic
+        function updateCategoryDropdown(elementId, items) {
+            const select = document.getElementById(elementId);
+            const currentVal = select.value;
+            const categories = [...new Set(items.map(i => i.category || 'General'))].sort();
+
+            select.innerHTML = '<option value="all">All Categories</option>' +
+                categories.map(c => `<option value="${c}">${c}</option>`).join('');
+
+            // Restore selection if possible
+            if (currentVal && (currentVal === 'all' || categories.includes(currentVal))) {
+                select.value = currentVal;
+            }
+        }
+
+        function filterAndRenderInventory() {
+            const search = document.getElementById('inventorySearch').value.toLowerCase();
+            const category = document.getElementById('inventoryCategory').value;
+
+            const filtered = allInventory.filter(item => {
+                const matchesSearch = item.name.toLowerCase().includes(search) ||
+                    (item.category || '').toLowerCase().includes(search);
+                const matchesCategory = category === 'all' || (item.category || 'General') === category;
+                return matchesSearch && matchesCategory;
+            });
+            renderInventory(filtered);
+        }
+
+        function filterAndRenderServices() {
+            const search = document.getElementById('serviceSearch').value.toLowerCase();
+            const category = document.getElementById('serviceCategory').value;
+
+            const filtered = allServices.filter(svc => {
+                const matchesSearch = svc.name.toLowerCase().includes(search) ||
+                    (svc.description || '').toLowerCase().includes(search);
+                const matchesCategory = category === 'all' || (svc.category || 'General') === category;
+                return matchesSearch && matchesCategory;
+            });
+            renderServices(filtered);
+        }
+
+        // Logout
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            if (confirm('Are you sure you want to end your session? The computer will lock.')) {
+                ipcRenderer.send('logout-request');
+            }
+        });
+
+        // Update Check
+        function checkForUpdates() {
+            if (confirm('Do you want to check for the latest version of HawkNine Agent?')) {
+                // Open the admin download URL in the default browser
+                // In a production app, you might use autoUpdater, but for now we link to the installer
+                const downloadUrl = 'https://admin.hawkninegroup.com'; // Or specific download link
+                ipcRenderer.send('open-external-link', downloadUrl);
+            }
+        }
+    </script>
+</body>
+
+</html>
