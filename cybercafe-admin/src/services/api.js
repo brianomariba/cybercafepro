@@ -578,7 +578,7 @@ export const saveSettings = async (settings) => (await api.post('/admin/settings
 // ==================== WHATSAPP REPORTS ====================
 export const getWhatsAppReportSettings = async () => (await api.get('/admin/whatsapp-report-settings')).data;
 export const saveWhatsAppReportSettings = async (settings) => (await api.post('/admin/whatsapp-report-settings', settings)).data;
-export const sendTestWhatsAppReport = async () => (await api.post('/admin/whatsapp-report/test')).data;
+export const sendTestWhatsAppReport = async (settings) => (await api.post('/admin/whatsapp-report/test', settings)).data;
 
 // ==================== BLOCKLIST ====================
 export const getBlocklist = async () => (await api.get('/admin/blocklist')).data;

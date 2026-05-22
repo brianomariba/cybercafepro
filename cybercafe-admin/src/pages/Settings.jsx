@@ -226,10 +226,15 @@ function Settings() {
     const handleTestWhatsappReport = async () => {
         setTestingWhatsapp(true);
         try {
-            await sendTestWhatsAppReport();
-            message.success('Test report triggered successfully');
+            const result = await sendTestWhatsAppReport(whatsappSettings);
+            if (result && result.message) {
+                message.success(result.message);
+            } else {
+                message.success('Test report sent successfully');
+            }
         } catch (error) {
-            message.error('Failed to trigger test report');
+            const errorMsg = error.response?.data?.error || error.message || 'Failed to trigger test report';
+            message.error(`Failed to send report: ${errorMsg}`, 8);
         } finally {
             setTestingWhatsapp(false);
         }
@@ -910,15 +915,114 @@ function Settings() {
                                 </Row>
 
                                 <Row gutter={16}>
-                                    <Col xs={24} sm={12}>
-                                        <Form.Item label="Daily Report Time">
-                                            <TimePicker
-                                                format="HH:mm"
-                                                value={dayjs(whatsappSettings.time, 'HH:mm')}
-                                                onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
-                                                style={{ width: '100%' }}
-                                                disabled={!whatsappSettings.enabled}
-                                            />
+                                    <Col xs={24}>
+                                        <Form.Item 
+                                            label={<span style={{ fontWeight: 600, color: 'rgba(255, 255, 255, 0.85)' }}>Daily Report Time</span>}
+                                            tooltip="Select when the automated performance report should be sent to your WhatsApp daily."
+                                        >
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                                {/* Preset Times Grid */}
+                                                <div>
+                                                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+                                                        ⚡ QUICK PRESETS
+                                                    </div>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px' }}>
+                                                        {[
+                                                            { label: '🌅 8:00 AM', time: '08:00' },
+                                                            { label: '🌇 5:00 PM', time: '17:00' },
+                                                            { label: '🌆 6:00 PM', time: '18:00' },
+                                                            { label: '🌃 8:00 PM', time: '20:00' },
+                                                            { label: '🌌 10:00 PM', time: '22:00' },
+                                                            { label: '🕛 Midnight', time: '00:00' }
+                                                        ].map(preset => {
+                                                            const isActive = whatsappSettings.time === preset.time;
+                                                            return (
+                                                                <Button
+                                                                    key={preset.time}
+                                                                    type={isActive ? 'primary' : 'default'}
+                                                                    style={isActive ? {
+                                                                        background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
+                                                                        borderColor: '#25D366',
+                                                                        color: '#fff',
+                                                                        borderRadius: '8px',
+                                                                        fontWeight: 'bold',
+                                                                        height: '38px',
+                                                                        boxShadow: '0 4px 12px rgba(37, 211, 102, 0.3)',
+                                                                        border: 'none',
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        justifyContent: 'center',
+                                                                        transition: 'all 0.3s ease'
+                                                                    } : {
+                                                                        borderRadius: '8px',
+                                                                        height: '38px',
+                                                                        background: 'rgba(255, 255, 255, 0.03)',
+                                                                        borderColor: 'rgba(255, 255, 255, 0.08)',
+                                                                        color: 'rgba(255, 255, 255, 0.75)',
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        justifyContent: 'center',
+                                                                        transition: 'all 0.3s ease'
+                                                                    }}
+                                                                    disabled={!whatsappSettings.enabled}
+                                                                    onClick={() => setWhatsappSettings(s => ({ ...s, time: preset.time }))}
+                                                                >
+                                                                    {preset.label}
+                                                                </Button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* Custom Select or precise picker */}
+                                                <div style={{ 
+                                                    display: 'flex', 
+                                                    flexWrap: 'wrap',
+                                                    gap: '16px', 
+                                                    alignItems: 'center', 
+                                                    background: 'rgba(255, 255, 255, 0.01)', 
+                                                    padding: '12px 16px',
+                                                    borderRadius: '10px',
+                                                    border: '1px dashed rgba(255, 255, 255, 0.06)'
+                                                }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Dropdown Selection:</span>
+                                                        <Select
+                                                            value={whatsappSettings.time}
+                                                            onChange={(val) => setWhatsappSettings(s => ({ ...s, time: val }))}
+                                                            style={{ width: '130px' }}
+                                                            disabled={!whatsappSettings.enabled}
+                                                            dropdownStyle={{ background: '#1f1f1f' }}
+                                                        >
+                                                            {Array.from({ length: 24 }).flatMap((_, hour) => {
+                                                                const hStr = hour.toString().padStart(2, '0');
+                                                                return [
+                                                                    <Select.Option key={`${hStr}:00`} value={`${hStr}:00`}>{`${hStr}:00`}</Select.Option>,
+                                                                    <Select.Option key={`${hStr}:30`} value={`${hStr}:30`}>{`${hStr}:30`}</Select.Option>
+                                                                ];
+                                                            })}
+                                                        </Select>
+                                                    </div>
+                                                    
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Precise Picker:</span>
+                                                        <TimePicker
+                                                            format="HH:mm"
+                                                            placeholder="Custom..."
+                                                            value={whatsappSettings.time ? dayjs(whatsappSettings.time, 'HH:mm') : null}
+                                                            onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
+                                                            style={{ width: '120px' }}
+                                                            disabled={!whatsappSettings.enabled}
+                                                        />
+                                                    </div>
+
+                                                    <div style={{ marginLeft: 'auto' }}>
+                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>
+                                                            Selected Time: <strong style={{ color: '#25D366', fontSize: '14px' }}>{whatsappSettings.time || 'Not set'}</strong>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </Form.Item>
                                     </Col>
                                 </Row>
