@@ -26,12 +26,12 @@ import {
     FolderAddOutlined,
     AppstoreOutlined,
     PictureOutlined,
-    ClearOutlined,
     ExclamationCircleOutlined,
     BarChartOutlined,
+    WhatsAppOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -79,6 +79,16 @@ function Settings() {
     });
     const [updatingPortalAuth, setUpdatingPortalAuth] = useState(false);
 
+    // WhatsApp Reports state
+    const [whatsappSettings, setWhatsappSettings] = useState({
+        enabled: false,
+        phone: '',
+        apikey: '',
+        time: '18:00'
+    });
+    const [savingWhatsapp, setSavingWhatsapp] = useState(false);
+    const [testingWhatsapp, setTestingWhatsapp] = useState(false);
+
     // Default categories for dropdown
     const defaultCategories = [
         { key: 'printing', name: 'Printing', icon: 'printer', color: '#FFB703' },
@@ -98,17 +108,19 @@ function Settings() {
     const loadData = async () => {
         setLoadingServices(true);
         try {
-            const [servicesData, computersData, settingsData, categoriesData, portalAuthData] = await Promise.all([
+            const [servicesData, computersData, settingsData, categoriesData, portalAuthData, whatsappData] = await Promise.all([
                 getServices(),
                 getComputers(),
                 getSettings().catch(() => ({})),
                 getServiceCategories().catch(() => []),
-                getPortalAuthSettings().catch(() => ({ otpEnabled: true, sessionDurationHours: 24 }))
+                getPortalAuthSettings().catch(() => ({ otpEnabled: true, sessionDurationHours: 24 })),
+                getWhatsAppReportSettings().catch(() => ({ enabled: false, phone: '', apikey: '', time: '18:00' }))
             ]);
             setServices(servicesData || []);
             setComputers(computersData || []);
             setCategories(categoriesData || []);
             setPortalAuthSettings(portalAuthData);
+            if (whatsappData) setWhatsappSettings(whatsappData);
 
             // Load saved settings
             if (settingsData.generalSettings) {
@@ -195,6 +207,30 @@ function Settings() {
             message.error(error.response?.data?.error || 'Failed to update portal auth settings');
         } finally {
             setUpdatingPortalAuth(false);
+        }
+    };
+
+    const handleSaveWhatsappSettings = async () => {
+        setSavingWhatsapp(true);
+        try {
+            await saveWhatsAppReportSettings(whatsappSettings);
+            message.success('WhatsApp report settings saved successfully');
+        } catch (error) {
+            message.error('Failed to save WhatsApp report settings');
+        } finally {
+            setSavingWhatsapp(false);
+        }
+    };
+
+    const handleTestWhatsappReport = async () => {
+        setTestingWhatsapp(true);
+        try {
+            await sendTestWhatsAppReport();
+            message.success('Test report triggered successfully');
+        } catch (error) {
+            message.error('Failed to trigger test report');
+        } finally {
+            setTestingWhatsapp(false);
         }
     };
 
@@ -787,6 +823,129 @@ function Settings() {
                         </div>
                     </div>
                 </Card>
+            ),
+        },
+        {
+            key: 'whatsapp',
+            label: (
+                <Space>
+                    <WhatsAppOutlined style={{ color: '#25D366' }} />
+                    <span>WhatsApp Reports</span>
+                </Space>
+            ),
+            children: (
+                <Row gutter={24}>
+                    <Col xs={24} lg={16}>
+                        <Card
+                            title={
+                                <Space>
+                                    <WhatsAppOutlined style={{ color: '#25D366' }} />
+                                    <span>CallMeBot WhatsApp Integration</span>
+                                </Space>
+                            }
+                        >
+                            <div style={{
+                                padding: '16px 24px',
+                                background: 'rgba(37, 211, 102, 0.05)',
+                                border: '1px solid rgba(37, 211, 102, 0.2)',
+                                borderRadius: 12,
+                                marginBottom: 24
+                            }}>
+                                <Title level={5} style={{ color: '#25D366', marginTop: 0 }}>Automated Daily Performance Reports</Title>
+                                <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+                                    Receive automated daily summaries of your business performance directly to your WhatsApp. The report includes online computer status, sales revenue, printing & photocopy data, and session statistics.
+                                </Text>
+                                <Text type="secondary" style={{ fontSize: 13 }}>
+                                    <strong>How to get your API Key:</strong><br/>
+                                    1. Add the phone number <strong>+34 693 05 47 43</strong> to your Phone Contacts. (Name it it as CallMeBot)<br/>
+                                    2. Send the following message "I allow callmebot to send me messages" to the new Contact created (using WhatsApp).<br/>
+                                    3. Wait until you receive the message "API Activated for your phone number. Your APIKEY is 123123".
+                                </Text>
+                            </div>
+
+                            <Form layout="vertical">
+                                <Row gutter={16}>
+                                    <Col span={24}>
+                                        <div className="settings-item" style={{
+                                            padding: '16px',
+                                            borderRadius: '12px',
+                                            border: '1px solid #303030',
+                                            marginBottom: '24px'
+                                        }}>
+                                            <div className="settings-label">
+                                                <strong>Enable Automated Reports</strong>
+                                                <span>Send daily summary reports at the configured time</span>
+                                            </div>
+                                            <Switch
+                                                checked={whatsappSettings.enabled}
+                                                onChange={(val) => setWhatsappSettings(s => ({ ...s, enabled: val }))}
+                                            />
+                                        </div>
+                                    </Col>
+                                </Row>
+
+                                <Row gutter={16}>
+                                    <Col xs={24} sm={12}>
+                                        <Form.Item label="WhatsApp Phone Number">
+                                            <Input 
+                                                placeholder="e.g. 254794436994" 
+                                                value={whatsappSettings.phone}
+                                                onChange={(e) => setWhatsappSettings(s => ({ ...s, phone: e.target.value }))}
+                                                prefix={<WhatsAppOutlined />}
+                                                disabled={!whatsappSettings.enabled}
+                                            />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} sm={12}>
+                                        <Form.Item label="CallMeBot API Key">
+                                            <Input 
+                                                placeholder="e.g. 4956433" 
+                                                value={whatsappSettings.apikey}
+                                                onChange={(e) => setWhatsappSettings(s => ({ ...s, apikey: e.target.value }))}
+                                                disabled={!whatsappSettings.enabled}
+                                            />
+                                        </Form.Item>
+                                    </Col>
+                                </Row>
+
+                                <Row gutter={16}>
+                                    <Col xs={24} sm={12}>
+                                        <Form.Item label="Daily Report Time">
+                                            <TimePicker
+                                                format="HH:mm"
+                                                value={dayjs(whatsappSettings.time, 'HH:mm')}
+                                                onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
+                                                style={{ width: '100%' }}
+                                                disabled={!whatsappSettings.enabled}
+                                            />
+                                        </Form.Item>
+                                    </Col>
+                                </Row>
+
+                                <Divider />
+
+                                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                    <Button
+                                        onClick={handleTestWhatsappReport}
+                                        loading={testingWhatsapp}
+                                        disabled={!whatsappSettings.phone || !whatsappSettings.apikey}
+                                    >
+                                        Send Test Report Now
+                                    </Button>
+                                    <Button
+                                        type="primary"
+                                        style={{ background: '#25D366', borderColor: '#25D366' }}
+                                        icon={<SaveOutlined />}
+                                        onClick={handleSaveWhatsappSettings}
+                                        loading={savingWhatsapp}
+                                    >
+                                        Save WhatsApp Settings
+                                    </Button>
+                                </Space>
+                            </Form>
+                        </Card>
+                    </Col>
+                </Row>
             ),
         },
         {

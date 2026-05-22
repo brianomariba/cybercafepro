@@ -14,6 +14,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
+const cron = require('node-cron');
+const https = require('https');
 
 // Global pricing configuration
 let pricing = {
@@ -41,6 +43,9 @@ mongoose.connect(MONGODB_URI)
                     .catch(err => console.error('Failed to init pricing:', err));
             }
         }).catch(err => console.error('Failed to load pricing:', err));
+        
+        // Schedule WhatsApp reports after DB connects
+        scheduleWhatsAppReport();
     })
     .catch(err => {
         console.error('❌ MongoDB connection error:', err);
@@ -82,6 +87,149 @@ const io = new Server(server, {
 
 // Store connected agent sockets
 const agentSockets = new Map(); // clientId -> socketId
+
+// WhatsApp Report Cron Job
+let whatsappCronJob = null;
+
+async function sendWhatsAppReport() {
+    try {
+        const settingsDoc = await Settings.findOne({ key: 'whatsapp_report' });
+        if (!settingsDoc || !settingsDoc.value || !settingsDoc.value.enabled) return;
+        
+        const { phone, apikey } = settingsDoc.value;
+        if (!phone || !apikey) return;
+
+        // Fetch data
+        const computerDocs = await Computer.find();
+        const now = new Date();
+        const allComputers = computerDocs.map(c => ({
+            ...c.toObject(),
+            isOnline: (now - new Date(c.lastSeen)) < 45000
+        }));
+        
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        const [todaySessions, todayPrintJobs, todayTxns, todayReadings] = await Promise.all([
+            Session.find({ receivedAt: { $gte: todayStart } }),
+            Log.find({ type: 'print', receivedAt: { $gte: todayStart } }),
+            Transaction.find({ createdAt: { $gte: todayStart } }),
+            PageCounterReading.find({ recordedAt: { $gte: todayStart } }).sort({ recordedAt: 1 })
+        ]);
+        
+        const todaySessionRevenue = todaySessions
+            .filter(s => s.type === 'LOGOUT' && s.charges)
+            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+            
+        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+            const data = j.data || {};
+            const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
+            const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
+            return sum + (sheets * rate);
+        }, 0);
+        
+        // Calculate exact photocopy revenue from page counters
+        let todayPhotocopyRevenue = 0;
+        let totalPhotocopies = 0;
+        const printerReadings = {};
+        todayReadings.forEach(r => {
+            if (!printerReadings[r.printerName]) printerReadings[r.printerName] = [];
+            printerReadings[r.printerName].push(r);
+        });
+
+        for (const pName in printerReadings) {
+            const readings = printerReadings[pName];
+            if (readings.length >= 2) {
+                const first = readings[0];
+                const last = readings[readings.length - 1];
+                
+                let diffBW = (last.withBorderBW || 0) - (first.withBorderBW || 0);
+                let diffColor = (last.withBorderColor || 0) - (first.withBorderColor || 0);
+                let diffTotal = last.counterValue - first.counterValue;
+                
+                const pLogs = todayPrintJobs.filter(j => j.hostname === last.hostname || !j.hostname);
+                let pBW = 0, pColor = 0;
+                pLogs.forEach(j => {
+                    const data = j.data || {};
+                    const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
+                    if (data.printType === 'color') pColor += sheets;
+                    else pBW += sheets;
+                });
+                
+                let photoBW = Math.max(0, diffBW - pBW);
+                let photoColor = Math.max(0, diffColor - pColor);
+                
+                if (diffBW === 0 && diffColor === 0) {
+                    let photoTotal = Math.max(0, diffTotal - (pBW + pColor));
+                    photoBW = photoTotal;
+                }
+                
+                totalPhotocopies += (photoBW + photoColor);
+                todayPhotocopyRevenue += (photoBW * (pricing.photocopyBW || 8)) + (photoColor * (pricing.photocopyColor || 40));
+            }
+        }
+        
+        const todayTaskRevenue = todayTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
+        const mpesaRevenue = todayTxns.filter(t => t.paymentMethod === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0);
+        const cashRevenue = todayTaskRevenue - mpesaRevenue;
+        
+        const totalRevenue = todaySessionRevenue + todayPrintRevenue + todayTaskRevenue + todayPhotocopyRevenue;
+        const onlineCount = allComputers.filter(c => c.isOnline).length;
+        const totalSessions = todaySessions.filter(s => s.type === 'LOGIN').length;
+        
+        // Format report
+        let report = `📊 *HawkNine Daily Report*\n`;
+        report += `📅 Date: ${now.toLocaleDateString()}\n\n`;
+        report += `💻 *Computers Status*\n`;
+        report += `Online: ${onlineCount} / ${allComputers.length}\n\n`;
+        report += `💰 *Revenue Summary*\n`;
+        report += `Total Revenue: KES ${totalRevenue.toLocaleString()}\n`;
+        report += `• Sessions: KES ${todaySessionRevenue.toLocaleString()}\n`;
+        report += `• Printing: KES ${todayPrintRevenue.toLocaleString()}\n`;
+        report += `• Photocopy: KES ${todayPhotocopyRevenue.toLocaleString()}\n`;
+        report += `• Tasks/Sales: KES ${todayTaskRevenue.toLocaleString()} (Cash: KES ${cashRevenue.toLocaleString()}, M-Pesa: KES ${mpesaRevenue.toLocaleString()})\n\n`;
+        report += `📈 *Usage Stats*\n`;
+        report += `Total Sessions: ${totalSessions}\n`;
+        report += `Print Jobs: ${todayPrintJobs.length}\n`;
+        report += `Photocopies: ${totalPhotocopies}\n`;
+        
+        const textEncoded = encodeURIComponent(report);
+        const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${textEncoded}&apikey=${apikey}`;
+        
+        https.get(url, (res) => {
+            let data = '';
+            res.on('data', (chunk) => data += chunk);
+            res.on('end', () => {
+                console.log('[WHATSAPP] Report sent successfully:', data);
+            });
+        }).on('error', (err) => {
+            console.error('[WHATSAPP] Error sending report:', err.message);
+        });
+        
+    } catch (err) {
+        console.error('[WHATSAPP] Failed to generate/send report:', err);
+    }
+}
+
+function scheduleWhatsAppReport() {
+    if (whatsappCronJob) {
+        whatsappCronJob.stop();
+        whatsappCronJob = null;
+    }
+    
+    Settings.findOne({ key: 'whatsapp_report' }).then(doc => {
+        if (doc && doc.value && doc.value.enabled && doc.value.time) {
+            const time = doc.value.time; // HH:mm format
+            const [hours, minutes] = time.split(':');
+            
+            const cronTime = `${minutes} ${hours} * * *`;
+            whatsappCronJob = cron.schedule(cronTime, () => {
+                console.log('[WHATSAPP] Running scheduled report...');
+                sendWhatsAppReport();
+            });
+            console.log(`[WHATSAPP] Scheduled report for ${time} daily`);
+        }
+    }).catch(err => console.error('[WHATSAPP] Error scheduling report:', err));
+}
 
 // ==================== SOCKET.IO HANDLERS ====================
 io.on('connection', (socket) => {
@@ -1625,6 +1773,51 @@ app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) 
 
 
 // ==================== SETTINGS API ENDPOINTS ====================
+
+/**
+ * GET /api/v1/admin/whatsapp-report-settings
+ * Get WhatsApp report settings
+ */
+app.get('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const doc = await Settings.findOne({ key: 'whatsapp_report' });
+        res.json(doc ? doc.value : { enabled: false, phone: '', apikey: '', time: '18:00' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get WhatsApp settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/whatsapp-report-settings
+ * Save WhatsApp report settings
+ */
+app.post('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = req.body;
+        await Settings.findOneAndUpdate(
+            { key: 'whatsapp_report' },
+            { value: settings, updatedAt: new Date() },
+            { upsert: true, new: true }
+        );
+        scheduleWhatsAppReport(); // Reschedule with new time/enabled state
+        res.json({ success: true, message: 'Settings saved' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save WhatsApp settings' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/whatsapp-report/test
+ * Trigger test WhatsApp report immediately
+ */
+app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res) => {
+    try {
+        await sendWhatsAppReport();
+        res.json({ success: true, message: 'Test report triggered' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to trigger test report' });
+    }
+});
 
 /**
  * GET /api/v1/admin/settings

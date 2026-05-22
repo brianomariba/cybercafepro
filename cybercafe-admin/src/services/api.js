@@ -575,6 +575,11 @@ export const downloadGuideUrl = (id) => `${API_BASE_URL}/guides/${id}/download`;
 export const getSettings = async () => (await api.get('/admin/settings')).data;
 export const saveSettings = async (settings) => (await api.post('/admin/settings', { settings })).data;
 
+// ==================== WHATSAPP REPORTS ====================
+export const getWhatsAppReportSettings = async () => (await api.get('/admin/whatsapp-report-settings')).data;
+export const saveWhatsAppReportSettings = async (settings) => (await api.post('/admin/whatsapp-report-settings', settings)).data;
+export const sendTestWhatsAppReport = async () => (await api.post('/admin/whatsapp-report/test')).data;
+
 // ==================== BLOCKLIST ====================
 export const getBlocklist = async () => (await api.get('/admin/blocklist')).data;
 export const addToBlocklist = async (url, reason) => (await api.post('/admin/blocklist', { url, reason })).data;
@@ -736,6 +741,9 @@ export default {
     // Settings & Security
     getSettings,
     saveSettings,
+    getWhatsAppReportSettings,
+    saveWhatsAppReportSettings,
+    sendTestWhatsAppReport,
     getBlocklist,
     addToBlocklist,
     removeFromBlocklist,
