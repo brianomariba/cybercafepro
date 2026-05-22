@@ -895,6 +895,186 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
 }
 // ==================== END PHOTOCOPY AUDIT TAB ====================
 
+// ==================== CANCELLED JOBS TAB ====================
+function CancelledJobsAudit({ printers, refreshTrigger }) {
+    const [loading, setLoading] = useState(false);
+    const [dateRange, setDateRange] = useState([dayjs().startOf('day'), dayjs().endOf('day')]);
+    const [stats, setStats] = useState({ totalPrints: 0, totalHardware: 0, cancelledJobs: 0 });
+    const [intervals, setIntervals] = useState([]);
+
+    const allPrinterNames = useMemo(() => {
+        const names = new Set();
+        (printers || []).forEach(client => {
+            (client.printers || []).forEach(p => {
+                if (p.name) names.add(p.name);
+            });
+        });
+        return [...names].sort();
+    }, [printers]);
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            let totalPrints = 0;
+            let totalHardware = 0;
+            let cancelledJobs = 0;
+            let allIntervals = [];
+
+            for (const pName of allPrinterNames) {
+                const res = await getPhotocopyData({ printerName: pName });
+                if (res && res.intervals) {
+                    const filtered = res.intervals.filter(interval => {
+                        if (!dateRange || !dateRange[0] || !dateRange[1]) return true;
+                        const start = dayjs(interval.startReading.recordedAt);
+                        const end = dayjs(interval.endReading.recordedAt);
+                        return end.isAfter(dateRange[0].startOf('day')) && start.isBefore(dateRange[1].endOf('day'));
+                    });
+                    
+                    filtered.forEach(interval => {
+                        const diff = (interval.printPages || 0) - (interval.counterDiff || 0);
+                        const cancelled = diff > 0 ? diff : 0;
+                        
+                        totalPrints += (interval.printPages || 0);
+                        totalHardware += (interval.counterDiff || 0);
+                        cancelledJobs += cancelled;
+                        
+                        allIntervals.push({
+                            ...interval,
+                            printerName: pName,
+                            cancelled
+                        });
+                    });
+                }
+            }
+            
+            const cancelledIntervals = allIntervals.filter(i => i.cancelled > 0).sort((a,b) => new Date(b.endReading.recordedAt) - new Date(a.endReading.recordedAt));
+            
+            setStats({ totalPrints, totalHardware, cancelledJobs });
+            setIntervals(cancelledIntervals);
+
+        } catch (e) {
+            console.error('Audit fetch error', e);
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        fetchData();
+    }, [allPrinterNames, dateRange, refreshTrigger]);
+
+    const columns = [
+        {
+            title: 'Period', key: 'period', width: 220,
+            render: (_, interval) => (
+                <div>
+                    <Text style={{ fontSize: 12 }}>{dayjs(interval.startReading.recordedAt).format('MMM D, HH:mm')}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}> → </Text>
+                    <Text style={{ fontSize: 12 }}>{dayjs(interval.endReading.recordedAt).format('MMM D, HH:mm')}</Text>
+                </div>
+            )
+        },
+        { title: 'Printer', dataIndex: 'printerName', key: 'printerName' },
+        { 
+            title: 'Tracked Prints (Spooler)', dataIndex: 'printPages', key: 'printPages',
+            render: v => <Text style={{ color: '#00d4ff', fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Text>
+        },
+        { 
+            title: 'Hardware Counter (Actual)', dataIndex: 'counterDiff', key: 'counterDiff',
+            render: v => <Text style={{ color: '#b0b0c0', fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Text>
+        },
+        { 
+            title: 'Cancelled Jobs', dataIndex: 'cancelled', key: 'cancelled',
+            render: v => <Tag color="error" style={{ fontSize: 14, fontWeight: 700 }}>{(v || 0).toLocaleString()} sheets</Tag>
+        }
+    ];
+
+    return (
+        <div>
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                <Text type="secondary">Evaluation Period:</Text>
+                <RangePicker
+                    value={dateRange}
+                    onChange={setDateRange}
+                    presets={[
+                        { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                        { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] },
+                        { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
+                        { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                    ]}
+                />
+                <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Calculate Cancelled</Button>
+            </div>
+
+            <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
+                        <Statistic
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Total Tracked Prints (Spooler)</span>}
+                            value={stats.totalPrints}
+                            prefix={<FileTextOutlined style={{ color: '#00B4D8' }} />}
+                            valueStyle={{ color: '#00B4D8' }}
+                        />
+                    </Card>
+                </Col>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: '4px solid #b0b0c0', height: '100%', background: 'rgba(176,176,192,0.03)' }}>
+                        <Statistic
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Actual Hardware Prints (Counter)</span>}
+                            value={stats.totalHardware}
+                            prefix={<PrinterOutlined style={{ color: '#b0b0c0' }} />}
+                            valueStyle={{ color: '#b0b0c0' }}
+                        />
+                    </Card>
+                </Col>
+                <Col span={8}>
+                    <Card size="small" style={{ borderLeft: '4px solid #ff4d4f', height: '100%', background: 'rgba(255,77,79,0.08)' }}>
+                        <Statistic
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Failed/Cancelled Prints</span>}
+                            value={stats.cancelledJobs}
+                            prefix={<ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />}
+                            valueStyle={{ color: '#ff4d4f', fontWeight: 'bold' }}
+                        />
+                    </Card>
+                </Col>
+            </Row>
+
+            <Card 
+                size="small" 
+                title={<Space><ExclamationCircleOutlined style={{ color: '#ff4d4f' }} /><span>Intervals with Cancelled Jobs</span></Space>}
+                style={{ background: 'rgba(255,77,79,0.03)', border: '1px solid rgba(255,77,79,0.12)' }}
+            >
+                {intervals.length === 0 ? (
+                    <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description={<span style={{ color: '#52c41a' }}>Perfect accuracy! No cancelled jobs in this period.</span>}
+                    />
+                ) : (
+                    <Table 
+                        columns={columns} 
+                        dataSource={intervals} 
+                        rowKey={(r, idx) => `c-${idx}`}
+                        pagination={{ pageSize: 15 }} 
+                        size="small"
+                    />
+                )}
+            </Card>
+            
+            <Card style={{ marginTop: 24, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <Title level={5} style={{ color: '#b0b0c0', margin: '0 0 8px' }}>
+                    <ExclamationCircleOutlined style={{ marginRight: 8 }} />
+                    How Cancelled Jobs Work
+                </Title>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                    This tab calculates jobs that were assigned by the computer system (Spooler + UI) but <strong>did not physically exit the printer</strong>. 
+                    <br />This happens when a user directly cancels a job from the printer physical display mid-printing, or a paper jam aborts the job <em>after</em> the computer sent it successfully. 
+                    Calculated automatically by finding periods where <strong>Tracked Spooler Prints &gt; Physical Hardware Sheet Δ</strong>.
+                </Text>
+            </Card>
+        </div>
+    );
+}
+// ==================== END CANCELLED JOBS TAB ====================
+
 function PrintManager() {
     const [printJobs, setPrintJobs] = useState([]);
     const [printers, setPrinters] = useState([]);
@@ -1554,6 +1734,11 @@ function PrintManager() {
                         key: 'audit',
                         label: <span><FileTextOutlined style={{ marginRight: 6 }} /> Comparison & Audit</span>,
                         children: <PhotocopyAudit printers={printers} refreshTrigger={photocopyRefresh} />
+                    },
+                    {
+                        key: 'cancelled',
+                        label: <span style={{ color: '#ff4d4f' }}><ExclamationCircleOutlined style={{ marginRight: 6 }} /> Cancelled Jobs</span>,
+                        children: <CancelledJobsAudit printers={printers} refreshTrigger={photocopyRefresh} />
                     }
                 ]}
             />

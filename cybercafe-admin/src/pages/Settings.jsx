@@ -29,6 +29,7 @@ import {
     ExclamationCircleOutlined,
     BarChartOutlined,
     WhatsAppOutlined,
+    ClearOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport } from '../services/api';
