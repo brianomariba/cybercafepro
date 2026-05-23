@@ -2148,12 +2148,12 @@ async function startDataCollection() {
             printDialogCache.set(key, {
                 copies: data.copies,
                 document: data.document || '',
-                color: data.color || '',
-                pages: data.pages || '',
-                paperSize: data.paperSize || '',
-                mediaType: data.mediaType || '',
+                color: data.color || (existing ? existing.color : ''),
+                pages: data.pages || (existing ? existing.pages : ''),
+                paperSize: data.paperSize || (existing ? existing.paperSize : ''),
+                mediaType: data.mediaType || (existing ? existing.mediaType : ''),
                 orientation: data.orientation || '',
-                duplex: data.duplex || '',
+                duplex: data.duplex || (existing ? existing.duplex : ''),
                 totalSheets: data.totalSheets || 0,
                 finalized: data.finalized || false,
                 timestamp: Date.now(),
@@ -2212,8 +2212,8 @@ async function startDataCollection() {
     // Buffer to hold jobs briefly for grouping before sending
     let pendingJobBuffer = [];  // { job, cached, receivedAt }
     let lastJobBufferAddTime = 0;
-    const JOB_GROUP_WINDOW_MS = 90000;  // 90s - group identical jobs within this window
-    const JOB_GROUP_FLUSH_DELAY_MS = 10000; // Wait 10s after last job before flushing group
+    const JOB_GROUP_WINDOW_MS = 60000;  // 5s - group identical jobs within this window (software bulk copies only)
+    const JOB_GROUP_FLUSH_DELAY_MS = 2000; // Wait 2s after last job before flushing group
 
     /**
      * Group buffered jobs by (printer + document + size) within JOB_GROUP_WINDOW_MS.
@@ -2266,7 +2266,7 @@ async function startDataCollection() {
                 if (timeDiff <= JOB_GROUP_WINDOW_MS &&
                     entryPrinter === otherPrinter &&
                     entryPages === otherPages &&
-                    (entryDoc === otherDoc || sizeDiff < 0.05) &&
+                    entryDoc === otherDoc &&
                     sizeDiff <= 0.20) {
                     group.push(other);
                     used.add(j);
@@ -2298,6 +2298,10 @@ async function startDataCollection() {
      * Process a single grouped job - normalize, compute billing, send to server.
      */
     async function processGroupedJob(grouped) {
+        // Wait 1 second to allow the background UI monitor to detect the print dialog closing
+        // and emit its finalized JSON state before we read from the cache.
+        await new Promise(r => setTimeout(r, 1000));
+
         const { job, cached, groupedCopies, groupedJobIds, isGrouped } = grouped;
 
         let totalPages = Math.max(
@@ -2322,12 +2326,27 @@ async function startDataCollection() {
         const dialogData = printDialogCache.get(printerKey);
         let dialogColorOverride = '';
         let dialogDataValid = false; // Track if dialog data is usable
+        
+        try {
+            const fs = require('fs');
+            const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
+            const debugLine = `[${new Date().toISOString()}] Job: ${job.document} | Printer: ${printerKey} | Copies: ${copies}. DialogCache: ` + 
+                (dialogData ? JSON.stringify(dialogData) : 'NULL') + '\n';
+            fs.appendFileSync(debugLogPath, debugLine);
+        } catch (err) {}
+
         if (dialogData && dialogData.finalized) {
             const age = Date.now() - dialogData.timestamp;
-            // Use dialog-captured data if finalized within last 2 minutes
-            if (age < 120000) {
+            // Use dialog-captured data if finalized within last 5 minutes
+            if (age < 300000) {
                 dialogDataValid = true;
-                if (dialogData.copies > copies) {
+                // Use >= so that dialog copies=2 correctly overrides a detected copies=2 from DEVMODE/grouping
+                if (dialogData.copies >= copies) {
+                    try {
+                        const fs = require('fs');
+                        const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
+                        fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (finalized). Copies becomes ${dialogData.copies}\n`);
+                    } catch (err) {}
                     console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (finalized ' + Math.round(age/1000) + 's ago)');
                     copies = dialogData.copies;
                     dataSource += '+ui_dialog';
@@ -2342,16 +2361,39 @@ async function startDataCollection() {
                 if (dialogData.color) {
                     dialogColorOverride = dialogData.color;
                 }
-                // Clear the cache entry after use to prevent re-use on next job
-                printDialogCache.delete(printerKey);
+                // Do NOT delete the cache instantly because EPSON jobs might come in separate Event 307 entries,
+                // and we need the subsequent copies to also grab this data!
             } else {
+                try {
+                    const fs = require('fs');
+                    const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
+                    fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override FAILED: STALE AGE: ${age}ms\n`);
+                } catch (err) {}
                 // Stale finalized data - expired, discard it
                 printDialogCache.delete(printerKey);
             }
         } else if (dialogData && !dialogData.finalized) {
-            // Dialog is still open or data not finalized - don't use yet
-            // The user might still be changing settings
-            console.log('[PRINT] Dialog data exists but not yet finalized (dialog may still be open) - skipping');
+            // FALLBACK: Race condition fix — Event 307 fired before the dialog monitor
+            // had a chance to emit final=1. Trust recently captured (within 300s) dialog values.
+            const age = Date.now() - dialogData.timestamp;
+            if (age < 300000 && dialogData.copies >= copies) {
+                try {
+                    const fs = require('fs');
+                    const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
+                    fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (recent non-finalized, ${age}ms). Copies ${copies} -> ${dialogData.copies}\n`);
+                } catch (err) {}
+                console.log('[PRINT] UI Dialog fallback (non-finalized, ' + Math.round(age/1000) + 's old): copies ' + copies + ' -> ' + dialogData.copies);
+                copies = dialogData.copies;
+                dataSource += '+ui_dialog_recent';
+                dialogDataValid = true;
+                if (dialogData.color) dialogColorOverride = dialogData.color;
+            } else {
+                try {
+                    const fs = require('fs');
+                    const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
+                    fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SKIPPED (not-finalized): age=${age}ms dialogCopies=${dialogData.copies} copies=${copies}\n`);
+                } catch (err) {}
+            }
         }
 
         // Aggressive re-query for suspicious page counts

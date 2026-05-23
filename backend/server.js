@@ -98,16 +98,10 @@ function formatWhatsAppPhone(phone) {
     // If it starts with 0 and is 10 digits (typical Kenyan format, e.g. 0794436994)
     if (formatted.startsWith('0') && formatted.length === 10) {
         formatted = '+254' + formatted.substring(1);
-    }
-    
-    // If it doesn't start with '+' or '00'
-    if (!formatted.startsWith('+') && !formatted.startsWith('00')) {
-        formatted = '+' + formatted;
-    }
-    
-    // If it starts with '00', replace it with '+'
-    if (formatted.startsWith('00')) {
+    } else if (formatted.startsWith('00')) {
         formatted = '+' + formatted.substring(2);
+    } else if (!formatted.startsWith('+')) {
+        formatted = '+' + formatted;
     }
     
     return formatted;

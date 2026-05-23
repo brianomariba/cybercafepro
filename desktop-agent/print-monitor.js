@@ -26,14 +26,21 @@ const PAGE_COUNTER_CACHE_TTL = 30000; // 30 seconds
  * Format: "PrinterName-JobId" (same across all sources)
  */
 function generatePrintJobKey(printerName, jobId, documentName, timestamp) {
-    // Primary key: printer + job ID (always unique per printer per job)
+    // Daily date bucket to prevent job ID recycling collisions
+    // Windows printer job IDs are sequential and RECYCLE (1,2,3...1,2,3).
+    // Without a date, "EPSON-2" from last week collides with today's job ID 2.
+    const ts = timestamp ? new Date(timestamp) : new Date();
+    const dateBucket = ts.getFullYear().toString() +
+        String(ts.getMonth() + 1).padStart(2, '0') +
+        String(ts.getDate()).padStart(2, '0');
+
+    // Primary key: printer + job ID + date (unique per printer per day)
     if (printerName && jobId && jobId !== 0 && jobId !== '0') {
-        return `${printerName}-${jobId}`;
+        return `${printerName}-${jobId}-${dateBucket}`;
     }
     // Fallback: printer + document name + rough timestamp (within 60s window)
     if (printerName && documentName) {
-        const ts = timestamp ? new Date(timestamp).getTime() : Date.now();
-        const timeBucket = Math.floor(ts / 60000); // 1-minute buckets
+        const timeBucket = Math.floor(ts.getTime() / 60000); // 1-minute buckets
         return `${printerName}-${documentName}-${timeBucket}`;
     }
     return null;
@@ -3017,6 +3024,19 @@ public class DlgReader {
 \$dialogWasOpen = \$false
 \$lastResult = \$null
 
+# CACHED element references for fast polling (avoid expensive tree re-scans)
+\$cachedCopiesEl = \$null
+\$cachedPrinterEl = \$null
+\$cachedDuplexEl = \$null
+\$cachedPaperEl = \$null
+\$cachedOrientEl = \$null
+\$cachedColorEl = \$null
+\$cachedPagesEl = \$null
+\$cachedAppWin = \$null
+\$cachedPid = 0
+\$lastFullScan = [DateTime]::MinValue
+\$FULL_SCAN_INTERVAL_MS = 2000
+
 function Find-UIValue(\$parent, \$name) {
     try {
         \$cond = New-Object System.Windows.Automation.PropertyCondition(
@@ -3025,73 +3045,10 @@ function Find-UIValue(\$parent, \$name) {
         foreach (\$el in \$els) {
             \$ct = \$el.Current.ControlType.ProgrammaticName
             if (\$ct -eq 'ControlType.Text') { continue }
-            # 1. Try ValuePattern (works for text inputs, web controls)
             try {
                 \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                \$val = \$vp.Current.Value
-                if (\$val -and \$val -ne '') { return \$val }
+                return \$vp.Current.Value
             } catch {}
-            # 2. Try SelectionPattern (works for ComboBoxes, ListBoxes - EPSON Paper Type dropdown)
-            try {
-                \$sp = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-                \$sel = \$sp.Current.GetSelection()
-                if (\$sel -and \$sel.Length -gt 0) {
-                    return \$sel[0].Current.Name
-                }
-            } catch {}
-            # 3. For ComboBox: find selected ListItem inside
-            if (\$ct -eq 'ControlType.ComboBox') {
-                try {
-                    \$liCond = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                        [System.Windows.Automation.ControlType]::ListItem)
-                    \$items = \$el.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$liCond)
-                    foreach (\$item in \$items) {
-                        try {
-                            \$si = \$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                            if (\$si.Current.IsSelected) {
-                                return \$item.Current.Name
-                            }
-                        } catch {}
-                    }
-                } catch {}
-                # 3b. Fallback: first child text element often shows the selected value
-                try {
-                    \$firstChild = \$el.FindFirst([System.Windows.Automation.TreeScope]::Children,
-                        [System.Windows.Automation.Condition]::TrueCondition)
-                    if (\$firstChild -and \$firstChild.Current.Name -and \$firstChild.Current.Name -ne \$name -and \$firstChild.Current.Name -ne '') {
-                        return \$firstChild.Current.Name
-                    }
-                } catch {}
-            }
-        }
-    } catch {}
-    # 4. Fallback: search for label text followed by a sibling value control
-    try {
-        \$all = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.Condition]::TrueCondition)
-        \$foundLabel = \$false
-        foreach (\$el in \$all) {
-            if (\$el.Current.Name -eq \$name -and \$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Text') {
-                \$foundLabel = \$true
-                continue
-            }
-            if (\$foundLabel) {
-                \$sct = \$el.Current.ControlType.ProgrammaticName
-                if (\$sct -eq 'ControlType.ComboBox' -or \$sct -eq 'ControlType.List' -or \$sct -eq 'ControlType.Edit') {
-                    try {
-                        \$vp2 = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                        \$v2 = \$vp2.Current.Value
-                        if (\$v2 -and \$v2 -ne '') { return \$v2 }
-                    } catch {}
-                    try {
-                        \$sp2 = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-                        \$sel2 = \$sp2.Current.GetSelection()
-                        if (\$sel2 -and \$sel2.Length -gt 0) { return \$sel2[0].Current.Name }
-                    } catch {}
-                }
-                \$foundLabel = \$false
-            }
         }
     } catch {}
     return \$null
@@ -3111,9 +3068,54 @@ function Find-UIText(\$parent, \$pattern) {
     return \$null
 }
 
+function Read-CachedValue(\$el) {
+    if (-not \$el) { return "" }
+    try {
+        \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        \$val = \$vp.Current.Value
+        if (\$val -and \$val -ne '') { return \$val }
+    } catch {}
+    try {
+        \$rvp = \$el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+        \$val = [string](\$rvp.Current.Value)
+        if (\$val -and \$val -ne '' -and \$val -ne '0') { return \$val }
+    } catch {}
+    try {
+        \$nm = \$el.Current.Name
+        if (\$nm -match '^\d+\$') { return \$nm }
+    } catch {}
+    return ""
+}
+
 while (\$true) {
-    Start-Sleep -Milliseconds 700
+    # Dynamic sleep: 50ms when dialog is open (fast copies polling), 150ms otherwise
+    if (\$dialogWasOpen) { Start-Sleep -Milliseconds 50 } else { Start-Sleep -Milliseconds 150 }
     \$result = \$null
+    \$now = [DateTime]::Now
+    \$needFullScan = (\$now - \$lastFullScan).TotalMilliseconds -gt \$FULL_SCAN_INTERVAL_MS
+
+    # === FAST PATH: Re-read cached elements without tree scan ===
+    if (\$cachedCopiesEl -and -not \$needFullScan) {
+        try {
+            \$fastCopies = Read-CachedValue \$cachedCopiesEl
+            if (\$fastCopies -and \$fastCopies -ne '') {
+                \$copiesInt = [int]\$fastCopies
+                if (\$copiesInt -le 0) { \$copiesInt = 1 }
+                if (\$lastResult) {
+                    \$lastResult.c = \$copiesInt
+                    \$lastResult.t = (Get-Date -Format o)
+                }
+                continue  # Skip the expensive full scan
+            } else {
+                # Cached element went stale, force full scan
+                \$needFullScan = \$true
+                \$cachedCopiesEl = \$null
+            }
+        } catch {
+            \$needFullScan = \$true
+            \$cachedCopiesEl = \$null
+        }
+    }
 
     # === METHOD 1: Office Backstage (Word, Excel, PowerPoint) ===
     \$officeProcs = Get-Process WINWORD,EXCEL,POWERPNT -ErrorAction SilentlyContinue
@@ -3124,65 +3126,192 @@ while (\$true) {
             \$appWin = \$root.FindFirst([System.Windows.Automation.TreeScope]::Children, \$pidCond)
             if (-not \$appWin) { continue }
 
-            \$nameCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::NameProperty, "Copies:")
-            \$typeCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Edit)
-            \$andCond = New-Object System.Windows.Automation.AndCondition(\$nameCond, \$typeCond)
-            \$copiesEdit = \$appWin.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants, \$andCond)
+            \$tcEdit = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+            \$tcSpin = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Spinner)
+            \$tcCombo = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ComboBox)
+            \$condArr = [System.Windows.Automation.Condition[]]@(\$tcEdit, \$tcSpin, \$tcCombo)
+            \$orCond = New-Object System.Windows.Automation.OrCondition(\$condArr)
+
+            \$allControls = \$appWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$orCond)
+
+            \$copiesEdit = \$null
+            \$printerEl = \$null
+            \$duplexCombo = \$null
+            \$paperCombo = \$null
+            \$orientCombo = \$null
+            \$colorCombo = \$null
+            \$pagesCombo = \$null
+            
+            foreach (\$el in \$allControls) {
+                \$nm = \$el.Current.Name
+                \$ct = \$el.Current.ControlType.ProgrammaticName
+                
+                # Copies
+                if (-not \$copiesEdit -and \$nm -match '^(Copies|Copies:|Number of copies|Number of Copies:|Number of copies:)\$') {
+                    \$copiesEdit = \$el
+                }
+                # Printer
+                if (-not \$printerEl -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Which Printer|Printer|Active Printer|Printer:)\$') {
+                    \$printerEl = \$el
+                }
+                # Duplex
+                if (-not \$duplexCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Two-Sided Printing|Print on Both Sides|Duplex|2-Sided Printing)\$') {
+                    \$duplexCombo = \$el
+                }
+                # Paper/Page Size
+                if (-not \$paperCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Paper Size|Page Size|Document Size)\$') {
+                    \$paperCombo = \$el
+                }
+                # Orientation
+                if (-not \$orientCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Orientation|Page Orientation)\$') {
+                    \$orientCombo = \$el
+                }
+                # Color / Grayscale
+                if (-not \$colorCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Color|Color Mode|Output Color|Colour|Color/Grayscale)\$') {
+                    \$colorCombo = \$el
+                }
+                # Pages to print
+                if (-not \$pagesCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Print All Pages|Pages|Which pages|Pages:)\$') {
+                    \$pagesCombo = \$el
+                }
+            }
+            
+            # Fallback for plain number named edits (copies)
+            if (-not \$copiesEdit) {
+                foreach (\$el in \$allControls) {
+                    if (\$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and \$el.Current.Name -match '^\d{1,3}\$') {
+                        \$copiesEdit = \$el
+                        break
+                    }
+                }
+            }
 
             if (\$copiesEdit) {
-                \$valP = \$copiesEdit.GetCurrentPattern(
-                    [System.Windows.Automation.ValuePattern]::Pattern)
-                \$copies = [int]\$valP.Current.Value
+                \$copies = 1
+                \$valStr = ""
+                try {
+                    \$valP = \$copiesEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                    \$valStr = \$valP.Current.Value
+                } catch {}
+                
+                if ([string]::IsNullOrWhiteSpace(\$valStr) -or \$valStr -eq '0') {
+                    try {
+                        \$rvp = \$copiesEdit.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+                        \$valStr = [string](\$rvp.Current.Value)
+                    } catch {}
+                }
+                
+                if ([string]::IsNullOrWhiteSpace(\$valStr) -or \$valStr -eq '0') {
+                    try {
+                        \$nmVal = \$copiesEdit.Current.Name
+                        if (\$nmVal -match '^\d+\$') {
+                            \$valStr = \$nmVal
+                        }
+                    } catch {}
+                }
 
+                if (-not [string]::IsNullOrWhiteSpace(\$valStr)) {
+                    \$valStr = \$valStr.Replace(',', '.')
+                    try { \$copies = [int][Math]::Round([double]\$valStr) } catch {}
+                }
+                if (\$copies -le 0) { \$copies = 1 }
+
+                # Printer Name
                 \$printer = ""
-                try {
-                    \$pc = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, "Which Printer")
-                    \$pCombo = \$appWin.FindFirst(
-                        [System.Windows.Automation.TreeScope]::Descendants, \$pc)
-                    if (\$pCombo) {
-                        \$pv = \$pCombo.GetCurrentPattern(
-                            [System.Windows.Automation.ValuePattern]::Pattern)
+                if (\$printerEl) {
+                    try {
+                        \$pv = \$printerEl.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
                         \$printer = \$pv.Current.Value
+                    } catch {
+                        try {
+                            \$sp = \$printerEl.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
+                            \$sel = \$sp.Current.GetSelection()
+                            if (\$sel -and \$sel.Length -gt 0) { \$printer = \$sel[0].Current.Name }
+                        } catch {}
                     }
-                } catch {}
+                }
+                
+                # Fallback: scan tree for printer brands if ComboBox wasn't found
+                if (-not \$printer) {
+                    try {
+                        \$allEls2 = \$appWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+                        foreach (\$el2 in \$allEls2) {
+                            \$n2 = \$el2.Current.Name
+                            if (\$n2 -and \$n2.Length -gt 4 -and \$n2 -match '(?i)(EPSON|Canon|HP\s|Brother|Xerox|Ricoh|Samsung|Lexmark).*Series') {
+                                \$printer = \$n2
+                                break
+                            }
+                        }
+                    } catch {}
+                }
 
+                # Duplex
                 \$duplex = ""
-                try {
-                    \$dc = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, "Two-Sided Printing")
-                    \$dCombo = \$appWin.FindFirst(
-                        [System.Windows.Automation.TreeScope]::Descendants, \$dc)
-                    if (\$dCombo) {
-                        \$dv = \$dCombo.GetCurrentPattern(
-                            [System.Windows.Automation.ValuePattern]::Pattern)
+                if (\$duplexCombo) {
+                    try {
+                        \$dv = \$duplexCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
                         \$duplex = \$dv.Current.Value
-                    }
-                } catch {}
-
-                # Try to capture paper/media type from Office settings area
+                    } catch {}
+                }
+                
+                # Paper
                 \$officePaper = ""
-                \$officeMedia = ""
-                try {
-                    \$officePaper = Find-UIValue \$appWin "Paper Size"
-                    if (-not \$officePaper) { \$officePaper = Find-UIValue \$appWin "Page Size" }
-                    \$officeMedia = Find-UIValue \$appWin "Paper Type"
-                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media Type" }
-                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media type" }
-                } catch {}
-
+                if (\$paperCombo) {
+                    try {
+                        \$pv = \$paperCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officePaper = \$pv.Current.Value
+                    } catch {}
+                }
+                
+                # Orientation
+                \$officeOrient = ""
+                if (\$orientCombo) {
+                    try {
+                        \$ov = \$orientCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officeOrient = \$ov.Current.Value
+                    } catch {}
+                }
+                
+                # Color
+                \$officeColor = ""
+                if (\$colorCombo) {
+                    try {
+                        \$cv = \$colorCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officeColor = \$cv.Current.Value
+                    } catch {}
+                }
+                
+                # Pages
+                \$officePages = ""
+                if (\$pagesCombo) {
+                    try {
+                        \$pgv = \$pagesCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officePages = \$pgv.Current.Value
+                    } catch {}
+                }
+                
                 \$result = @{
                     c = \$copies; p = \$printer; d = \$appWin.Current.Name
-                    s = "office"; color = ""; pages = ""
+                    s = "office"
+                    color = if (\$officeColor) { \$officeColor } else { "" }
+                    pages = if (\$officePages) { \$officePages } else { "" }
                     paper = if (\$officePaper) { \$officePaper } else { "" }
-                    media = if (\$officeMedia) { \$officeMedia } else { "" }
-                    orient = ""; duplex = \$duplex; sheets = 0
+                    media = ""
+                    orient = if (\$officeOrient) { \$officeOrient } else { "" }
+                    duplex = \$duplex; sheets = 0
                     final = 0; t = (Get-Date -Format o)
                 }
+                # Cache element references for fast polling
+                \$cachedCopiesEl = \$copiesEdit
+                \$cachedPrinterEl = \$printerEl
+                \$cachedDuplexEl = \$duplexCombo
+                \$cachedPaperEl = \$paperCombo
+                \$cachedOrientEl = \$orientCombo
+                \$cachedColorEl = \$colorCombo
+                \$cachedPagesEl = \$pagesCombo
+                \$cachedAppWin = \$appWin
+                \$cachedPid = \$p.Id
+                \$lastFullScan = \$now
             }
         } catch {}
     }
@@ -3323,16 +3452,8 @@ while (\$true) {
                 \$wName = \$win.Current.Name
                 if (\$wName -match '(Properties|Preferences)' -and \$wName -match '(Printer|EPSON|Canon|HP|Brother|Xerox|Ricoh|Samsung|Lexmark|Series)') {
                     # Found a printer properties dialog
-                    # Search all common label variants for paper/media type
                     \$media = Find-UIValue \$win "Paper Type"
                     if (-not \$media) { \$media = Find-UIValue \$win "Media Type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Paper type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media" }
-                    # EPSON-specific: some dialogs use "Paper Type:" with colon
-                    if (-not \$media) { \$media = Find-UIValue \$win "Paper Type:" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media Type:" }
                     \$color = ""
                     \$copies = ""
                     \$paper = ""
@@ -3398,7 +3519,7 @@ while (\$true) {
                     } catch {}
 
                     # Extract printer name from dialog title (e.g. "EPSON L3150 Series Properties" -> "EPSON L3150 Series")
-                    \$printerFromTitle = \$wName -replace '\\s*(Properties|Preferences).*\$', ''
+                    \$printerFromTitle = \$wName -replace '\s*(Properties|Preferences).*\$', ''
 
                     if (\$media -or \$color -or \$copies) {
                         \$copiesInt = 1
@@ -3431,13 +3552,11 @@ while (\$true) {
         \$dialogWasOpen = \$true
         \$lastResult = \$result
 
-        # Output update (only if values changed to reduce noise)
+        # Output update (continuously)
         \$json = \$result | ConvertTo-Json -Compress
-        if (\$json -ne \$lastJson) {
-            Write-Output \$json
-            [Console]::Out.Flush()
-            \$lastJson = \$json
-        }
+        Write-Output \$json
+        [Console]::Out.Flush()
+        \$lastJson = \$json
     } else {
         # Dialog is NOT open (or not found)
         if (\$dialogWasOpen -and \$lastResult) {
@@ -3452,6 +3571,17 @@ while (\$true) {
             \$dialogWasOpen = \$false
             \$lastResult = \$null
             \$lastJson = ""
+            # Reset cached elements
+            \$cachedCopiesEl = \$null
+            \$cachedPrinterEl = \$null
+            \$cachedDuplexEl = \$null
+            \$cachedPaperEl = \$null
+            \$cachedOrientEl = \$null
+            \$cachedColorEl = \$null
+            \$cachedPagesEl = \$null
+            \$cachedAppWin = \$null
+            \$cachedPid = 0
+            \$lastFullScan = [DateTime]::MinValue
         }
     }
 }
@@ -3520,7 +3650,7 @@ while (\$true) {
             }
         });
 
-        console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 700ms)');
+        console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 150ms)');
         console.log('[PRINT-DIALOG] NOTE: Data is only USED when Event 307 confirms actual printing');
     } catch (e) {
         console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
@@ -3534,14 +3664,7 @@ while (\$true) {
     return { stop, isRunning: () => running };
 }
 
-/**
- * Get page counters from all installed printers.
- * For Epson printers: reads "Total Sheets" from "Printer and Option Information" dialog
- * (Maintenance tab) which is the hardware sheet counter of ALL physical sheets fed through.
- * Also reads STM3 registry for color/BW breakdown.
- * For network printers: attempts SNMP query.
- * Returns an array of { printerName, totalPages, totalSheets, colorPages, bwPages, ... }
- */
+
 async function getPrinterPageCounters() {
     const script = `
 Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
@@ -3788,7 +3911,31 @@ try {
         \`$editH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Edit', \`$null)
         while (\`$editH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$editH)
-            if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+            if (\`$val -match '^\d+\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
             \`$editH = [W]::FindWindowEx(\`$poiDlg, \`$editH, 'Edit', \`$null)
         }
         
@@ -3796,7 +3943,31 @@ try {
         \`$staticH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Static', \`$null)
         while (\`$staticH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$staticH)
-            if (\`$val -match '^\d{3,}\`$') { \`$numbers += [int]\`$val }
+            if (\`$val -match '^\d{3,}\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) { \`$numbers += [int]\`$val }
             \`$staticH = [W]::FindWindowEx(\`$poiDlg, \`$staticH, 'Static', \`$null)
         }
         
@@ -3806,7 +3977,31 @@ try {
             \`$subEdit = [W]::FindWindowEx(\`$subDlg, [IntPtr]::Zero, 'Edit', \`$null)
             while (\`$subEdit -ne [IntPtr]::Zero) {
                 \`$val = [W]::GetText(\`$subEdit)
-                if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+                if (\`$val -match '^\d+\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
                 \`$subEdit = [W]::FindWindowEx(\`$subDlg, \`$subEdit, 'Edit', \`$null)
             }
             \`$subDlg = [W]::FindWindowEx(\`$poiDlg, \`$subDlg, '#32770', \`$null)
@@ -3865,7 +4060,31 @@ try {
                 # Read results from temp file
                 if (Test-Path $tempFile) {
                     $content = (Get-Content $tempFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-                    if ($content -match '^(-?\d+)\|(-?\d+)$') {
+                    if ($content -match '^(-?\d+)\|(-?\d+)
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) {
                         $sheetResult.TotalSheets = [int]$Matches[1]
                         $sheetResult.BorderlessSheets = [int]$Matches[2]
                     }
@@ -3920,13 +4139,61 @@ try {
                         $editH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
                         while ($editH -ne [IntPtr]::Zero) {
                             $val = [W32POI]::GetText($editH)
-                            if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
+                            if ($val -match '^\\d+
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]$val -gt 0) { $numbers += [int]$val }
                             $editH = [W32POI]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
                         }
                         $staticH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
                         while ($staticH -ne [IntPtr]::Zero) {
                             $val = [W32POI]::GetText($staticH)
-                            if ($val -match '^\\d{3,}$') { $numbers += [int]$val }
+                            if ($val -match '^\\d{3,}
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) { $numbers += [int]$val }
                             $staticH = [W32POI]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
                         }
                         $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
@@ -4066,7 +4333,31 @@ try {
         if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
         if ($isEpson) {
-            $baseName = $printer.Name -replace '\\s*\\(Copy\\s*\\d+\\)\\s*$', ''
+            $baseName = $printer.Name -replace '\\s*\\(Copy\\s*\\d+\\)\\s*
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+, ''
             if (-not $epsonGroups.ContainsKey($baseName)) { $epsonGroups[$baseName] = @() }
             $epsonGroups[$baseName] += $printer
         } else {
@@ -4220,6 +4511,7 @@ else { @($results) | ConvertTo-Json -Depth 3 }
         return [];
     }
 }
+
 
 
 module.exports = {
