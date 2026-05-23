@@ -2804,6 +2804,13 @@ function setupSocket() {
         }
     });
 
+    socket.on('payment-name-updated', (data) => {
+        console.log(`[SOCKET] M-Pesa Payer Name Updated: ${data.payerName} for ${data.receiptNumber}`);
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('mpesa-name-updated', data);
+        }
+    });
+
     // Listen for user status changes (admin disable/enable)
     socket.on('user-status-changed', async (data) => {
         if (data.userType === 'agent' && !data.active) {

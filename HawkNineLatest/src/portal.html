@@ -2392,15 +2392,20 @@
 
         // Global M-Pesa Notification Listeners
         ipcRenderer.on('mpesa-payment-completed', (event, data) => {
-            showToast(`✅ M-Pesa Payment Received: KSH ${data.amount} (Ref: ${data.reference || 'N/A'})`, 'success');
+            // Format phone for display
+            let displayPhone = data.phoneNumber || 'N/A';
+            if (displayPhone.startsWith('254')) displayPhone = '0' + displayPhone.substring(3);
+            
+            showToast(`✅ M-Pesa Payment Received: KSH ${data.amount} from ${data.payerName || displayPhone}`, 'success');
             if (typeof addMpesaRecentTransaction === 'function') {
                 addMpesaRecentTransaction({
                     status: 'success',
-                    desc: data.reference || 'Remote Payment',
+                    desc: data.fullDescription || data.description || data.reference || 'M-Pesa Payment',
                     amount: data.amount,
-                    phone: 'Remote',
+                    phone: displayPhone,
                     receipt: data.receiptNumber,
-                    time: new Date()
+                    time: new Date(),
+                    payerName: data.payerName || ''
                 });
             }
         });
@@ -2410,12 +2415,26 @@
             if (typeof addMpesaRecentTransaction === 'function') {
                 addMpesaRecentTransaction({
                     status: 'failed',
-                    desc: 'Remote Payment',
+                    desc: 'Payment Failed',
                     amount: 0,
-                    phone: 'Remote',
+                    phone: 'N/A',
                     receipt: 'Failed',
-                    time: new Date()
+                    time: new Date(),
+                    payerName: ''
                 });
+            }
+        });
+
+        // Listen for payer name updates from Safaricom Transaction Status Query
+        ipcRenderer.on('mpesa-name-updated', (event, data) => {
+            if (data.receiptNumber && data.payerName) {
+                // Find and update the transaction in the local list
+                const tx = mpesaRecentTransactions.find(t => t.receipt === data.receiptNumber);
+                if (tx) {
+                    tx.payerName = data.payerName;
+                    renderMpesaRecentTransactions();
+                    showToast(`👤 Payer identified: ${data.payerName}`, 'info');
+                }
             }
         });
 
