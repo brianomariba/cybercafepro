@@ -89,6 +89,7 @@ function Settings() {
     });
     const [savingWhatsapp, setSavingWhatsapp] = useState(false);
     const [testingWhatsapp, setTestingWhatsapp] = useState(false);
+    const [testResult, setTestResult] = useState(null);
 
     // Default categories for dropdown
     const defaultCategories = [
@@ -225,16 +226,16 @@ function Settings() {
 
     const handleTestWhatsappReport = async () => {
         setTestingWhatsapp(true);
+        setTestResult(null);
         try {
             const result = await sendTestWhatsAppReport(whatsappSettings);
-            if (result && result.message) {
-                message.success(result.message);
-            } else {
-                message.success('Test report sent successfully');
-            }
+            const msg = result.message || 'Test report sent successfully';
+            message.success(msg);
+            setTestResult({ success: true, message: msg });
         } catch (error) {
             const errorMsg = error.response?.data?.error || error.message || 'Failed to trigger test report';
             message.error(`Failed to send report: ${errorMsg}`, 8);
+            setTestResult({ success: false, message: errorMsg });
         } finally {
             setTestingWhatsapp(false);
         }
@@ -1047,6 +1048,20 @@ function Settings() {
                                         Save WhatsApp Settings
                                     </Button>
                                 </Space>
+
+                                {testResult && (
+                                    <div style={{ 
+                                        marginTop: 16, 
+                                        padding: '12px 16px', 
+                                        borderRadius: 8, 
+                                        border: `1px solid ${testResult.success ? '#25D36630' : '#ff3b5c30'}`,
+                                        background: testResult.success ? 'rgba(37, 211, 102, 0.05)' : 'rgba(255, 59, 92, 0.05)',
+                                        color: testResult.success ? '#25D366' : '#ff3b5c',
+                                        fontSize: '13px'
+                                    }}>
+                                        <strong>{testResult.success ? '✅ Success:' : '❌ Test Failed:'}</strong> {testResult.message}
+                                    </div>
+                                )}
                             </Form>
                         </Card>
                     </Col>
