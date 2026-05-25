@@ -70,6 +70,7 @@ function Inventory() {
     const [invSearch, setInvSearch] = useState('');
     const [invCategoryFilter, setInvCategoryFilter] = useState('all');
     const [invStockFilter, setInvStockFilter] = useState('all');
+    const [invStoreFilter, setInvStoreFilter] = useState('all');
 
     const [form] = Form.useForm();
     const [sellForm] = Form.useForm();
@@ -550,15 +551,18 @@ function Inventory() {
     // Filtered inventory items
     const filteredItems = useMemo(() => {
         return items.filter(item => {
-            const matchesSearch = !invSearch || item.name.toLowerCase().includes(invSearch.toLowerCase()) || (item.category || '').toLowerCase().includes(invSearch.toLowerCase()) || (item.description || '').toLowerCase().includes(invSearch.toLowerCase());
+            const matchesSearch = !invSearch || item.name.toLowerCase().includes(invSearch.toLowerCase()) || (item.category || '').toLowerCase().includes(invSearch.toLowerCase()) || (item.description || '').toLowerCase().includes(invSearch.toLowerCase()) || (item.store || '').toLowerCase().includes(invSearch.toLowerCase());
             const matchesCategory = invCategoryFilter === 'all' || item.category === invCategoryFilter;
             const matchesStock = invStockFilter === 'all'
                 || (invStockFilter === 'in-stock' && item.stock > (item.lowStockThreshold || 5))
                 || (invStockFilter === 'low' && item.stock > 0 && item.stock <= (item.lowStockThreshold || 5))
                 || (invStockFilter === 'out' && item.stock === 0);
-            return matchesSearch && matchesCategory && matchesStock;
+            const matchesStore = invStoreFilter === 'all' || (item.store || 'Main Store') === invStoreFilter;
+            return matchesSearch && matchesCategory && matchesStock && matchesStore;
         });
-    }, [items, invSearch, invCategoryFilter, invStockFilter]);
+    }, [items, invSearch, invCategoryFilter, invStockFilter, invStoreFilter]);
+
+    const inventoryStores = useMemo(() => [...new Set(items.map(i => i.store || 'Main Store').filter(Boolean))], [items]);
 
     const inventoryCategories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))], [items]);
 
@@ -574,6 +578,7 @@ function Inventory() {
             )
         },
         { title: 'Category', dataIndex: 'category', key: 'category', filters: [...new Set(items.map(i => i.category))].filter(Boolean).map(c => ({ text: c, value: c })), onFilter: (v, r) => r.category === v, render: (cat) => <Tag color="blue">{cat}</Tag> },
+        { title: 'Store', dataIndex: 'store', key: 'store', width: 140, filters: [...new Set(items.map(i => i.store || 'Main Store'))].filter(Boolean).map(s => ({ text: s, value: s })), onFilter: (v, r) => (r.store || 'Main Store') === v, render: (store) => <Tag color="purple">{store || 'Main Store'}</Tag> },
         { title: 'Price', dataIndex: 'price', key: 'price', sorter: (a, b) => a.price - b.price, render: (p) => <Text strong style={{ color: '#00B4D8' }}>{formatKSH(p)}</Text> },
         {
             title: 'Stock', dataIndex: 'stock', key: 'stock', sorter: (a, b) => a.stock - b.stock, width: 200,
@@ -662,11 +667,11 @@ function Inventory() {
             {/* Alerts */}
             {lowStockItems.length > 0 && (
                 <Alert message={<span style={{ color: '#000' }}>{`⚠️ ${lowStockItems.length} item(s) running low`}</span>} type="warning" showIcon closable style={{ marginBottom: 12 }}
-                    description={<Space wrap>{lowStockItems.map(i => <Tag key={i._id} color="volcano" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name}: {i.stock} left</Tag>)}</Space>} />
+                    description={<Space wrap>{lowStockItems.map(i => <Tag key={i._id} color="volcano" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name} ({i.store || 'Main Store'}): {i.stock} left</Tag>)}</Space>} />
             )}
             {outOfStockItems.length > 0 && (
                 <Alert message={<span style={{ color: '#000' }}>{`🚫 ${outOfStockItems.length} item(s) out of stock`}</span>} type="error" showIcon closable style={{ marginBottom: 12 }}
-                    description={<Space wrap>{outOfStockItems.map(i => <Tag key={i._id} color="red" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name}</Tag>)}</Space>} />
+                    description={<Space wrap>{outOfStockItems.map(i => <Tag key={i._id} color="red" style={{ cursor: 'pointer' }} onClick={() => showItemDetail(i)}>{i.name} ({i.store || 'Main Store'})</Tag>)}</Space>} />
             )}
 
             {/* Stats Row */}
@@ -749,6 +754,7 @@ function Inventory() {
                                 <Space wrap size={8}>
                                     <Search placeholder="Search items..." style={{ width: 200 }} value={invSearch} onChange={e => setInvSearch(e.target.value)} allowClear />
                                     <Select value={invCategoryFilter} onChange={setInvCategoryFilter} style={{ width: 150 }} options={[{ value: 'all', label: 'All Categories' }, ...inventoryCategories.map(c => ({ value: c, label: c }))]} />
+                                    <Select value={invStoreFilter} onChange={setInvStoreFilter} style={{ width: 150 }} options={[{ value: 'all', label: '🏪 All Stores' }, ...inventoryStores.map(s => ({ value: s, label: s }))]} />
                                     <Select value={invStockFilter} onChange={setInvStockFilter} style={{ width: 140 }} options={[
                                         { value: 'all', label: '📦 All Stock' },
                                         { value: 'in-stock', label: '✅ In Stock' },
@@ -889,8 +895,9 @@ function Inventory() {
                         <Col span={8}><Card size="small"><Statistic title="Stock Value" value={detailItem.price * detailItem.stock} formatter={v => formatKSH(v)} /></Card></Col>
                     </Row>
                     <Row gutter={[16, 8]} style={{ marginBottom: 16 }}>
-                        <Col span={12}><Text type="secondary">Category:</Text> <Tag color="blue">{detailItem.category || 'General'}</Tag></Col>
-                        <Col span={12}><Text type="secondary">Alert Threshold:</Text> <Tag color={detailItem.stock <= (detailItem.lowStockThreshold || 5) ? 'red' : 'green'}>{detailItem.lowStockThreshold || 5} units</Tag></Col>
+                        <Col span={8}><Text type="secondary">Category:</Text> <Tag color="blue">{detailItem.category || 'General'}</Tag></Col>
+                        <Col span={8}><Text type="secondary">Store:</Text> <Tag color="purple">{detailItem.store || 'Main Store'}</Tag></Col>
+                        <Col span={8}><Text type="secondary">Alert Threshold:</Text> <Tag color={detailItem.stock <= (detailItem.lowStockThreshold || 5) ? 'red' : 'green'}>{detailItem.lowStockThreshold || 5} units</Tag></Col>
                     </Row>
                     {detailItem.stock <= (detailItem.lowStockThreshold || 5) && <Alert message={detailItem.stock === 0 ? '🚫 OUT OF STOCK — Restock needed!' : `⚠️ Low stock — Only ${detailItem.stock} remaining`} type={detailItem.stock === 0 ? 'error' : 'warning'} showIcon style={{ marginBottom: 16 }} />}
                     <Divider>Sales History ({detailItemSales.length} records)</Divider>
@@ -911,10 +918,13 @@ function Inventory() {
                     <Form.Item name="name" label="Item Name" rules={[{ required: true }]}><Input placeholder="e.g. A4 Envelope" /></Form.Item>
                     <Row gutter={16}>
                         <Col span={12}><Form.Item name="category" label="Category" initialValue="General"><Input placeholder="e.g. Stationery" /></Form.Item></Col>
-                        <Col span={12}><Form.Item name="price" label="Price (KSH)" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} min={0} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} parser={v => v.replace(/\$\s?|(,*)/g, '')} /></Form.Item></Col>
+                        <Col span={12}><Form.Item name="store" label="Store" initialValue="Main Store"><Input placeholder="e.g. Branch A, Main Store" /></Form.Item></Col>
                     </Row>
                     <Row gutter={16}>
+                        <Col span={12}><Form.Item name="price" label="Price (KSH)" rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} min={0} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} parser={v => v.replace(/\$\s?|(,*)/g, '')} /></Form.Item></Col>
                         <Col span={12}><Form.Item name="stock" label={editingItem ? "Current Stock" : "Opening Stock"} rules={[{ required: true }]}><InputNumber style={{ width: '100%' }} min={0} /></Form.Item></Col>
+                    </Row>
+                    <Row gutter={16}>
                         <Col span={12}><Form.Item name="lowStockThreshold" label="Low Stock Threshold" initialValue={5}><InputNumber style={{ width: '100%' }} min={1} /></Form.Item></Col>
                     </Row>
                     <Form.Item name="description" label="Description"><Input.TextArea rows={2} /></Form.Item>
@@ -1005,6 +1015,7 @@ function Inventory() {
                                     )
                                 },
                                 { title: 'Category', dataIndex: 'category', key: 'cat', width: 100, render: (c) => <Tag color="blue">{c || 'General'}</Tag> },
+                                { title: 'Store', dataIndex: 'store', key: 'store', width: 120, render: (s) => <Tag color="purple">{s || 'Main Store'}</Tag> },
                                 {
                                     title: 'Stock', dataIndex: 'stock', key: 'stock', width: 80, align: 'center',
                                     render: (stock) => <Text strong style={{ color: stock === 0 ? '#ff4d4f' : '#faad14', fontSize: 16 }}>{stock}</Text>

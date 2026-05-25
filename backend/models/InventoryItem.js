@@ -7,6 +7,7 @@ const InventoryItemSchema = new mongoose.Schema({
     stock: { type: Number, required: true, default: 0 },
     lowStockThreshold: { type: Number, default: 5 },
     category: { type: String, default: 'General' },
+    store: { type: String, default: 'Main Store' },
     isActive: { type: Boolean, default: true },
     // Access control fields
     hiddenFromUsers: [{ type: String }],  // Usernames who cannot see this item

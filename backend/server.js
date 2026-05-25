@@ -6882,7 +6882,7 @@ app.put('/api/v1/admin/inventory/settings', requireAdminAuth, async (req, res) =
  */
 app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category, store } = req.body;
 
         if (!name || price === undefined || stock === undefined) {
             return res.status(400).json({ error: 'Name, price, and stock are required' });
@@ -6895,6 +6895,7 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
             stock: parseInt(stock) || 0,
             lowStockThreshold: parseInt(lowStockThreshold) || 5,
             category: category || 'General',
+            store: store || 'Main Store',
             isActive: true
         });
 
@@ -6912,7 +6913,7 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
  */
 app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category, isActive } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category, store, isActive } = req.body;
 
         const item = await InventoryItem.findByIdAndUpdate(
             req.params.id,
@@ -6923,6 +6924,7 @@ app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
                 stock: parseInt(stock) || 0,
                 lowStockThreshold: parseInt(lowStockThreshold) || 5,
                 category: category || 'General',
+                store: store || 'Main Store',
                 isActive: isActive !== false,
                 updatedAt: new Date()
             },
