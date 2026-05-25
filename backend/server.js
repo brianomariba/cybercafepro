@@ -16,6 +16,7 @@ const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const https = require('https');
+const { queryTransactionStatus } = require('./utils/mpesa');
 
 // Global pricing configuration
 let pricing = {
@@ -433,7 +434,7 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
             }
 
             // We update or create if it doesn't exist
-            await MpesaTransaction.findOneAndUpdate(
+            const tx = await MpesaTransaction.findOneAndUpdate(
                 { mpesaCheckoutRequestId: checkoutId },
                 {
                     id: 'stk-' + checkoutId,
@@ -462,10 +463,53 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
                 isManualPayment: false,
                 status: resultCode === 0 ? 'completed' : 'failed'
             });
+
+            // Trigger Transaction Status Query to fetch payer's name automatically
+            if (resultCode === 0 && receipt) {
+                queryTransactionStatus(receipt).catch(err => console.error('[M-Pesa] Async status query failed:', err.message));
+            }
         }
     } catch (e) {
         console.error('[M-Pesa] Failed to process STK callback:', e);
     }
+    res.json({ ResultCode: 0, ResultDesc: "Success" });
+});
+
+// Transaction Status Result Webhook
+app.post('/api/v1/mpesa/status/result', async (req, res) => {
+    try {
+        const result = req.body?.Result;
+        if (!result) return res.json({ ResultCode: 0, ResultDesc: "Success" });
+
+        const receipt = result.ResultParameters?.ResultParameter?.find(p => p.Key === 'ReceiptNo')?.Value;
+        const payerName = result.ResultParameters?.ResultParameter?.find(p => p.Key === 'DebitPartyName')?.Value;
+
+        if (receipt && payerName) {
+            // Clean up name if it contains prefix (e.g. "123456 - JOHN DOE")
+            const cleanName = payerName.split('-').pop().trim();
+            
+            const tx = await MpesaTransaction.findOneAndUpdate(
+                { mpesaReceiptNumber: receipt },
+                { payerName: cleanName },
+                { new: true }
+            );
+
+            if (tx) {
+                console.log(`[M-Pesa] Status Query returned name: ${cleanName} for receipt ${receipt}`);
+                io.emit('payment-name-updated', {
+                    receiptNumber: receipt,
+                    payerName: cleanName
+                });
+            }
+        }
+    } catch (e) {
+        console.error('[M-Pesa] Status Result Error:', e.message);
+    }
+    res.json({ ResultCode: 0, ResultDesc: "Success" });
+});
+
+// Transaction Status Timeout Webhook
+app.post('/api/v1/mpesa/status/timeout', (req, res) => {
     res.json({ ResultCode: 0, ResultDesc: "Success" });
 });
 
