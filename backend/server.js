@@ -46,6 +46,10 @@ mongoose.connect(MONGODB_URI)
         
         // Schedule WhatsApp reports after DB connects
         scheduleWhatsAppReport();
+        
+        // Initialize self-hosted WhatsApp
+        const { initWhatsApp } = require('./whatsapp');
+        initWhatsApp().catch(err => console.error('Failed to init WhatsApp:', err));
     })
     .catch(err => {
         console.error('❌ MongoDB connection error:', err);
@@ -128,16 +132,16 @@ async function sendWhatsAppReport(options = {}) {
     return new Promise(async (resolve, reject) => {
         try {
             let phone = options.phone;
-            let apikey = options.apikey;
             let enabled = true; // Default to true if options overrides are provided
-
-            if (!phone || !apikey) {
+            
+            const { sendMessage, getStatus } = require('./whatsapp');
+            
+            if (!phone) {
                 const settingsDoc = await Settings.findOne({ key: 'whatsapp_report' });
                 if (!settingsDoc || !settingsDoc.value) {
                     return resolve({ success: false, error: 'WhatsApp reports are not configured.' });
                 }
                 if (!phone) phone = settingsDoc.value.phone;
-                if (!apikey) apikey = settingsDoc.value.apikey;
                 enabled = settingsDoc.value.enabled;
             }
 
@@ -145,12 +149,14 @@ async function sendWhatsAppReport(options = {}) {
                 return resolve({ success: false, error: 'WhatsApp reports are disabled or not configured.' });
             }
             
-            if (!phone || !apikey) {
-                return resolve({ success: false, error: 'Phone number or API Key is missing.' });
+            if (!phone) {
+                return resolve({ success: false, error: 'Phone number is missing.' });
             }
 
-            // Format phone number
-            const formattedPhone = formatWhatsAppPhone(phone);
+            const waStatus = getStatus();
+            if (waStatus.status !== 'connected') {
+                return resolve({ success: false, error: 'WhatsApp is not connected to a device. Please scan the QR code in settings.' });
+            }
 
             // Fetch pricing dynamically
             const pricing = await getPricing();
@@ -248,53 +254,8 @@ async function sendWhatsAppReport(options = {}) {
             report += `Print Jobs: ${todayPrintJobs.length}\n`;
             report += `Photocopies: ${totalPhotocopies}\n`;
             
-            const textEncoded = encodeURIComponent(report);
-            const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(formattedPhone)}&text=${textEncoded}&apikey=${apikey}`;
-            
-            console.log(`[WHATSAPP] Sending report request to: ${url.replace(apikey, 'XXXXXX')}`);
-
-            const req = https.get(url, (res) => {
-                let data = '';
-                res.on('data', (chunk) => data += chunk);
-                res.on('end', () => {
-                    console.log('[WHATSAPP] Response from CallMeBot:', data);
-                    
-                    const lowerData = data.toLowerCase();
-                    if (data.includes('queued') || data.includes('queued successfully') || data.includes('Success')) {
-                        resolve({ success: true, response: data, phone: formattedPhone });
-                    } else if (lowerData.includes('invalid') || lowerData.includes('apikey is not valid') || lowerData.includes('api key is not valid')) {
-                        resolve({ success: false, error: 'CallMeBot API Key is invalid. Please double check your API Key.', response: data });
-                    } else if (lowerData.includes('not authorized') || lowerData.includes('not registered') || lowerData.includes('allow callmebot')) {
-                        resolve({ success: false, error: 'Phone number not authorized. You must first send "I allow callmebot to send me messages" to the CallMeBot contact on WhatsApp (+34 693 05 47 43).', response: data });
-                    } else if (lowerData.includes('error') || lowerData.includes('wait') || lowerData.includes('limit')) {
-                        resolve({ success: false, error: 'CallMeBot error: ' + data.replace(/<[^>]*>/g, '').trim(), response: data });
-                    } else {
-                        // Sometimes CallMeBot returns custom warnings or HTML that still means it worked
-                        if (res.statusCode === 403) {
-                            resolve({ 
-                                success: false, 
-                                error: 'CallMeBot blocked your server (403 Forbidden). CallMeBot frequently blocks VPS hosting providers (like Contabo) to prevent spam. You may need to use a different WhatsApp API or ask CallMeBot to whitelist your VPS IP.',
-                                response: data 
-                            });
-                        } else if (res.statusCode === 200) {
-                            resolve({ success: true, response: data, phone: formattedPhone, warning: 'CallMeBot returned success with custom response' });
-                        } else {
-                            resolve({ success: false, error: 'Failed to send WhatsApp message. CallMeBot error: ' + data.replace(/<[^>]*>/g, '').trim(), response: data });
-                        }
-                    }
-                });
-            });
-
-            req.on('error', (err) => {
-                console.error('[WHATSAPP] Error sending report:', err.message);
-                resolve({ success: false, error: `Network error: ${err.message}` });
-            });
-
-            req.setTimeout(8000, () => {
-                console.error('[WHATSAPP] Request to CallMeBot timed out after 8 seconds');
-                req.destroy();
-                resolve({ success: false, error: 'CallMeBot API request timed out. Please try again.' });
-            });
+            const result = await sendMessage(phone, report);
+            resolve(result);
             
         } catch (err) {
             console.error('[WHATSAPP] Failed to generate/send report:', err);
@@ -1874,7 +1835,7 @@ app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) 
 app.get('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
     try {
         const doc = await Settings.findOne({ key: 'whatsapp_report' });
-        res.json(doc ? doc.value : { enabled: false, phone: '', apikey: '', time: '18:00' });
+        res.json(doc ? doc.value : { enabled: false, phone: '', time: '18:00' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get WhatsApp settings' });
     }
@@ -1914,6 +1875,49 @@ app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res
     } catch (error) {
         res.status(500).json({ error: 'Failed to trigger test report: ' + error.message });
     }
+});
+
+/**
+ * GET /api/v1/admin/whatsapp/status
+ * Get Baileys WhatsApp connection status
+ */
+app.get('/api/v1/admin/whatsapp/status', requireAdminAuth, (req, res) => {
+    const { getStatus } = require('./whatsapp');
+    res.json(getStatus());
+});
+
+/**
+ * GET /api/v1/admin/whatsapp/qr
+ * Get Baileys WhatsApp QR Code
+ */
+app.get('/api/v1/admin/whatsapp/qr', requireAdminAuth, (req, res) => {
+    const { getQRCode } = require('./whatsapp');
+    const qr = getQRCode();
+    if (qr) {
+        res.json({ qr });
+    } else {
+        res.status(404).json({ error: 'QR Code not available currently' });
+    }
+});
+
+/**
+ * POST /api/v1/admin/whatsapp/logout
+ * Logout linked WhatsApp device
+ */
+app.post('/api/v1/admin/whatsapp/logout', requireAdminAuth, async (req, res) => {
+    const { logout } = require('./whatsapp');
+    const result = await logout();
+    res.json(result);
+});
+
+/**
+ * POST /api/v1/admin/whatsapp/restart
+ * Restart WhatsApp connection process
+ */
+app.post('/api/v1/admin/whatsapp/restart', requireAdminAuth, async (req, res) => {
+    const { restart } = require('./whatsapp');
+    await restart();
+    res.json({ success: true });
 });
 
 /**

@@ -30,9 +30,12 @@ import {
     BarChartOutlined,
     WhatsAppOutlined,
     ClearOutlined,
+    QrcodeOutlined,
+    ReloadOutlined,
+    DisconnectOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -84,12 +87,16 @@ function Settings() {
     const [whatsappSettings, setWhatsappSettings] = useState({
         enabled: false,
         phone: '',
-        apikey: '',
         time: '18:00'
     });
     const [savingWhatsapp, setSavingWhatsapp] = useState(false);
     const [testingWhatsapp, setTestingWhatsapp] = useState(false);
     const [testResult, setTestResult] = useState(null);
+
+    // WhatsApp Connection state
+    const [waStatus, setWaStatus] = useState({ status: 'disconnected', user: '' });
+    const [waQrCode, setWaQrCode] = useState('');
+    const [waLoading, setWaLoading] = useState(true);
 
     // Default categories for dropdown
     const defaultCategories = [
@@ -225,6 +232,14 @@ function Settings() {
     };
 
     const handleTestWhatsappReport = async () => {
+        if (waStatus.status !== 'connected') {
+            message.error('WhatsApp must be connected to send a test report.');
+            return;
+        }
+        if (!whatsappSettings.phone) {
+            message.error('Please enter a destination phone number first.');
+            return;
+        }
         setTestingWhatsapp(true);
         setTestResult(null);
         try {
@@ -238,6 +253,51 @@ function Settings() {
             setTestResult({ success: false, message: errorMsg });
         } finally {
             setTestingWhatsapp(false);
+        }
+    };
+
+    // Polling for WhatsApp status
+    useEffect(() => {
+        let intervalId;
+        const fetchStatus = async () => {
+            try {
+                const statusData = await getWhatsAppStatus();
+                setWaStatus(statusData);
+                if (statusData.status === 'qr_ready') {
+                    const qrData = await getWhatsAppQR();
+                    setWaQrCode(qrData.qr);
+                } else {
+                    setWaQrCode('');
+                }
+            } catch (err) {
+                // Silently handle errors on status poll
+            } finally {
+                setWaLoading(false);
+            }
+        };
+
+        fetchStatus();
+        intervalId = setInterval(fetchStatus, 3000); // Poll every 3 seconds
+
+        return () => clearInterval(intervalId);
+    }, []);
+
+    const handleWhatsappLogout = async () => {
+        try {
+            await logoutWhatsApp();
+            await restartWhatsApp();
+            message.success('WhatsApp session logged out. Generating new QR...');
+        } catch (err) {
+            message.error('Failed to logout WhatsApp');
+        }
+    };
+
+    const handleWhatsappRestart = async () => {
+        try {
+            await restartWhatsApp();
+            message.success('WhatsApp connection restarted');
+        } catch (err) {
+            message.error('Failed to restart WhatsApp');
         }
     };
 
@@ -847,222 +907,252 @@ function Settings() {
                             title={
                                 <Space>
                                     <WhatsAppOutlined style={{ color: '#25D366' }} />
-                                    <span>CallMeBot WhatsApp Integration</span>
+                                    <span>Self-Hosted WhatsApp Integration</span>
+                                </Space>
+                            }
+                            extra={
+                                <Space>
+                                    <Button 
+                                        icon={<ReloadOutlined />} 
+                                        size="small" 
+                                        onClick={handleWhatsappRestart}
+                                        title="Restart WhatsApp Connection"
+                                    />
+                                    {waStatus.status === 'connected' && (
+                                        <Popconfirm
+                                            title="Disconnect WhatsApp?"
+                                            description="You will need to scan the QR code again."
+                                            onConfirm={handleWhatsappLogout}
+                                            okText="Disconnect"
+                                            cancelText="Cancel"
+                                        >
+                                            <Button danger size="small" icon={<DisconnectOutlined />}>
+                                                Disconnect
+                                            </Button>
+                                        </Popconfirm>
+                                    )}
                                 </Space>
                             }
                         >
-                            <div style={{
-                                padding: '16px 24px',
-                                background: 'rgba(37, 211, 102, 0.05)',
-                                border: '1px solid rgba(37, 211, 102, 0.2)',
-                                borderRadius: 12,
-                                marginBottom: 24
-                            }}>
-                                <Title level={5} style={{ color: '#25D366', marginTop: 0 }}>Automated Daily Performance Reports</Title>
-                                <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-                                    Receive automated daily summaries of your business performance directly to your WhatsApp. The report includes online computer status, sales revenue, printing & photocopy data, and session statistics.
-                                </Text>
-                                <Text type="secondary" style={{ fontSize: 13 }}>
-                                    <strong>How to get your API Key:</strong><br/>
-                                    1. Add the phone number <strong>+34 693 05 47 43</strong> to your Phone Contacts. (Name it it as CallMeBot)<br/>
-                                    2. Send the following message "I allow callmebot to send me messages" to the new Contact created (using WhatsApp).<br/>
-                                    3. Wait until you receive the message "API Activated for your phone number. Your APIKEY is 123123".
-                                </Text>
-                            </div>
-
-                            <Form layout="vertical">
-                                <Row gutter={16}>
-                                    <Col span={24}>
-                                        <div className="settings-item" style={{
-                                            padding: '16px',
-                                            borderRadius: '12px',
-                                            border: '1px solid #303030',
-                                            marginBottom: '24px'
-                                        }}>
-                                            <div className="settings-label">
-                                                <strong>Enable Automated Reports</strong>
-                                                <span>Send daily summary reports at the configured time</span>
-                                            </div>
-                                            <Switch
-                                                checked={whatsappSettings.enabled}
-                                                onChange={(val) => setWhatsappSettings(s => ({ ...s, enabled: val }))}
-                                            />
-                                        </div>
-                                    </Col>
-                                </Row>
-
-                                <Row gutter={16}>
-                                    <Col xs={24} sm={12}>
-                                        <Form.Item label="WhatsApp Phone Number">
-                                            <Input 
-                                                placeholder="e.g. 254794436994" 
-                                                value={whatsappSettings.phone}
-                                                onChange={(e) => setWhatsappSettings(s => ({ ...s, phone: e.target.value }))}
-                                                prefix={<WhatsAppOutlined />}
-                                                disabled={!whatsappSettings.enabled}
-                                            />
-                                        </Form.Item>
-                                    </Col>
-                                    <Col xs={24} sm={12}>
-                                        <Form.Item label="CallMeBot API Key">
-                                            <Input 
-                                                placeholder="e.g. 4956433" 
-                                                value={whatsappSettings.apikey}
-                                                onChange={(e) => setWhatsappSettings(s => ({ ...s, apikey: e.target.value }))}
-                                                disabled={!whatsappSettings.enabled}
-                                            />
-                                        </Form.Item>
-                                    </Col>
-                                </Row>
-
-                                <Row gutter={16}>
-                                    <Col xs={24}>
-                                        <Form.Item 
-                                            label={<span style={{ fontWeight: 600, color: 'rgba(255, 255, 255, 0.85)' }}>Daily Report Time</span>}
-                                            tooltip="Select when the automated performance report should be sent to your WhatsApp daily."
-                                        >
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                                                {/* Preset Times Grid */}
-                                                <div>
-                                                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
-                                                        ⚡ QUICK PRESETS
-                                                    </div>
-                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px' }}>
-                                                        {[
-                                                            { label: '🌅 8:00 AM', time: '08:00' },
-                                                            { label: '🌇 5:00 PM', time: '17:00' },
-                                                            { label: '🌆 6:00 PM', time: '18:00' },
-                                                            { label: '🌃 8:00 PM', time: '20:00' },
-                                                            { label: '🌌 10:00 PM', time: '22:00' },
-                                                            { label: '🕛 Midnight', time: '00:00' }
-                                                        ].map(preset => {
-                                                            const isActive = whatsappSettings.time === preset.time;
-                                                            return (
-                                                                <Button
-                                                                    key={preset.time}
-                                                                    type={isActive ? 'primary' : 'default'}
-                                                                    style={isActive ? {
-                                                                        background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
-                                                                        borderColor: '#25D366',
-                                                                        color: '#fff',
-                                                                        borderRadius: '8px',
-                                                                        fontWeight: 'bold',
-                                                                        height: '38px',
-                                                                        boxShadow: '0 4px 12px rgba(37, 211, 102, 0.3)',
-                                                                        border: 'none',
-                                                                        display: 'flex',
-                                                                        alignItems: 'center',
-                                                                        justifyContent: 'center',
-                                                                        transition: 'all 0.3s ease'
-                                                                    } : {
-                                                                        borderRadius: '8px',
-                                                                        height: '38px',
-                                                                        background: 'rgba(255, 255, 255, 0.03)',
-                                                                        borderColor: 'rgba(255, 255, 255, 0.08)',
-                                                                        color: 'rgba(255, 255, 255, 0.75)',
-                                                                        display: 'flex',
-                                                                        alignItems: 'center',
-                                                                        justifyContent: 'center',
-                                                                        transition: 'all 0.3s ease'
-                                                                    }}
-                                                                    disabled={!whatsappSettings.enabled}
-                                                                    onClick={() => setWhatsappSettings(s => ({ ...s, time: preset.time }))}
-                                                                >
-                                                                    {preset.label}
-                                                                </Button>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                                
-                                                {/* Custom Select or precise picker */}
-                                                <div style={{ 
-                                                    display: 'flex', 
-                                                    flexWrap: 'wrap',
-                                                    gap: '16px', 
-                                                    alignItems: 'center', 
-                                                    background: 'rgba(255, 255, 255, 0.01)', 
-                                                    padding: '12px 16px',
-                                                    borderRadius: '10px',
-                                                    border: '1px dashed rgba(255, 255, 255, 0.06)'
-                                                }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Dropdown Selection:</span>
-                                                        <Select
-                                                            value={whatsappSettings.time}
-                                                            onChange={(val) => setWhatsappSettings(s => ({ ...s, time: val }))}
-                                                            style={{ width: '130px' }}
-                                                            disabled={!whatsappSettings.enabled}
-                                                            dropdownStyle={{ background: '#1f1f1f' }}
-                                                        >
-                                                            {Array.from({ length: 24 }).flatMap((_, hour) => {
-                                                                const hStr = hour.toString().padStart(2, '0');
-                                                                return [
-                                                                    <Select.Option key={`${hStr}:00`} value={`${hStr}:00`}>{`${hStr}:00`}</Select.Option>,
-                                                                    <Select.Option key={`${hStr}:30`} value={`${hStr}:30`}>{`${hStr}:30`}</Select.Option>
-                                                                ];
-                                                            })}
-                                                        </Select>
-                                                    </div>
-                                                    
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Precise Picker:</span>
-                                                        <TimePicker
-                                                            format="HH:mm"
-                                                            placeholder="Custom..."
-                                                            value={whatsappSettings.time ? dayjs(whatsappSettings.time, 'HH:mm') : null}
-                                                            onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
-                                                            style={{ width: '120px' }}
-                                                            disabled={!whatsappSettings.enabled}
-                                                        />
-                                                    </div>
-
-                                                    <div style={{ marginLeft: 'auto' }}>
-                                                        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>
-                                                            Selected Time: <strong style={{ color: '#25D366', fontSize: '14px' }}>{whatsappSettings.time || 'Not set'}</strong>
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </Form.Item>
-                                    </Col>
-                                </Row>
-
-                                <Divider />
-
-                                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                    <Button
-                                        onClick={handleTestWhatsappReport}
-                                        loading={testingWhatsapp}
-                                        disabled={!whatsappSettings.phone || !whatsappSettings.apikey}
-                                    >
-                                        Send Test Report Now
-                                    </Button>
-                                    <Button
-                                        type="primary"
-                                        style={{ background: '#25D366', borderColor: '#25D366' }}
-                                        icon={<SaveOutlined />}
-                                        onClick={handleSaveWhatsappSettings}
-                                        loading={savingWhatsapp}
-                                    >
-                                        Save WhatsApp Settings
-                                    </Button>
-                                </Space>
-
-                                {testResult && (
-                                    <div style={{ 
-                                        marginTop: 16, 
-                                        padding: '12px 16px', 
-                                        borderRadius: 8, 
-                                        border: `1px solid ${testResult.success ? '#25D36630' : '#ff3b5c30'}`,
-                                        background: testResult.success ? 'rgba(37, 211, 102, 0.05)' : 'rgba(255, 59, 92, 0.05)',
-                                        color: testResult.success ? '#25D366' : '#ff3b5c',
-                                        fontSize: '13px'
+                            {waLoading ? (
+                                <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                                    <ClockCircleOutlined spin style={{ fontSize: 24, color: '#25D366', marginBottom: 16 }} />
+                                    <div>Loading WhatsApp Status...</div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{
+                                        padding: '16px 24px',
+                                        background: waStatus.status === 'connected' ? 'rgba(37, 211, 102, 0.05)' : 'rgba(255, 183, 3, 0.05)',
+                                        border: `1px solid ${waStatus.status === 'connected' ? 'rgba(37, 211, 102, 0.2)' : 'rgba(255, 183, 3, 0.2)'}`,
+                                        borderRadius: 12,
+                                        marginBottom: 24,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between'
                                     }}>
-                                        <strong>{testResult.success ? '✅ Success:' : '❌ Test Failed:'}</strong> {testResult.message}
+                                        <div>
+                                            <Title level={5} style={{ color: waStatus.status === 'connected' ? '#25D366' : '#FFB703', marginTop: 0 }}>
+                                                {waStatus.status === 'connected' ? '✅ Connected' : (waStatus.status === 'qr_ready' ? '📱 Awaiting Scan' : '⏳ Connecting...')}
+                                            </Title>
+                                            <Text type="secondary" style={{ display: 'block' }}>
+                                                {waStatus.status === 'connected' 
+                                                    ? `Linked to: ${waStatus.user}` 
+                                                    : 'Link your WhatsApp by scanning the QR code.'}
+                                            </Text>
+                                        </div>
+                                        {waStatus.status === 'qr_ready' && waQrCode && (
+                                            <div style={{ background: '#fff', padding: 8, borderRadius: 8 }}>
+                                                <img src={waQrCode} alt="WhatsApp QR Code" style={{ width: 150, height: 150 }} />
+                                            </div>
+                                        )}
                                     </div>
-                                )}
-                            </Form>
+
+                                    <Form layout="vertical">
+                                        <Row gutter={16}>
+                                            <Col span={24}>
+                                                <div className="settings-item" style={{
+                                                    padding: '16px',
+                                                    borderRadius: '12px',
+                                                    border: '1px solid #303030',
+                                                    marginBottom: '24px'
+                                                }}>
+                                                    <div className="settings-label">
+                                                        <strong>Enable Automated Reports</strong>
+                                                        <span>Send daily summary reports at the configured time</span>
+                                                    </div>
+                                                    <Switch
+                                                        checked={whatsappSettings.enabled}
+                                                        onChange={(val) => setWhatsappSettings(s => ({ ...s, enabled: val }))}
+                                                    />
+                                                </div>
+                                            </Col>
+                                        </Row>
+
+                                        <Row gutter={16}>
+                                            <Col xs={24}>
+                                                <Form.Item label="Destination Phone Number" tooltip="The number that will receive the reports. Include country code without '+'.">
+                                                    <Input 
+                                                        placeholder="e.g. 254794436994" 
+                                                        value={whatsappSettings.phone}
+                                                        onChange={(e) => setWhatsappSettings(s => ({ ...s, phone: e.target.value }))}
+                                                        prefix={<WhatsAppOutlined />}
+                                                        disabled={!whatsappSettings.enabled}
+                                                    />
+                                                </Form.Item>
+                                            </Col>
+                                        </Row>
+
+                                        <Row gutter={16}>
+                                            <Col xs={24}>
+                                                <Form.Item 
+                                                    label={<span style={{ fontWeight: 600, color: 'rgba(255, 255, 255, 0.85)' }}>Daily Report Time</span>}
+                                                    tooltip="Select when the automated performance report should be sent to your WhatsApp daily."
+                                                >
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                                        {/* Preset Times Grid */}
+                                                        <div>
+                                                            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+                                                                ⚡ QUICK PRESETS
+                                                            </div>
+                                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px' }}>
+                                                                {[
+                                                                    { label: '🌅 8:00 AM', time: '08:00' },
+                                                                    { label: '🌇 5:00 PM', time: '17:00' },
+                                                                    { label: '🌆 6:00 PM', time: '18:00' },
+                                                                    { label: '🌃 8:00 PM', time: '20:00' },
+                                                                    { label: '🌌 10:00 PM', time: '22:00' },
+                                                                    { label: '🕛 Midnight', time: '00:00' }
+                                                                ].map(preset => {
+                                                                    const isActive = whatsappSettings.time === preset.time;
+                                                                    return (
+                                                                        <Button
+                                                                            key={preset.time}
+                                                                            type={isActive ? 'primary' : 'default'}
+                                                                            style={isActive ? {
+                                                                                background: 'linear-gradient(135deg, #25D366 0%, #128C7E 100%)',
+                                                                                borderColor: '#25D366',
+                                                                                color: '#fff',
+                                                                                borderRadius: '8px',
+                                                                                fontWeight: 'bold',
+                                                                                height: '38px',
+                                                                                boxShadow: '0 4px 12px rgba(37, 211, 102, 0.3)',
+                                                                                border: 'none',
+                                                                                display: 'flex',
+                                                                                alignItems: 'center',
+                                                                                justifyContent: 'center',
+                                                                                transition: 'all 0.3s ease'
+                                                                            } : {
+                                                                                borderRadius: '8px',
+                                                                                height: '38px',
+                                                                                background: 'rgba(255, 255, 255, 0.03)',
+                                                                                borderColor: 'rgba(255, 255, 255, 0.08)',
+                                                                                color: 'rgba(255, 255, 255, 0.75)',
+                                                                                display: 'flex',
+                                                                                alignItems: 'center',
+                                                                                justifyContent: 'center',
+                                                                                transition: 'all 0.3s ease'
+                                                                            }}
+                                                                            disabled={!whatsappSettings.enabled}
+                                                                            onClick={() => setWhatsappSettings(s => ({ ...s, time: preset.time }))}
+                                                                        >
+                                                                            {preset.label}
+                                                                        </Button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        {/* Custom Select or precise picker */}
+                                                        <div style={{ 
+                                                            display: 'flex', 
+                                                            flexWrap: 'wrap',
+                                                            gap: '16px', 
+                                                            alignItems: 'center', 
+                                                            background: 'rgba(255, 255, 255, 0.01)', 
+                                                            padding: '12px 16px',
+                                                            borderRadius: '10px',
+                                                            border: '1px dashed rgba(255, 255, 255, 0.06)'
+                                                        }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Dropdown Selection:</span>
+                                                                <Select
+                                                                    value={whatsappSettings.time}
+                                                                    onChange={(val) => setWhatsappSettings(s => ({ ...s, time: val }))}
+                                                                    style={{ width: '130px' }}
+                                                                    disabled={!whatsappSettings.enabled}
+                                                                    dropdownStyle={{ background: '#1f1f1f' }}
+                                                                >
+                                                                    {Array.from({ length: 24 }).flatMap((_, hour) => {
+                                                                        const hStr = hour.toString().padStart(2, '0');
+                                                                        return [
+                                                                            <Select.Option key={`${hStr}:00`} value={`${hStr}:00`}>{`${hStr}:00`}</Select.Option>,
+                                                                            <Select.Option key={`${hStr}:30`} value={`${hStr}:30`}>{`${hStr}:30`}</Select.Option>
+                                                                        ];
+                                                                    })}
+                                                                </Select>
+                                                            </div>
+                                                            
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Precise Picker:</span>
+                                                                <TimePicker
+                                                                    format="HH:mm"
+                                                                    placeholder="Custom..."
+                                                                    value={whatsappSettings.time ? dayjs(whatsappSettings.time, 'HH:mm') : null}
+                                                                    onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
+                                                                    style={{ width: '120px' }}
+                                                                    disabled={!whatsappSettings.enabled}
+                                                                />
+                                                            </div>
+
+                                                            <div style={{ marginLeft: 'auto' }}>
+                                                                <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>
+                                                                    Selected Time: <strong style={{ color: '#25D366', fontSize: '14px' }}>{whatsappSettings.time || 'Not set'}</strong>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </Form.Item>
+                                            </Col>
+                                        </Row>
+
+                                        <Divider />
+
+                                        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                            <Button
+                                                onClick={handleTestWhatsappReport}
+                                                loading={testingWhatsapp}
+                                                disabled={!whatsappSettings.phone || waStatus.status !== 'connected'}
+                                            >
+                                                Send Test Report Now
+                                            </Button>
+                                            <Button
+                                                type="primary"
+                                                style={{ background: '#25D366', borderColor: '#25D366' }}
+                                                icon={<SaveOutlined />}
+                                                onClick={handleSaveWhatsappSettings}
+                                                loading={savingWhatsapp}
+                                            >
+                                                Save WhatsApp Settings
+                                            </Button>
+                                        </Space>
+
+                                        {testResult && (
+                                            <div style={{ 
+                                                marginTop: 16, 
+                                                padding: '12px 16px', 
+                                                borderRadius: 8, 
+                                                border: `1px solid ${testResult.success ? '#25D36630' : '#ff3b5c30'}`,
+                                                background: testResult.success ? 'rgba(37, 211, 102, 0.05)' : 'rgba(255, 59, 92, 0.05)',
+                                                color: testResult.success ? '#25D366' : '#ff3b5c',
+                                                fontSize: '13px'
+                                            }}>
+                                                <strong>{testResult.success ? '✅ Success:' : '❌ Test Failed:'}</strong> {testResult.message}
+                                            </div>
+                                        )}
+                                    </Form>
+                                </>
+                            )}
                         </Card>
                     </Col>
                 </Row>

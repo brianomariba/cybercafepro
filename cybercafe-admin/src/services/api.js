@@ -579,6 +579,10 @@ export const saveSettings = async (settings) => (await api.post('/admin/settings
 export const getWhatsAppReportSettings = async () => (await api.get('/admin/whatsapp-report-settings')).data;
 export const saveWhatsAppReportSettings = async (settings) => (await api.post('/admin/whatsapp-report-settings', settings)).data;
 export const sendTestWhatsAppReport = async (settings) => (await api.post('/admin/whatsapp-report/test', settings)).data;
+export const getWhatsAppStatus = async () => (await api.get('/admin/whatsapp/status')).data;
+export const getWhatsAppQR = async () => (await api.get('/admin/whatsapp/qr')).data;
+export const logoutWhatsApp = async () => (await api.post('/admin/whatsapp/logout')).data;
+export const restartWhatsApp = async () => (await api.post('/admin/whatsapp/restart')).data;
 
 // ==================== BLOCKLIST ====================
 export const getBlocklist = async () => (await api.get('/admin/blocklist')).data;
@@ -744,6 +748,10 @@ export default {
     getWhatsAppReportSettings,
     saveWhatsAppReportSettings,
     sendTestWhatsAppReport,
+    getWhatsAppStatus,
+    getWhatsAppQR,
+    logoutWhatsApp,
+    restartWhatsApp,
     getBlocklist,
     addToBlocklist,
     removeFromBlocklist,
