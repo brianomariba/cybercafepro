@@ -63,6 +63,7 @@ const Session = require('./models/Session');
 const Task = require('./models/Task');
 const Service = require('./models/Service');
 const Transaction = require('./models/Transaction');
+const MpesaTransaction = require('./models/MpesaTransaction');
 const SharedDocument = require('./models/SharedDocument');
 const Log = require('./models/Log');
 const AuthSession = require('./models/AuthSession');
@@ -359,6 +360,98 @@ app.set('trust proxy', 1);
 // ==================== HEALTH CHECK ====================
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ==================== M-PESA WEBHOOKS & API ====================
+// C2B Validation
+app.post('/api/v1/c2b/validation', (req, res) => {
+    // Safaricom expects a ResultCode 0 to accept the transaction
+    res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+});
+
+// C2B Confirmation (Manual Payments)
+app.post('/api/v1/c2b/confirmation', async (req, res) => {
+    console.log('[M-Pesa] C2B Confirmation received:', req.body);
+    try {
+        const payload = req.body;
+        const payerName = [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' ');
+        
+        await MpesaTransaction.create({
+            id: 'c2b-' + payload.TransID,
+            transactionType: 'C2B',
+            status: 'completed',
+            amount: parseFloat(payload.TransAmount) || 0,
+            mpesaReceiptNumber: payload.TransID,
+            accountReference: payload.BillRefNumber || 'N/A',
+            phoneNumber: payload.MSISDN,
+            payerName: payerName,
+            rawMessage: JSON.stringify(payload),
+            fullDescription: 'M-Pesa C2B Payment',
+            resultDesc: 'Payment confirmed via C2B Webhook',
+            completedAt: new Date()
+        });
+        console.log(`[M-Pesa] Saved C2B Transaction ${payload.TransID} from ${payerName}`);
+    } catch (e) {
+        console.error('[M-Pesa] Failed to process C2B confirmation:', e.message);
+    }
+    // Always acknowledge Safaricom immediately
+    res.json({ ResultCode: 0, ResultDesc: "Success" });
+});
+
+// STK Push Callback (For future use if server initiates pushes)
+app.post('/api/v1/mpesa/callback', async (req, res) => {
+    console.log('[M-Pesa] STK Callback received');
+    try {
+        const result = req.body?.Body?.stkCallback;
+        if (result) {
+            const checkoutId = result.CheckoutRequestID;
+            const resultCode = result.ResultCode;
+            const metadata = result.CallbackMetadata?.Item || [];
+            
+            let amount = 0, receipt = '', phone = '';
+            for (const item of metadata) {
+                if (item.Name === 'Amount') amount = item.Value;
+                if (item.Name === 'MpesaReceiptNumber') receipt = item.Value;
+                if (item.Name === 'PhoneNumber') phone = item.Value;
+            }
+
+            // We update or create if it doesn't exist
+            await MpesaTransaction.findOneAndUpdate(
+                { mpesaCheckoutRequestId: checkoutId },
+                {
+                    id: 'stk-' + checkoutId,
+                    transactionType: 'STK_PUSH',
+                    status: resultCode === 0 ? 'completed' : 'failed',
+                    amount: amount,
+                    mpesaReceiptNumber: receipt,
+                    phoneNumber: phone,
+                    mpesaCheckoutRequestId: checkoutId,
+                    merchantRequestId: result.MerchantRequestID,
+                    rawMessage: JSON.stringify(req.body),
+                    resultDesc: result.ResultDesc,
+                    completedAt: new Date()
+                },
+                { upsert: true }
+            );
+        }
+    } catch (e) {
+        console.error('[M-Pesa] Failed to process STK callback:', e);
+    }
+    res.json({ ResultCode: 0, ResultDesc: "Success" });
+});
+
+// Endpoint for Desktop Agent to fetch M-Pesa history
+app.get('/api/v1/mpesa/transactions', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const txns = await MpesaTransaction.find()
+            .sort({ completedAt: -1, createdAt: -1 })
+            .limit(limit);
+        res.json(txns);
+    } catch (error) {
+        console.error('[M-Pesa] Error fetching history:', error);
+        res.status(500).json({ error: 'Failed to fetch M-Pesa transactions' });
+    }
 });
 
 // ==================== STATIC FILES ====================
