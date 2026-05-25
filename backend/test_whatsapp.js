@@ -224,12 +224,15 @@ async function testWhatsApp() {
                 console.log('\n📥 CallMeBot Response Status:', res.statusCode);
                 console.log('📥 CallMeBot Response Data:', data);
                 
+                const lowerData = data.toLowerCase();
                 if (data.includes('queued') || data.includes('queued successfully') || data.includes('Success')) {
                     console.log('✅ SUCCESS! Message was successfully queued/sent.');
-                } else if (data.includes('invalid') || data.includes('apikey is not valid')) {
+                } else if (lowerData.includes('invalid') || lowerData.includes('apikey is not valid') || lowerData.includes('api key is not valid')) {
                     console.log('❌ FAILED: CallMeBot API Key is invalid.');
-                } else if (data.includes('not authorized') || data.includes('not registered') || data.includes('allow callmebot')) {
+                } else if (lowerData.includes('not authorized') || lowerData.includes('not registered') || lowerData.includes('allow callmebot')) {
                     console.log('❌ FAILED: Phone number not authorized. Must send authorization message first.');
+                } else if (lowerData.includes('error') || lowerData.includes('wait') || lowerData.includes('limit')) {
+                    console.log('❌ FAILED: CallMeBot returned an error: ' + data.replace(/<[^>]*>/g, '').trim());
                 } else {
                     console.log('⚠️ WARNING: Unknown/custom response content. Code: ' + res.statusCode);
                 }

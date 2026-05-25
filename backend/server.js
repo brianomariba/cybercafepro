@@ -242,12 +242,15 @@ async function sendWhatsAppReport(options = {}) {
                 res.on('end', () => {
                     console.log('[WHATSAPP] Response from CallMeBot:', data);
                     
+                    const lowerData = data.toLowerCase();
                     if (data.includes('queued') || data.includes('queued successfully') || data.includes('Success')) {
                         resolve({ success: true, response: data, phone: formattedPhone });
-                    } else if (data.includes('invalid') || data.includes('apikey is not valid')) {
+                    } else if (lowerData.includes('invalid') || lowerData.includes('apikey is not valid') || lowerData.includes('api key is not valid')) {
                         resolve({ success: false, error: 'CallMeBot API Key is invalid. Please double check your API Key.', response: data });
-                    } else if (data.includes('not authorized') || data.includes('not registered') || data.includes('allow callmebot')) {
+                    } else if (lowerData.includes('not authorized') || lowerData.includes('not registered') || lowerData.includes('allow callmebot')) {
                         resolve({ success: false, error: 'Phone number not authorized. You must first send "I allow callmebot to send me messages" to the CallMeBot contact on WhatsApp (+34 693 05 47 43).', response: data });
+                    } else if (lowerData.includes('error') || lowerData.includes('wait') || lowerData.includes('limit')) {
+                        resolve({ success: false, error: 'CallMeBot error: ' + data.replace(/<[^>]*>/g, '').trim(), response: data });
                     } else {
                         // Sometimes CallMeBot returns custom warnings or HTML that still means it worked
                         if (res.statusCode === 200) {
