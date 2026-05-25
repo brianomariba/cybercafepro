@@ -233,6 +233,8 @@ async function testWhatsApp() {
                     console.log('❌ FAILED: Phone number not authorized. Must send authorization message first.');
                 } else if (lowerData.includes('error') || lowerData.includes('wait') || lowerData.includes('limit')) {
                     console.log('❌ FAILED: CallMeBot returned an error: ' + data.replace(/<[^>]*>/g, '').trim());
+                } else if (res.statusCode === 403) {
+                    console.log('❌ FAILED: CallMeBot has blocked your server (403 Forbidden). CallMeBot frequently blocks VPS hosting providers (like Contabo) to prevent spam. You may need to use a different WhatsApp API or ask CallMeBot to whitelist your VPS IP.');
                 } else {
                     console.log('⚠️ WARNING: Unknown/custom response content. Code: ' + res.statusCode);
                 }

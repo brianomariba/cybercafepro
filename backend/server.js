@@ -253,7 +253,13 @@ async function sendWhatsAppReport(options = {}) {
                         resolve({ success: false, error: 'CallMeBot error: ' + data.replace(/<[^>]*>/g, '').trim(), response: data });
                     } else {
                         // Sometimes CallMeBot returns custom warnings or HTML that still means it worked
-                        if (res.statusCode === 200) {
+                        if (res.statusCode === 403) {
+                            resolve({ 
+                                success: false, 
+                                error: 'CallMeBot blocked your server (403 Forbidden). CallMeBot frequently blocks VPS hosting providers (like Contabo) to prevent spam. You may need to use a different WhatsApp API or ask CallMeBot to whitelist your VPS IP.',
+                                response: data 
+                            });
+                        } else if (res.statusCode === 200) {
                             resolve({ success: true, response: data, phone: formattedPhone, warning: 'CallMeBot returned success with custom response' });
                         } else {
                             resolve({ success: false, error: 'Failed to send WhatsApp message. CallMeBot error: ' + data.replace(/<[^>]*>/g, '').trim(), response: data });
