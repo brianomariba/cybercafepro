@@ -357,6 +357,11 @@ io.on('connection', (socket) => {
 // Trust Nginx Proxy
 app.set('trust proxy', 1);
 
+// Body Parser Middleware (must be before M-Pesa routes)
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true }));
+
 // ==================== HEALTH CHECK ====================
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -391,6 +396,18 @@ app.post('/api/v1/c2b/confirmation', async (req, res) => {
             completedAt: new Date()
         });
         console.log(`[M-Pesa] Saved C2B Transaction ${payload.TransID} from ${payerName}`);
+        
+        // Broadcast to connected agents
+        io.emit('payment-completed', {
+            checkoutRequestId: null,
+            receiptNumber: payload.TransID,
+            amount: parseFloat(payload.TransAmount) || 0,
+            phoneNumber: payload.MSISDN,
+            payerName: payerName,
+            description: 'M-Pesa C2B Payment',
+            isManualPayment: true,
+            status: 'completed'
+        });
     } catch (e) {
         console.error('[M-Pesa] Failed to process C2B confirmation:', e.message);
     }
@@ -431,13 +448,48 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
                     resultDesc: result.ResultDesc,
                     completedAt: new Date()
                 },
-                { upsert: true }
+                { new: true, upsert: true }
             );
+            
+            // Broadcast the result to agents
+            io.emit(resultCode === 0 ? 'payment-completed' : 'payment-failed', {
+                checkoutRequestId: checkoutId,
+                receiptNumber: receipt,
+                amount: amount,
+                phoneNumber: phone,
+                payerName: tx.payerName || '',
+                description: result.ResultDesc,
+                isManualPayment: false,
+                status: resultCode === 0 ? 'completed' : 'failed'
+            });
         }
     } catch (e) {
         console.error('[M-Pesa] Failed to process STK callback:', e);
     }
     res.json({ ResultCode: 0, ResultDesc: "Success" });
+});
+
+// Update STK Payer Name from Agent
+app.post('/api/v1/mpesa/name', async (req, res) => {
+    try {
+        const { checkoutRequestId, payerName } = req.body;
+        if (!checkoutRequestId || !payerName) return res.json({ success: false });
+        
+        const tx = await MpesaTransaction.findOneAndUpdate(
+            { mpesaCheckoutRequestId: checkoutRequestId },
+            { payerName: payerName },
+            { new: true, upsert: true }
+        );
+        
+        io.emit('payment-name-updated', {
+            receiptNumber: tx.mpesaReceiptNumber || '',
+            payerName: payerName
+        });
+        res.json({ success: true });
+    } catch (e) {
+        console.error('[M-Pesa] Failed to save payer name:', e.message);
+        res.json({ success: false });
+    }
 });
 
 // Endpoint for Desktop Agent to fetch M-Pesa history
@@ -653,9 +705,6 @@ const upload = multer({
 });
 
 // Middleware
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(UPLOADS_DIR)); // Serve uploaded files
 
 // Apply rate limiting to all API routes
