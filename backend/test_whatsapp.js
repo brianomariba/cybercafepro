@@ -16,17 +16,34 @@ const Service = require('./models/Service');
 
 function formatWhatsAppPhone(phone) {
     if (!phone) return '';
-    let formatted = phone.trim().replace(/[\s\-()]/g, '');
+    let formatted = phone.trim().replace(/[\s\-()]/g, ''); // Remove spaces, dashes, parentheses
     
-    if (formatted.startsWith('0') && formatted.length === 10) {
-        formatted = '+254' + formatted.substring(1);
+    // If it starts with a plus, strip it temporarily to check country code
+    let hasPlus = formatted.startsWith('+');
+    if (hasPlus) {
+        formatted = formatted.substring(1);
     }
-    if (!formatted.startsWith('+') && !formatted.startsWith('00')) {
+    
+    // If it starts with 00, strip it and treat it as a plus
+    if (formatted.startsWith('00')) {
+        formatted = formatted.substring(2);
+    }
+    
+    // Now check if it starts with 2540 (Kenyan country code + incorrect leading zero)
+    if (formatted.startsWith('2540')) {
+        formatted = '254' + formatted.substring(4);
+    }
+    
+    // If it starts with 0 and is typical local format (e.g. 0724384646)
+    if (formatted.startsWith('0') && formatted.length === 10) {
+        formatted = '254' + formatted.substring(1);
+    }
+    
+    // Ensure it starts with +
+    if (!formatted.startsWith('+')) {
         formatted = '+' + formatted;
     }
-    if (formatted.startsWith('00')) {
-        formatted = '+' + formatted.substring(2);
-    }
+    
     return formatted;
 }
 

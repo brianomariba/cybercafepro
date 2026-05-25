@@ -95,12 +95,29 @@ function formatWhatsAppPhone(phone) {
     if (!phone) return '';
     let formatted = phone.trim().replace(/[\s\-()]/g, ''); // Remove spaces, dashes, parentheses
     
-    // If it starts with 0 and is 10 digits (typical Kenyan format, e.g. 0794436994)
+    // If it starts with a plus, strip it temporarily to check country code
+    let hasPlus = formatted.startsWith('+');
+    if (hasPlus) {
+        formatted = formatted.substring(1);
+    }
+    
+    // If it starts with 00, strip it and treat it as a plus
+    if (formatted.startsWith('00')) {
+        formatted = formatted.substring(2);
+    }
+    
+    // Now check if it starts with 2540 (Kenyan country code + incorrect leading zero)
+    if (formatted.startsWith('2540')) {
+        formatted = '254' + formatted.substring(4);
+    }
+    
+    // If it starts with 0 and is typical local format (e.g. 0724384646)
     if (formatted.startsWith('0') && formatted.length === 10) {
-        formatted = '+254' + formatted.substring(1);
-    } else if (formatted.startsWith('00')) {
-        formatted = '+' + formatted.substring(2);
-    } else if (!formatted.startsWith('+')) {
+        formatted = '254' + formatted.substring(1);
+    }
+    
+    // Ensure it starts with +
+    if (!formatted.startsWith('+')) {
         formatted = '+' + formatted;
     }
     
