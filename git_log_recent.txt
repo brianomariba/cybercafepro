@@ -1,0 +1,10 @@
+﻿945f554 fix: rewrite sheets-monitor buildScript to fix PowerShell variable escaping - all dollar signs had backslash prefix making the generated script invalid
+82c0b36 feat: fetch agent photocopy readings from backend API
+68d1356 Implement Agent Activity Tracking and Trackable Services
+9bf9972 feat(agent): Implement 100% stealth hardware page counter tracking using off-screen window message automation
+3d24ae1 fix: Escape backticks in child script for JS template literal
+08e8e88 fix: Launch full PowerShell on hidden desktop for stealth POI, only accept totalSheets readings
+c30abba fix: Escape backticks in JS template literal
+4d36923 feat: Stealthy printer POI reading and accurate photocopy calculations
+ad914f8 Replace UI Automation with Win32 API for POI dialog - fixes photocopy tracking
+2d5234e Fix: Dashboard showing wrong page counts. Consolidate printer copies into base name and fix POI dialog conflicts

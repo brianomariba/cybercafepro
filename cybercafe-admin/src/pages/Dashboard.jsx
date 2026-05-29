@@ -175,96 +175,143 @@ function Dashboard() {
     activityFeed.sort((a, b) => new Date(b.time) - new Date(a.time));
 
     return (
-        <div>
+        <div className="dashboard-container">
             {/* Page Header */}
-            <div className="page-header">
+            <div className="page-header" style={{ marginBottom: 0 }}>
                 <div>
                     <div className="page-title">
-                        <ThunderboltOutlined className="icon" />
-                        <h1>Dashboard</h1>
+                        <ThunderboltOutlined className="icon" style={{ color: '#00B4D8' }} />
+                        <h1>Dashboard Overview</h1>
                         <Badge
                             status={connected ? 'success' : 'error'}
-                            text={<Text type="secondary" style={{ fontSize: 12 }}>{connected ? 'Live' : 'Offline'}</Text>}
-                            style={{ marginLeft: 8 }}
+                            text={<Text type="secondary" style={{ fontSize: 12 }}>{connected ? 'Live Sync' : 'Offline'}</Text>}
+                            style={{ marginLeft: 12 }}
                         />
                     </div>
                 </div>
-                <Button icon={<ReloadOutlined />} size="small" onClick={fetchData} loading={loading}>Refresh</Button>
-            </div>
-
-            {/* Stats Row */}
-            <div className="stats-row">
-                <div className="stat-card blue">
-                    <div className="stat-header">
-                        <div className="stat-icon blue"><DesktopOutlined /></div>
-                    </div>
-                    <div className="stat-value">{computedStats.onlineComputers} / {computedStats.totalComputers}</div>
-                    <div className="stat-label">Computers Online</div>
-                </div>
-
-                <div className="stat-card green">
-                    <div className="stat-header">
-                        <div className="stat-icon green"><PlayCircleOutlined /></div>
-                    </div>
-                    <div className="stat-value">{computedStats.activeSessionsCount}</div>
-                    <div className="stat-label">Active Sessions</div>
-                </div>
-
-                <div className="stat-card yellow">
-                    <div className="stat-header">
-                        <div className="stat-icon yellow"><DollarOutlined /></div>
-                    </div>
-                    <div className="stat-value">{formatKSH(computedStats.todayRevenue)}</div>
-                    <div className="stat-label">Today's Revenue</div>
-                </div>
-
-                <div className="stat-card purple">
-                    <div className="stat-header">
-                        <div className="stat-icon purple"><CheckCircleOutlined /></div>
-                    </div>
-                    <div className="stat-value">{computedStats.pendingTasks}</div>
-                    <div className="stat-label">Pending Tasks</div>
-                </div>
+                <Button icon={<ReloadOutlined />} type="primary" onClick={fetchData} loading={loading} style={{ borderRadius: 8 }}>
+                    Refresh Data
+                </Button>
             </div>
 
             <Spin spinning={loading}>
-                <Row gutter={[20, 20]}>
-                    {/* Computer Status Grid */}
-                    <Col xs={24} lg={14}>
-                        <Card
-                            size="small"
-                            title={
-                                <Space>
-                                    <DesktopOutlined style={{ color: '#00B4D8' }} />
-                                    <span>Computers</span>
-                                    <Badge count={computedStats.onlineComputers} style={{ backgroundColor: '#00C853' }} />
-                                </Space>
-                            }
-                            extra={<Text type="secondary" style={{ fontSize: 12 }}>{computers.length} total</Text>}
-                        >
+                {/* 1. Top Stat Cards Row */}
+                <div className="dashboard-grid" style={{ marginTop: 24 }}>
+                    <div className="col-span-3 premium-card glow-effect">
+                        <div className="premium-stat-card">
+                            <div className="stat-icon-wrapper blue">
+                                <DesktopOutlined />
+                            </div>
+                            <div>
+                                <div className="stat-main-value">{computedStats.onlineComputers} <span style={{fontSize: 16, color: 'var(--text-muted)'}}>/ {computedStats.totalComputers}</span></div>
+                                <div className="stat-label-text">Computers Online</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="col-span-3 premium-card glow-effect">
+                        <div className="premium-stat-card">
+                            <div className="stat-icon-wrapper green">
+                                <PlayCircleOutlined />
+                            </div>
+                            <div>
+                                <div className="stat-main-value">{computedStats.activeSessionsCount}</div>
+                                <div className="stat-label-text">Active Sessions</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="col-span-3 premium-card glow-effect">
+                        <div className="premium-stat-card">
+                            <div className="stat-icon-wrapper yellow">
+                                <DollarOutlined />
+                            </div>
+                            <div>
+                                <div className="stat-main-value">{formatKSH(computedStats.todayRevenue)}</div>
+                                <div className="stat-label-text">Today's Revenue</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="col-span-3 premium-card glow-effect">
+                        <div className="premium-stat-card">
+                            <div className="stat-icon-wrapper purple">
+                                <CheckCircleOutlined />
+                            </div>
+                            <div>
+                                <div className="stat-main-value">{computedStats.pendingTasks}</div>
+                                <div className="stat-label-text">Pending Tasks</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 2. Main Content Grid */}
+                <div className="dashboard-grid">
+                    {/* Left Column (Revenue & Computers) */}
+                    <div className="col-span-8" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                        
+                        {/* Revenue Overview */}
+                        <div className="premium-card">
+                            <div className="premium-card-title">
+                                <DollarOutlined style={{ color: 'var(--primary-teal)' }} />
+                                Financial Overview
+                            </div>
+                            
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+                                <div className="revenue-block today">
+                                    <span className="revenue-block-label">Today</span>
+                                    <span className="revenue-block-value">{formatKSH(computedStats.todayRevenue)}</span>
+                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{computedStats.todaySessions} sessions</span>
+                                </div>
+                                <div className="revenue-block week">
+                                    <span className="revenue-block-label">This Week</span>
+                                    <span className="revenue-block-value">{formatKSH(computedStats.weekRevenue)}</span>
+                                </div>
+                                <div className="revenue-block month">
+                                    <span className="revenue-block-label">This Month</span>
+                                    <span className="revenue-block-value">{formatKSH(computedStats.monthRevenue)}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Computers Grid */}
+                        <div className="premium-card">
+                            <div className="premium-card-title" style={{ justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <DesktopOutlined style={{ color: 'var(--primary-green)' }} />
+                                    Active Computers
+                                </div>
+                                <Badge count={computedStats.onlineComputers} style={{ backgroundColor: 'var(--primary-green)' }} />
+                            </div>
+
                             {computers.length === 0 ? (
                                 <Empty description="No computers connected" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
                                     {computers.slice(0, 12).map(c => (
                                         <div
                                             key={c.clientId}
                                             style={{
-                                                padding: '10px 12px',
+                                                padding: '12px 16px',
                                                 background: c.isOnline
-                                                    ? (c.status === 'active' ? 'rgba(0,200,83,0.08)' : 'rgba(0,180,216,0.06)')
-                                                    : 'rgba(100,116,139,0.06)',
-                                                border: `1px solid ${c.isOnline ? (c.status === 'active' ? 'rgba(0,200,83,0.2)' : 'rgba(0,180,216,0.12)') : 'rgba(100,116,139,0.1)'}`,
-                                                borderRadius: 8,
+                                                    ? (c.status === 'active' ? 'rgba(0,200,83,0.05)' : 'rgba(0,180,216,0.05)')
+                                                    : 'rgba(100,116,139,0.05)',
+                                                border: `1px solid ${c.isOnline ? (c.status === 'active' ? 'rgba(0,200,83,0.3)' : 'rgba(0,180,216,0.2)') : 'rgba(100,116,139,0.2)'}`,
+                                                borderRadius: 12,
                                                 display: 'flex',
                                                 alignItems: 'center',
-                                                gap: 8,
+                                                gap: 12,
+                                                transition: 'transform 0.2s',
+                                                cursor: 'pointer'
                                             }}
+                                            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+                                            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                                         >
                                             <Badge status={c.isOnline ? (c.status === 'active' ? 'success' : 'processing') : 'default'} />
                                             <div style={{ flex: 1, minWidth: 0 }}>
-                                                <Text strong style={{ fontSize: 12, display: 'block' }} ellipsis>{c.hostname}</Text>
-                                                <Text type="secondary" style={{ fontSize: 10 }}>
+                                                <Text strong style={{ fontSize: 13, display: 'block', color: 'var(--text-primary)' }} ellipsis>{c.hostname}</Text>
+                                                <Text style={{ fontSize: 11, color: c.isOnline && c.status === 'active' ? 'var(--primary-green)' : 'var(--text-muted)' }}>
                                                     {c.isOnline ? (c.sessionUser || (c.status === 'active' ? 'Active' : 'Idle')) : 'Offline'}
                                                 </Text>
                                             </div>
@@ -272,144 +319,89 @@ function Dashboard() {
                                     ))}
                                 </div>
                             )}
-                        </Card>
-                    </Col>
+                        </div>
+                    </div>
 
-                    {/* Revenue + Tasks */}
-                    <Col xs={24} lg={10}>
-                        <Card
-                            size="small"
-                            title={
-                                <Space>
-                                    <DollarOutlined style={{ color: '#00C853' }} />
-                                    <span>Revenue</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(0,200,83,0.08)', borderRadius: 10 }}>
-                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Today</Text>
-                                    <Text strong style={{ fontSize: 16, color: '#00C853', fontFamily: 'JetBrains Mono' }}>
-                                        {formatKSH(computedStats.todayRevenue)}
-                                    </Text>
-                                </div>
-                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(0,180,216,0.08)', borderRadius: 10 }}>
-                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>This Week</Text>
-                                    <Text strong style={{ fontSize: 16, color: '#00B4D8', fontFamily: 'JetBrains Mono' }}>
-                                        {formatKSH(computedStats.weekRevenue)}
-                                    </Text>
-                                </div>
-                                <div style={{ textAlign: 'center', padding: '10px 8px', background: 'rgba(255,183,3,0.08)', borderRadius: 10 }}>
-                                    <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>This Month</Text>
-                                    <Text strong style={{ fontSize: 16, color: '#FFB703', fontFamily: 'JetBrains Mono' }}>
-                                        {formatKSH(computedStats.monthRevenue)}
-                                    </Text>
-                                </div>
+                    {/* Right Column (Activity Feed & Tasks) */}
+                    <div className="col-span-4" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                        
+                        {/* Recent Activity */}
+                        <div className="premium-card" style={{ flex: 1 }}>
+                            <div className="premium-card-title">
+                                <ClockCircleOutlined style={{ color: 'var(--primary-yellow)' }} />
+                                Recent Activity
                             </div>
-                            <div style={{ marginTop: 10, display: 'flex', gap: 12, fontSize: 12 }}>
-                                <Text type="secondary">{computedStats.todaySessions} sessions today</Text>
-                                <Text type="secondary">•</Text>
-                                <Text type="secondary">{computedStats.completedTasks} tasks done</Text>
-                            </div>
-                        </Card>
 
-                        {/* Pending Tasks */}
-                        <Card
-                            size="small"
-                            title={
-                                <Space>
-                                    <FileTextOutlined style={{ color: '#FFB703' }} />
-                                    <span>Active Tasks</span>
-                                    {computedStats.pendingTasks > 0 && <Badge count={computedStats.pendingTasks} style={{ backgroundColor: '#FFB703' }} />}
-                                </Space>
-                            }
-                            style={{ marginTop: 16 }}
-                            bodyStyle={{ maxHeight: 180, overflowY: 'auto' }}
-                        >
-                            {tasks.length === 0 ? (
-                                <Empty description="No tasks" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '12px 0' }} />
+                            {activityFeed.length === 0 ? (
+                                <Empty description="No recent activity" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '32px 0' }} />
                             ) : (
-                                <List
-                                    size="small"
-                                    dataSource={tasks.slice(0, 4)}
-                                    renderItem={task => (
-                                        <List.Item style={{ padding: '6px 0' }}>
-                                            <List.Item.Meta
-                                                avatar={
-                                                    <Avatar
-                                                        size="small"
-                                                        style={{
-                                                            background: task.status === 'completed' ? '#00C853' :
-                                                                task.status === 'in-progress' ? '#00B4D8' : '#FFB703',
-                                                            width: 28, height: 28
-                                                        }}
-                                                    >
-                                                        {task.status === 'completed' ? <CheckCircleOutlined /> : <SyncOutlined />}
-                                                    </Avatar>
-                                                }
-                                                title={<Text ellipsis style={{ maxWidth: 180, fontSize: 13 }}>{task.title}</Text>}
-                                                description={
-                                                    <Space size={4}>
-                                                        <Tag size="small" style={{ fontSize: 10 }} color={
-                                                            task.status === 'completed' ? 'success' :
-                                                                task.status === 'in-progress' ? 'processing' : 'warning'
-                                                        }>{task.status}</Tag>
-                                                        <Text type="secondary" style={{ fontSize: 11 }}>{formatKSH(task.price)}</Text>
-                                                    </Space>
-                                                }
-                                            />
-                                        </List.Item>
-                                    )}
-                                />
-                            )}
-                        </Card>
-                    </Col>
-                </Row>
-
-                {/* Activity Feed */}
-                <Card
-                    size="small"
-                    title={
-                        <Space>
-                            <ClockCircleOutlined style={{ color: '#00B4D8' }} />
-                            <span>Recent Activity</span>
-                        </Space>
-                    }
-                    style={{ marginTop: 16 }}
-                    bodyStyle={{ maxHeight: 280, overflowY: 'auto' }}
-                >
-                    {activityFeed.length === 0 ? (
-                        <Empty description="No recent activity" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '16px 0' }} />
-                    ) : (
-                        <List
-                            size="small"
-                            dataSource={activityFeed.slice(0, 8)}
-                            renderItem={item => (
-                                <List.Item style={{ padding: '8px 0' }}>
-                                    <List.Item.Meta
-                                        avatar={
-                                            <Avatar size={32} style={{ background: item.iconBg, fontSize: 14 }}>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    {activityFeed.slice(0, 6).map(item => (
+                                        <div key={item.key} className="timeline-item">
+                                            <div className="timeline-icon" style={{ background: item.iconBg }}>
                                                 {item.icon}
-                                            </Avatar>
-                                        }
-                                        title={<Text style={{ fontSize: 13 }}>{item.title}</Text>}
-                                        description={<Text type="secondary" style={{ fontSize: 11 }}>{item.desc}</Text>}
-                                    />
-                                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                                        {item.extra && (
-                                            <Text style={{ color: '#00C853', fontSize: 13, fontFamily: 'JetBrains Mono', display: 'block' }}>
-                                                {item.extra}
-                                            </Text>
-                                        )}
-                                        <Text type="secondary" style={{ fontSize: 10 }}>
-                                            {dayjs(item.time).fromNow()}
-                                        </Text>
-                                    </div>
-                                </List.Item>
+                                            </div>
+                                            <div className="timeline-content">
+                                                <div className="timeline-title">{item.title}</div>
+                                                <div className="timeline-desc">{item.desc}</div>
+                                            </div>
+                                            <div className="timeline-meta">
+                                                {item.extra && (
+                                                    <div style={{ color: 'var(--primary-green)', fontSize: 13, fontFamily: 'JetBrains Mono', fontWeight: 600 }}>
+                                                        {item.extra}
+                                                    </div>
+                                                )}
+                                                <div className="timeline-time">{dayjs(item.time).fromNow()}</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
-                        />
-                    )}
-                </Card>
+                        </div>
+
+                        {/* Active Tasks */}
+                        <div className="premium-card">
+                            <div className="premium-card-title" style={{ justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <FileTextOutlined style={{ color: 'var(--primary-orange)' }} />
+                                    Active Tasks
+                                </div>
+                            </div>
+                            
+                            {tasks.length === 0 ? (
+                                <Empty description="No pending tasks" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '20px 0' }} />
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                    {tasks.slice(0, 4).map(task => (
+                                        <div key={task._id || task.id} style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            padding: '12px',
+                                            background: 'rgba(100, 116, 139, 0.05)',
+                                            borderRadius: 8,
+                                            border: '1px solid var(--border-primary)'
+                                        }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                <div style={{ 
+                                                    width: 8, 
+                                                    height: 8, 
+                                                    borderRadius: '50%', 
+                                                    background: task.status === 'completed' ? 'var(--primary-green)' : 'var(--primary-yellow)' 
+                                                }} />
+                                                <Text style={{ fontSize: 13, color: 'var(--text-primary)', maxWidth: 160 }} ellipsis>{task.title}</Text>
+                                            </div>
+                                            <Text style={{ fontSize: 12, fontFamily: 'JetBrains Mono', color: 'var(--primary-teal)' }}>
+                                                {formatKSH(task.price)}
+                                            </Text>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                    </div>
+                </div>
             </Spin>
         </div>
     );
