@@ -26,12 +26,12 @@ import {
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { getComputers, getSessions, getPrintJobs, getStats, getTransactionSummary, getTasks, connectSocket } from '../services/api';
+import { Area, Pie, TinyLine } from '@ant-design/charts';
 
 dayjs.extend(relativeTime);
 
 const { Text, Title } = Typography;
 
-// Currency formatter for KSH
 const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
 
 function Dashboard() {
@@ -44,13 +44,12 @@ function Dashboard() {
     const [tasks, setTasks] = useState([]);
     const [connected, setConnected] = useState(false);
 
-    // Fetch all dashboard data
     const fetchData = async () => {
         setLoading(true);
         try {
             const [computersRes, sessionsRes, printRes, statsRes, revenueRes, tasksRes] = await Promise.all([
                 getComputers().catch(() => []),
-                getSessions({ limit: 10 }).catch(() => []),
+                getSessions({ limit: 15 }).catch(() => []),
                 getPrintJobs({ limit: 10 }).catch(() => ({ jobs: [] })),
                 getStats().catch(() => null),
                 getTransactionSummary().catch(() => null),
@@ -73,7 +72,6 @@ function Dashboard() {
     useEffect(() => {
         fetchData();
 
-        // Connect to real-time updates
         const socket = connectSocket({
             onConnect: () => setConnected(true),
             onDisconnect: () => setConnected(false),
@@ -94,7 +92,7 @@ function Dashboard() {
                         newSessions[idx] = { ...newSessions[idx], ...data };
                         return newSessions;
                     }
-                    return [data, ...prev].slice(0, 9);
+                    return [data, ...prev].slice(0, 14);
                 });
             },
             onNewLog: (log) => {
@@ -114,16 +112,13 @@ function Dashboard() {
             },
         });
 
-        // Refresh every 30 seconds
         const interval = setInterval(fetchData, 30000);
-
         return () => {
             clearInterval(interval);
             if (socket) socket.disconnect();
         };
     }, []);
 
-    // Calculate stats from real data
     const computedStats = {
         totalComputers: computers.length,
         onlineComputers: computers.filter(c => c.isOnline).length,
@@ -137,7 +132,6 @@ function Dashboard() {
         completedTasks: tasks.filter(t => t.status === 'completed').length,
     };
 
-    // Build a unified activity feed
     const activityFeed = [];
     sessions.slice(0, 5).forEach((s, idx) => {
         activityFeed.push({
@@ -174,6 +168,55 @@ function Dashboard() {
     });
     activityFeed.sort((a, b) => new Date(b.time) - new Date(a.time));
 
+    // Data for charts
+    const pieData = [
+        { type: 'Active', value: computedStats.activeSessionsCount },
+        { type: 'Locked', value: computedStats.lockedComputers },
+        { type: 'Offline', value: computedStats.totalComputers - computedStats.onlineComputers }
+    ].filter(item => item.value > 0);
+
+    const pieConfig = {
+        data: pieData,
+        angleField: 'value',
+        colorField: 'type',
+        radius: 0.8,
+        innerRadius: 0,
+        label: { type: 'spider', labelHeight: 28, content: '{name}\n{percentage}' },
+        interactions: [{ type: 'element-selected' }, { type: 'element-active' }],
+        color: ['#00B4D8', '#FFB703', '#94A3B8'],
+        legend: { position: 'bottom' }
+    };
+
+    const areaData = [...sessions].reverse().map(s => ({
+        time: dayjs(s.receivedAt).format('HH:mm'),
+        value: s.charges?.grandTotal || 0,
+        category: 'Revenue (KSH)'
+    }));
+
+    const areaConfig = {
+        data: areaData.length ? areaData : [{ time: 'Now', value: 0, category: 'Revenue (KSH)' }],
+        xField: 'time',
+        yField: 'value',
+        seriesField: 'category',
+        smooth: true,
+        color: ['#4361EE'],
+        areaStyle: () => {
+            return { fill: 'l(270) 0:#ffffff 0.5:#7ec2f3 1:#1890ff' };
+        },
+        yAxis: { grid: { line: { style: { stroke: '#e2e8f0', lineDash: [4, 4] } } } },
+        legend: false,
+    };
+
+    const sparklineData = sessions.length ? sessions.map(s => s.charges?.grandTotal || 10).reverse() : [10, 20, 15, 25, 20, 30];
+    const tinyLineConfig = {
+        height: 50,
+        autoFit: true,
+        data: sparklineData,
+        smooth: true,
+        color: 'rgba(255,255,255,0.6)',
+        lineStyle: { lineWidth: 2 },
+    };
+
     return (
         <div className="dashboard-container">
             {/* Page Header */}
@@ -195,74 +238,120 @@ function Dashboard() {
             </div>
 
             <Spin spinning={loading}>
-                {/* 1. Top Stat Cards Row */}
+                {/* 1. Admindek Style Top Solid Cards */}
                 <div className="dashboard-grid" style={{ marginTop: 24 }}>
-                    <div className="col-span-3 premium-card glow-effect">
-                        <div className="premium-stat-card">
-                            <div className="stat-icon-wrapper blue">
-                                <DesktopOutlined />
-                            </div>
+                    <div className="col-span-3">
+                        <div className="solid-card solid-card-blue">
                             <div>
-                                <div className="stat-main-value">{computedStats.onlineComputers} <span style={{fontSize: 16, color: 'var(--text-muted)'}}>/ {computedStats.totalComputers}</span></div>
-                                <div className="stat-label-text">Computers Online</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="col-span-3 premium-card glow-effect">
-                        <div className="premium-stat-card">
-                            <div className="stat-icon-wrapper green">
-                                <PlayCircleOutlined />
-                            </div>
-                            <div>
-                                <div className="stat-main-value">{computedStats.activeSessionsCount}</div>
-                                <div className="stat-label-text">Active Sessions</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="col-span-3 premium-card glow-effect">
-                        <div className="premium-stat-card">
-                            <div className="stat-icon-wrapper yellow">
-                                <DollarOutlined />
-                            </div>
-                            <div>
+                                <div className="stat-label-text">Total Revenue (Today)</div>
                                 <div className="stat-main-value">{formatKSH(computedStats.todayRevenue)}</div>
-                                <div className="stat-label-text">Today's Revenue</div>
+                                <div className="solid-card-subtext">
+                                    <ArrowUpOutlined /> {computedStats.todaySessions} sessions today
+                                </div>
+                            </div>
+                            <div className="chart-background">
+                                <TinyLine {...tinyLineConfig} />
                             </div>
                         </div>
                     </div>
 
-                    <div className="col-span-3 premium-card glow-effect">
-                        <div className="premium-stat-card">
-                            <div className="stat-icon-wrapper purple">
-                                <CheckCircleOutlined />
-                            </div>
+                    <div className="col-span-3">
+                        <div className="solid-card solid-card-teal">
                             <div>
-                                <div className="stat-main-value">{computedStats.pendingTasks}</div>
-                                <div className="stat-label-text">Pending Tasks</div>
+                                <div className="stat-label-text">Active Computers</div>
+                                <div className="stat-main-value">{computedStats.activeSessionsCount}</div>
+                                <div className="solid-card-subtext">
+                                    <ArrowUpOutlined /> out of {computedStats.totalComputers} total
+                                </div>
+                            </div>
+                            <div className="chart-background">
+                                <TinyLine {...tinyLineConfig} />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="col-span-3">
+                        <div className="solid-card solid-card-green">
+                            <div>
+                                <div className="stat-label-text">Completed Tasks</div>
+                                <div className="stat-main-value">{computedStats.completedTasks}</div>
+                                <div className="solid-card-subtext">
+                                    <ArrowDownOutlined style={{transform: 'rotate(180deg)'}}/> {computedStats.pendingTasks} pending
+                                </div>
+                            </div>
+                            <div className="chart-background" style={{ opacity: 0.4 }}>
+                                <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 40, marginTop: 10 }}>
+                                    {[12, 24, 18, 30, 20, 35, 25].map((h, i) => (
+                                        <div key={i} style={{ width: 8, height: h, background: 'rgba(255,255,255,0.7)', borderRadius: 2 }} />
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="col-span-3">
+                        <div className="solid-card solid-card-blue" style={{ background: '#4e73df' }}>
+                            <div>
+                                <div className="stat-label-text">Online Computers</div>
+                                <div className="stat-main-value">
+                                    {computedStats.totalComputers ? Math.round((computedStats.onlineComputers / computedStats.totalComputers) * 100) : 0}%
+                                </div>
+                                <div className="solid-card-subtext">
+                                    {computedStats.onlineComputers} online right now
+                                </div>
+                            </div>
+                            <div className="chart-background">
+                                <TinyLine {...tinyLineConfig} />
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* 2. Main Content Grid */}
+                {/* 2. Main Analytics Charts Grid */}
                 <div className="dashboard-grid">
-                    {/* Left Column (Revenue & Computers) */}
-                    <div className="col-span-8" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <div className="col-span-8">
+                        <div className="premium-card" style={{ height: '100%' }}>
+                            <div className="premium-card-title">Real-time Analytics (Recent Sessions)</div>
+                            <div style={{ height: 350 }}>
+                                {areaData.length > 1 ? (
+                                    <Area {...areaConfig} />
+                                ) : (
+                                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <Empty description="Not enough real-time data yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="col-span-4">
+                        <div className="premium-card" style={{ height: '100%' }}>
+                            <div className="premium-card-title">Device Analytics (Status)</div>
+                            <div style={{ height: 350, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {pieData.length > 0 ? (
+                                    <Pie {...pieConfig} />
+                                ) : (
+                                    <Empty description="No computers data" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 3. Bottom Grid (Activity & Financials) */}
+                <div className="dashboard-grid">
+                    {/* Left Column (Financials & Computers) */}
+                    <div className="col-span-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                         
-                        {/* Revenue Overview */}
                         <div className="premium-card">
                             <div className="premium-card-title">
-                                <DollarOutlined style={{ color: 'var(--primary-teal)' }} />
+                                <DollarOutlined style={{ color: 'var(--primary-teal)', marginRight: 8 }} />
                                 Financial Overview
                             </div>
-                            
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
                                 <div className="revenue-block today">
                                     <span className="revenue-block-label">Today</span>
                                     <span className="revenue-block-value">{formatKSH(computedStats.todayRevenue)}</span>
-                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{computedStats.todaySessions} sessions</span>
                                 </div>
                                 <div className="revenue-block week">
                                     <span className="revenue-block-label">This Week</span>
@@ -275,7 +364,6 @@ function Dashboard() {
                             </div>
                         </div>
 
-                        {/* Computers Grid */}
                         <div className="premium-card">
                             <div className="premium-card-title" style={{ justifyContent: 'space-between' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -288,7 +376,7 @@ function Dashboard() {
                             {computers.length === 0 ? (
                                 <Empty description="No computers connected" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                             ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
                                     {computers.slice(0, 12).map(c => (
                                         <div
                                             key={c.clientId}
@@ -302,18 +390,12 @@ function Dashboard() {
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 gap: 12,
-                                                transition: 'transform 0.2s',
                                                 cursor: 'pointer'
                                             }}
-                                            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
-                                            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                                         >
                                             <Badge status={c.isOnline ? (c.status === 'active' ? 'success' : 'processing') : 'default'} />
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <Text strong style={{ fontSize: 13, display: 'block', color: 'var(--text-primary)' }} ellipsis>{c.hostname}</Text>
-                                                <Text style={{ fontSize: 11, color: c.isOnline && c.status === 'active' ? 'var(--primary-green)' : 'var(--text-muted)' }}>
-                                                    {c.isOnline ? (c.sessionUser || (c.status === 'active' ? 'Active' : 'Idle')) : 'Offline'}
-                                                </Text>
                                             </div>
                                         </div>
                                     ))}
@@ -322,13 +404,11 @@ function Dashboard() {
                         </div>
                     </div>
 
-                    {/* Right Column (Activity Feed & Tasks) */}
-                    <div className="col-span-4" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        
-                        {/* Recent Activity */}
+                    {/* Right Column (Activity Feed) */}
+                    <div className="col-span-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                         <div className="premium-card" style={{ flex: 1 }}>
                             <div className="premium-card-title">
-                                <ClockCircleOutlined style={{ color: 'var(--primary-yellow)' }} />
+                                <ClockCircleOutlined style={{ color: 'var(--primary-yellow)', marginRight: 8 }} />
                                 Recent Activity
                             </div>
 
@@ -336,7 +416,7 @@ function Dashboard() {
                                 <Empty description="No recent activity" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '32px 0' }} />
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                    {activityFeed.slice(0, 6).map(item => (
+                                    {activityFeed.slice(0, 7).map(item => (
                                         <div key={item.key} className="timeline-item">
                                             <div className="timeline-icon" style={{ background: item.iconBg }}>
                                                 {item.icon}
@@ -358,48 +438,6 @@ function Dashboard() {
                                 </div>
                             )}
                         </div>
-
-                        {/* Active Tasks */}
-                        <div className="premium-card">
-                            <div className="premium-card-title" style={{ justifyContent: 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <FileTextOutlined style={{ color: 'var(--primary-orange)' }} />
-                                    Active Tasks
-                                </div>
-                            </div>
-                            
-                            {tasks.length === 0 ? (
-                                <Empty description="No pending tasks" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '20px 0' }} />
-                            ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                    {tasks.slice(0, 4).map(task => (
-                                        <div key={task._id || task.id} style={{
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                            padding: '12px',
-                                            background: 'rgba(100, 116, 139, 0.05)',
-                                            borderRadius: 8,
-                                            border: '1px solid var(--border-primary)'
-                                        }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                <div style={{ 
-                                                    width: 8, 
-                                                    height: 8, 
-                                                    borderRadius: '50%', 
-                                                    background: task.status === 'completed' ? 'var(--primary-green)' : 'var(--primary-yellow)' 
-                                                }} />
-                                                <Text style={{ fontSize: 13, color: 'var(--text-primary)', maxWidth: 160 }} ellipsis>{task.title}</Text>
-                                            </div>
-                                            <Text style={{ fontSize: 12, fontFamily: 'JetBrains Mono', color: 'var(--primary-teal)' }}>
-                                                {formatKSH(task.price)}
-                                            </Text>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
                     </div>
                 </div>
             </Spin>
