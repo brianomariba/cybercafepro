@@ -26,7 +26,7 @@ import {
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { getComputers, getSessions, getPrintJobs, getStats, getTransactionSummary, getTasks, connectSocket } from '../services/api';
-import { Area, Pie, TinyLine } from '@ant-design/charts';
+import { Area, Pie, Tiny } from '@ant-design/charts';
 
 dayjs.extend(relativeTime);
 
@@ -250,7 +250,7 @@ function Dashboard() {
                                 </div>
                             </div>
                             <div className="chart-background">
-                                <TinyLine {...tinyLineConfig} />
+                                <Tiny.Line {...tinyLineConfig} />
                             </div>
                         </div>
                     </div>
@@ -265,7 +265,7 @@ function Dashboard() {
                                 </div>
                             </div>
                             <div className="chart-background">
-                                <TinyLine {...tinyLineConfig} />
+                                <Tiny.Line {...tinyLineConfig} />
                             </div>
                         </div>
                     </div>
@@ -301,7 +301,7 @@ function Dashboard() {
                                 </div>
                             </div>
                             <div className="chart-background">
-                                <TinyLine {...tinyLineConfig} />
+                                <Tiny.Line {...tinyLineConfig} />
                             </div>
                         </div>
                     </div>
