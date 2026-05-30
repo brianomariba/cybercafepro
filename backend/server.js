@@ -14,9 +14,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const mongoose = require('mongoose');
-const cron = require('node-cron');
-const https = require('https');
-const { queryTransactionStatus } = require('./utils/mpesa');
 
 // Global pricing configuration
 let pricing = {
@@ -44,13 +41,6 @@ mongoose.connect(MONGODB_URI)
                     .catch(err => console.error('Failed to init pricing:', err));
             }
         }).catch(err => console.error('Failed to load pricing:', err));
-        
-        // Schedule WhatsApp reports after DB connects
-        scheduleWhatsAppReport();
-        
-        // Initialize self-hosted WhatsApp
-        const { initWhatsApp } = require('./whatsapp');
-        initWhatsApp().catch(err => console.error('Failed to init WhatsApp:', err));
     })
     .catch(err => {
         console.error('❌ MongoDB connection error:', err);
@@ -64,7 +54,6 @@ const Session = require('./models/Session');
 const Task = require('./models/Task');
 const Service = require('./models/Service');
 const Transaction = require('./models/Transaction');
-const MpesaTransaction = require('./models/MpesaTransaction');
 const SharedDocument = require('./models/SharedDocument');
 const Log = require('./models/Log');
 const AuthSession = require('./models/AuthSession');
@@ -93,199 +82,6 @@ const io = new Server(server, {
 
 // Store connected agent sockets
 const agentSockets = new Map(); // clientId -> socketId
-
-// WhatsApp Report Cron Job
-let whatsappCronJob = null;
-
-function formatWhatsAppPhone(phone) {
-    if (!phone) return '';
-    let formatted = phone.trim().replace(/[\s\-()]/g, ''); // Remove spaces, dashes, parentheses
-    
-    // If it starts with a plus, strip it temporarily to check country code
-    let hasPlus = formatted.startsWith('+');
-    if (hasPlus) {
-        formatted = formatted.substring(1);
-    }
-    
-    // If it starts with 00, strip it and treat it as a plus
-    if (formatted.startsWith('00')) {
-        formatted = formatted.substring(2);
-    }
-    
-    // Now check if it starts with 2540 (Kenyan country code + incorrect leading zero)
-    if (formatted.startsWith('2540')) {
-        formatted = '254' + formatted.substring(4);
-    }
-    
-    // If it starts with 0 and is typical local format (e.g. 0724384646)
-    if (formatted.startsWith('0') && formatted.length === 10) {
-        formatted = '254' + formatted.substring(1);
-    }
-    
-    // Ensure it starts with +
-    if (!formatted.startsWith('+')) {
-        formatted = '+' + formatted;
-    }
-    
-    return formatted;
-}
-
-async function sendWhatsAppReport(options = {}) {
-    return new Promise(async (resolve, reject) => {
-        try {
-            let phone = options.phone;
-            let enabled = true; // Default to true if options overrides are provided
-            
-            const { sendMessage, getStatus } = require('./whatsapp');
-            
-            if (!phone) {
-                const settingsDoc = await Settings.findOne({ key: 'whatsapp_report' });
-                if (!settingsDoc || !settingsDoc.value) {
-                    return resolve({ success: false, error: 'WhatsApp reports are not configured.' });
-                }
-                if (!phone) phone = settingsDoc.value.phone;
-                enabled = settingsDoc.value.enabled;
-            }
-
-            if (!enabled) {
-                return resolve({ success: false, error: 'WhatsApp reports are disabled or not configured.' });
-            }
-            
-            if (!phone) {
-                return resolve({ success: false, error: 'Phone number is missing.' });
-            }
-
-            const waStatus = getStatus();
-            if (waStatus.status !== 'connected') {
-                return resolve({ success: false, error: 'WhatsApp is not connected to a device. Please scan the QR code in settings.' });
-            }
-
-            // Fetch pricing dynamically
-            const pricing = await getPricing();
-
-            // Fetch data
-            const computerDocs = await Computer.find();
-            const now = new Date();
-            const allComputers = computerDocs.map(c => ({
-                ...c.toObject(),
-                isOnline: (now - new Date(c.lastSeen)) < 45000
-            }));
-            
-            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-            
-            const [todaySessions, todayPrintJobs, todayTxns, todayReadings] = await Promise.all([
-                Session.find({ receivedAt: { $gte: todayStart } }),
-                Log.find({ type: 'print', receivedAt: { $gte: todayStart } }),
-                Transaction.find({ createdAt: { $gte: todayStart } }),
-                PageCounterReading.find({ recordedAt: { $gte: todayStart } }).sort({ recordedAt: 1 })
-            ]);
-            
-            const todaySessionRevenue = todaySessions
-                .filter(s => s.type === 'LOGOUT' && s.charges)
-                .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
-                
-            const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
-                const data = j.data || {};
-                const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
-                const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
-                return sum + (sheets * rate);
-            }, 0);
-            
-            // Calculate exact photocopy revenue from page counters
-            let todayPhotocopyRevenue = 0;
-            let totalPhotocopies = 0;
-            const printerReadings = {};
-            todayReadings.forEach(r => {
-                if (!printerReadings[r.printerName]) printerReadings[r.printerName] = [];
-                printerReadings[r.printerName].push(r);
-            });
-
-            for (const pName in printerReadings) {
-                const readings = printerReadings[pName];
-                if (readings.length >= 2) {
-                    const first = readings[0];
-                    const last = readings[readings.length - 1];
-                    
-                    let diffBW = (last.withBorderBW || 0) - (first.withBorderBW || 0);
-                    let diffColor = (last.withBorderColor || 0) - (first.withBorderColor || 0);
-                    let diffTotal = last.counterValue - first.counterValue;
-                    
-                    const pLogs = todayPrintJobs.filter(j => j.hostname === last.hostname || !j.hostname);
-                    let pBW = 0, pColor = 0;
-                    pLogs.forEach(j => {
-                        const data = j.data || {};
-                        const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
-                        if (data.printType === 'color') pColor += sheets;
-                        else pBW += sheets;
-                    });
-                    
-                    let photoBW = Math.max(0, diffBW - pBW);
-                    let photoColor = Math.max(0, diffColor - pColor);
-                    
-                    if (diffBW === 0 && diffColor === 0) {
-                        let photoTotal = Math.max(0, diffTotal - (pBW + pColor));
-                        photoBW = photoTotal;
-                    }
-                    
-                    totalPhotocopies += (photoBW + photoColor);
-                    todayPhotocopyRevenue += (photoBW * (pricing.photocopyBW || 8)) + (photoColor * (pricing.photocopyColor || 40));
-                }
-            }
-            
-            const todayTaskRevenue = todayTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
-            const mpesaRevenue = todayTxns.filter(t => t.paymentMethod === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0);
-            const cashRevenue = todayTaskRevenue - mpesaRevenue;
-            
-            const totalRevenue = todaySessionRevenue + todayPrintRevenue + todayTaskRevenue + todayPhotocopyRevenue;
-            const onlineCount = allComputers.filter(c => c.isOnline).length;
-            const totalSessions = todaySessions.filter(s => s.type === 'LOGIN').length;
-            
-            // Format report
-            let report = `📊 *HawkNine Daily Report*\n`;
-            report += `📅 Date: ${now.toLocaleDateString()}\n\n`;
-            report += `💻 *Computers Status*\n`;
-            report += `Online: ${onlineCount} / ${allComputers.length}\n\n`;
-            report += `💰 *Revenue Summary*\n`;
-            report += `Total Revenue: KES ${totalRevenue.toLocaleString()}\n`;
-            report += `• Sessions: KES ${todaySessionRevenue.toLocaleString()}\n`;
-            report += `• Printing: KES ${todayPrintRevenue.toLocaleString()}\n`;
-            report += `• Photocopy: KES ${todayPhotocopyRevenue.toLocaleString()}\n`;
-            report += `• Tasks/Sales: KES ${todayTaskRevenue.toLocaleString()} (Cash: KES ${cashRevenue.toLocaleString()}, M-Pesa: KES ${mpesaRevenue.toLocaleString()})\n\n`;
-            report += `📈 *Usage Stats*\n`;
-            report += `Total Sessions: ${totalSessions}\n`;
-            report += `Print Jobs: ${todayPrintJobs.length}\n`;
-            report += `Photocopies: ${totalPhotocopies}\n`;
-            
-            const result = await sendMessage(phone, report);
-            resolve(result);
-            
-        } catch (err) {
-            console.error('[WHATSAPP] Failed to generate/send report:', err);
-            resolve({ success: false, error: err.message || err });
-        }
-    });
-}
-
-function scheduleWhatsAppReport() {
-    if (whatsappCronJob) {
-        whatsappCronJob.stop();
-        whatsappCronJob = null;
-    }
-    
-    Settings.findOne({ key: 'whatsapp_report' }).then(doc => {
-        if (doc && doc.value && doc.value.enabled && doc.value.time) {
-            const time = doc.value.time; // HH:mm format
-            const [hours, minutes] = time.split(':');
-            
-            const cronTime = `${minutes} ${hours} * * *`;
-            whatsappCronJob = cron.schedule(cronTime, () => {
-                console.log('[WHATSAPP] Running scheduled report...');
-                sendWhatsAppReport();
-            });
-            console.log(`[WHATSAPP] Scheduled report for ${time} daily`);
-        }
-    }).catch(err => console.error('[WHATSAPP] Error scheduling report:', err));
-}
 
 // ==================== SOCKET.IO HANDLERS ====================
 io.on('connection', (socket) => {
@@ -358,196 +154,9 @@ io.on('connection', (socket) => {
 // Trust Nginx Proxy
 app.set('trust proxy', 1);
 
-// Body Parser Middleware (must be before M-Pesa routes)
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true }));
-
 // ==================== HEALTH CHECK ====================
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// ==================== M-PESA WEBHOOKS & API ====================
-// C2B Validation
-app.post('/api/v1/c2b/validation', (req, res) => {
-    // Safaricom expects a ResultCode 0 to accept the transaction
-    res.json({ ResultCode: 0, ResultDesc: "Accepted" });
-});
-
-// C2B Confirmation (Manual Payments)
-app.post('/api/v1/c2b/confirmation', async (req, res) => {
-    console.log('[M-Pesa] C2B Confirmation received:', req.body);
-    try {
-        const payload = req.body;
-        const payerName = [payload.FirstName, payload.MiddleName, payload.LastName].filter(Boolean).join(' ');
-        
-        await MpesaTransaction.create({
-            id: 'c2b-' + payload.TransID,
-            transactionType: 'C2B',
-            status: 'completed',
-            amount: parseFloat(payload.TransAmount) || 0,
-            mpesaReceiptNumber: payload.TransID,
-            accountReference: payload.BillRefNumber || 'N/A',
-            phoneNumber: payload.MSISDN,
-            payerName: payerName,
-            rawMessage: JSON.stringify(payload),
-            fullDescription: 'M-Pesa C2B Payment',
-            resultDesc: 'Payment confirmed via C2B Webhook',
-            completedAt: new Date()
-        });
-        console.log(`[M-Pesa] Saved C2B Transaction ${payload.TransID} from ${payerName}`);
-        
-        // Broadcast to connected agents
-        io.emit('payment-completed', {
-            checkoutRequestId: null,
-            receiptNumber: payload.TransID,
-            amount: parseFloat(payload.TransAmount) || 0,
-            phoneNumber: payload.MSISDN,
-            payerName: payerName,
-            description: 'M-Pesa C2B Payment',
-            isManualPayment: true,
-            status: 'completed'
-        });
-    } catch (e) {
-        console.error('[M-Pesa] Failed to process C2B confirmation:', e.message);
-    }
-    // Always acknowledge Safaricom immediately
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
-});
-
-// STK Push Callback (For future use if server initiates pushes)
-app.post('/api/v1/mpesa/callback', async (req, res) => {
-    console.log('[M-Pesa] STK Callback received');
-    try {
-        const result = req.body?.Body?.stkCallback;
-        if (result) {
-            const checkoutId = result.CheckoutRequestID;
-            const resultCode = result.ResultCode;
-            const metadata = result.CallbackMetadata?.Item || [];
-            
-            let amount = 0, receipt = '', phone = '';
-            for (const item of metadata) {
-                if (item.Name === 'Amount') amount = item.Value;
-                if (item.Name === 'MpesaReceiptNumber') receipt = item.Value;
-                if (item.Name === 'PhoneNumber') phone = item.Value;
-            }
-
-            // We update or create if it doesn't exist
-            const tx = await MpesaTransaction.findOneAndUpdate(
-                { mpesaCheckoutRequestId: checkoutId },
-                {
-                    id: 'stk-' + checkoutId,
-                    transactionType: 'STK_PUSH',
-                    status: resultCode === 0 ? 'completed' : 'failed',
-                    amount: amount,
-                    mpesaReceiptNumber: receipt,
-                    phoneNumber: phone,
-                    mpesaCheckoutRequestId: checkoutId,
-                    merchantRequestId: result.MerchantRequestID,
-                    rawMessage: JSON.stringify(req.body),
-                    resultDesc: result.ResultDesc,
-                    completedAt: new Date()
-                },
-                { new: true, upsert: true }
-            );
-            
-            // Broadcast the result to agents
-            io.emit(resultCode === 0 ? 'payment-completed' : 'payment-failed', {
-                checkoutRequestId: checkoutId,
-                receiptNumber: receipt,
-                amount: amount,
-                phoneNumber: phone,
-                payerName: tx.payerName || '',
-                description: result.ResultDesc,
-                isManualPayment: false,
-                status: resultCode === 0 ? 'completed' : 'failed'
-            });
-
-            // Trigger Transaction Status Query to fetch payer's name automatically
-            if (resultCode === 0 && receipt) {
-                queryTransactionStatus(receipt).catch(err => console.error('[M-Pesa] Async status query failed:', err.message));
-            }
-        }
-    } catch (e) {
-        console.error('[M-Pesa] Failed to process STK callback:', e);
-    }
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
-});
-
-// Transaction Status Result Webhook
-app.post('/api/v1/mpesa/status/result', async (req, res) => {
-    try {
-        const result = req.body?.Result;
-        if (!result) return res.json({ ResultCode: 0, ResultDesc: "Success" });
-
-        const receipt = result.ResultParameters?.ResultParameter?.find(p => p.Key === 'ReceiptNo')?.Value;
-        const payerName = result.ResultParameters?.ResultParameter?.find(p => p.Key === 'DebitPartyName')?.Value;
-
-        if (receipt && payerName) {
-            // Clean up name if it contains prefix (e.g. "123456 - JOHN DOE")
-            const cleanName = payerName.split('-').pop().trim();
-            
-            const tx = await MpesaTransaction.findOneAndUpdate(
-                { mpesaReceiptNumber: receipt },
-                { payerName: cleanName },
-                { new: true }
-            );
-
-            if (tx) {
-                console.log(`[M-Pesa] Status Query returned name: ${cleanName} for receipt ${receipt}`);
-                io.emit('payment-name-updated', {
-                    receiptNumber: receipt,
-                    payerName: cleanName
-                });
-            }
-        }
-    } catch (e) {
-        console.error('[M-Pesa] Status Result Error:', e.message);
-    }
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
-});
-
-// Transaction Status Timeout Webhook
-app.post('/api/v1/mpesa/status/timeout', (req, res) => {
-    res.json({ ResultCode: 0, ResultDesc: "Success" });
-});
-
-// Update STK Payer Name from Agent
-app.post('/api/v1/mpesa/name', async (req, res) => {
-    try {
-        const { checkoutRequestId, payerName } = req.body;
-        if (!checkoutRequestId || !payerName) return res.json({ success: false });
-        
-        const tx = await MpesaTransaction.findOneAndUpdate(
-            { mpesaCheckoutRequestId: checkoutRequestId },
-            { payerName: payerName },
-            { new: true, upsert: true }
-        );
-        
-        io.emit('payment-name-updated', {
-            receiptNumber: tx.mpesaReceiptNumber || '',
-            payerName: payerName
-        });
-        res.json({ success: true });
-    } catch (e) {
-        console.error('[M-Pesa] Failed to save payer name:', e.message);
-        res.json({ success: false });
-    }
-});
-
-// Endpoint for Desktop Agent to fetch M-Pesa history
-app.get('/api/v1/mpesa/transactions', async (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const txns = await MpesaTransaction.find()
-            .sort({ completedAt: -1, createdAt: -1 })
-            .limit(limit);
-        res.json(txns);
-    } catch (error) {
-        console.error('[M-Pesa] Error fetching history:', error);
-        res.status(500).json({ error: 'Failed to fetch M-Pesa transactions' });
-    }
 });
 
 // ==================== STATIC FILES ====================
@@ -749,6 +358,9 @@ const upload = multer({
 });
 
 // Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(UPLOADS_DIR)); // Serve uploaded files
 
 // Apply rate limiting to all API routes
@@ -883,6 +495,17 @@ async function seedDatabase() {
 }
 // Run seed after connection
 mongoose.connection.once('open', async () => {
+    // Quick Fix: Drop the problematic id_1 sparse index that caused M-Pesa E11000 duplicate errors
+    try {
+        const db = mongoose.connection.db;
+        const result = await db.collection('transactions').deleteMany({ id: null });
+        console.log(`[DB Cleanup] Removed ${result.deletedCount} null-id transactions`);
+        await db.collection('transactions').dropIndex('id_1');
+        console.log('[DB Cleanup] Successfully dropped id_1 index from transactions');
+    } catch (e) {
+        // If it fails, the index might not exist, which is fine
+    }
+
     await seedDatabase();
 
     // Sync in-memory computer Map from Database on startup
@@ -2013,98 +1636,6 @@ app.post('/api/v1/admin/cleanup-demo-users', requireAdminAuth, async (req, res) 
 
 
 // ==================== SETTINGS API ENDPOINTS ====================
-
-/**
- * GET /api/v1/admin/whatsapp-report-settings
- * Get WhatsApp report settings
- */
-app.get('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
-    try {
-        const doc = await Settings.findOne({ key: 'whatsapp_report' });
-        res.json(doc ? doc.value : { enabled: false, phone: '', time: '18:00' });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to get WhatsApp settings' });
-    }
-});
-
-/**
- * POST /api/v1/admin/whatsapp-report-settings
- * Save WhatsApp report settings
- */
-app.post('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
-    try {
-        const settings = req.body;
-        await Settings.findOneAndUpdate(
-            { key: 'whatsapp_report' },
-            { value: settings, updatedAt: new Date() },
-            { upsert: true, new: true }
-        );
-        scheduleWhatsAppReport(); // Reschedule with new time/enabled state
-        res.json({ success: true, message: 'Settings saved' });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to save WhatsApp settings' });
-    }
-});
-
-/**
- * POST /api/v1/admin/whatsapp-report/test
- * Trigger test WhatsApp report immediately
- */
-app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res) => {
-    try {
-        const result = await sendWhatsAppReport(req.body);
-        if (result.success) {
-            res.json({ success: true, message: 'Test report sent successfully!', details: result });
-        } else {
-            res.status(400).json({ error: result.error || 'Failed to send test report.', details: result });
-        }
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to trigger test report: ' + error.message });
-    }
-});
-
-/**
- * GET /api/v1/admin/whatsapp/status
- * Get Baileys WhatsApp connection status
- */
-app.get('/api/v1/admin/whatsapp/status', requireAdminAuth, (req, res) => {
-    const { getStatus } = require('./whatsapp');
-    res.json(getStatus());
-});
-
-/**
- * GET /api/v1/admin/whatsapp/qr
- * Get Baileys WhatsApp QR Code
- */
-app.get('/api/v1/admin/whatsapp/qr', requireAdminAuth, (req, res) => {
-    const { getQRCode } = require('./whatsapp');
-    const qr = getQRCode();
-    if (qr) {
-        res.json({ qr });
-    } else {
-        res.status(404).json({ error: 'QR Code not available currently' });
-    }
-});
-
-/**
- * POST /api/v1/admin/whatsapp/logout
- * Logout linked WhatsApp device
- */
-app.post('/api/v1/admin/whatsapp/logout', requireAdminAuth, async (req, res) => {
-    const { logout } = require('./whatsapp');
-    const result = await logout();
-    res.json(result);
-});
-
-/**
- * POST /api/v1/admin/whatsapp/restart
- * Restart WhatsApp connection process
- */
-app.post('/api/v1/admin/whatsapp/restart', requireAdminAuth, async (req, res) => {
-    const { restart } = require('./whatsapp');
-    await restart();
-    res.json({ success: true });
-});
 
 /**
  * GET /api/v1/admin/settings
@@ -6882,7 +6413,7 @@ app.put('/api/v1/admin/inventory/settings', requireAdminAuth, async (req, res) =
  */
 app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category, store } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category } = req.body;
 
         if (!name || price === undefined || stock === undefined) {
             return res.status(400).json({ error: 'Name, price, and stock are required' });
@@ -6895,7 +6426,6 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
             stock: parseInt(stock) || 0,
             lowStockThreshold: parseInt(lowStockThreshold) || 5,
             category: category || 'General',
-            store: store || 'Main Store',
             isActive: true
         });
 
@@ -6913,7 +6443,7 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
  */
 app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category, store, isActive } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category, isActive } = req.body;
 
         const item = await InventoryItem.findByIdAndUpdate(
             req.params.id,
@@ -6924,7 +6454,6 @@ app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
                 stock: parseInt(stock) || 0,
                 lowStockThreshold: parseInt(lowStockThreshold) || 5,
                 category: category || 'General',
-                store: store || 'Main Store',
                 isActive: isActive !== false,
                 updatedAt: new Date()
             },
@@ -8667,6 +8196,9 @@ app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) 
         res.status(500).json({ error: 'Failed to clear records' });
     }
 });
+
+// ==================== MPESA INTEGRATION ====================
+require('./mpesa-routes')(app, io);
 
 // ==================== SERVER START ====================
 
