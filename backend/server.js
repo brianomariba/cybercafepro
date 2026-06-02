@@ -8200,6 +8200,42 @@ app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) 
 // ==================== MPESA INTEGRATION ====================
 require('./mpesa-routes')(app, io);
 
+// ==================== WHATSAPP INTEGRATION ====================
+const whatsapp = require('./whatsapp');
+
+// Start WhatsApp Service
+whatsapp.initWhatsApp();
+
+// API Endpoints for WhatsApp
+app.get('/api/v1/admin/whatsapp/status', requireAdminAuth, (req, res) => {
+    res.json(whatsapp.getStatus());
+});
+
+app.get('/api/v1/admin/whatsapp/qr', requireAdminAuth, (req, res) => {
+    res.json({ qr: whatsapp.getQRCode() });
+});
+
+app.post('/api/v1/admin/whatsapp/logout', requireAdminAuth, async (req, res) => {
+    const result = await whatsapp.logout();
+    res.json(result);
+});
+
+app.post('/api/v1/admin/whatsapp/restart', requireAdminAuth, async (req, res) => {
+    await whatsapp.restart();
+    res.json({ success: true });
+});
+
+app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+    const result = await whatsapp.sendMessage(phone, "Test message from HawkNine WhatsApp Integration.");
+    if (result.success) {
+        res.json({ success: true });
+    } else {
+        res.status(500).json({ error: result.error });
+    }
+});
+
 // ==================== SERVER START ====================
 
 const PORT = process.env.PORT || 5000;

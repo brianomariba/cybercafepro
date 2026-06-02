@@ -474,7 +474,12 @@ module.exports = function(app, io) {
                 FirstName,
                 MiddleName,
                 LastName
-            } = req.body;
+            } = req.body || {};
+
+            if (!TransID) {
+                console.warn('[C2B] Missing TransID in confirmation payload');
+                return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+            }
 
             // Build payer's full name from C2B fields
             const nameParts = [FirstName, MiddleName, LastName].filter(Boolean);
