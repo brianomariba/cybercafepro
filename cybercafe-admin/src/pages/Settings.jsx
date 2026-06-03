@@ -33,6 +33,7 @@ import {
     QrcodeOutlined,
     ReloadOutlined,
     DisconnectOutlined,
+    SendOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp } from '../services/api';
@@ -1123,8 +1124,11 @@ function Settings() {
                                                 onClick={handleTestWhatsappReport}
                                                 loading={testingWhatsapp}
                                                 disabled={!whatsappSettings.phone || waStatus.status !== 'connected'}
+                                                icon={<SendOutlined />}
+                                                type="default"
+                                                style={{ borderColor: '#25D366', color: '#25D366' }}
                                             >
-                                                Send Test Report Now
+                                                Send Dashboard Report Now
                                             </Button>
                                             <Button
                                                 type="primary"

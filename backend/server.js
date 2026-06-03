@@ -8228,11 +8228,59 @@ app.post('/api/v1/admin/whatsapp/restart', requireAdminAuth, async (req, res) =>
 app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ error: 'Phone number required' });
-    const result = await whatsapp.sendMessage(phone, "Test message from HawkNine WhatsApp Integration.");
-    if (result.success) {
-        res.json({ success: true });
-    } else {
-        res.status(500).json({ error: result.error });
+    
+    try {
+        const computerDocs = await Computer.find();
+        const now = new Date();
+        const allComputers = computerDocs.map(c => ({
+            ...c.toObject(),
+            isOnline: (now - new Date(c.lastSeen)) < 45000 // 45s grace period
+        }));
+
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        const [todaySessions, todayPrintJobs] = await Promise.all([
+            Session.find({ receivedAt: { $gte: todayStart } }),
+            Log.find({ type: 'print', receivedAt: { $gte: todayStart } })
+        ]);
+
+        const todaySessionRevenue = todaySessions
+            .filter(s => s.type === 'LOGOUT' && s.charges)
+            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+
+        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+            const data = j.data || {};
+            const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
+            const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
+            return sum + (sheets * rate);
+        }, 0);
+
+        const totalRevenue = todaySessionRevenue + todayPrintRevenue;
+        const activeSessions = allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length;
+        const onlineComputers = allComputers.filter(c => c.isOnline).length;
+        const totalComputers = allComputers.length;
+
+        const reportMessage = `*HawkNine Daily Report* 📊\n\n` +
+            `*Date:* ${now.toDateString()}\n\n` +
+            `💰 *Revenue:*\n` +
+            `• Total: KSH ${totalRevenue}\n` +
+            `• Sessions: KSH ${todaySessionRevenue}\n` +
+            `• Printing: KSH ${todayPrintRevenue}\n\n` +
+            `💻 *Computers:*\n` +
+            `• Online: ${onlineComputers}/${totalComputers}\n` +
+            `• Active Sessions: ${activeSessions}\n\n` +
+            `*Powered by HawkNine*`;
+
+        const result = await whatsapp.sendMessage(phone, reportMessage);
+        
+        if (result.success) {
+            res.json({ success: true, message: 'Dashboard report sent successfully' });
+        } else {
+            res.status(500).json({ error: result.error });
+        }
+    } catch (error) {
+        console.error('WhatsApp Report Generation Error:', error);
+        res.status(500).json({ error: 'Failed to generate report data' });
     }
 });
 
