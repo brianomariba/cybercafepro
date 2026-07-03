@@ -1106,6 +1106,16 @@
             color: var(--warning);
         }
 
+        .status-badge.stk-push {
+            background: rgba(0, 180, 216, 0.15);
+            color: var(--primary);
+        }
+
+        .status-badge.manual-pay {
+            background: rgba(255, 183, 3, 0.15);
+            color: var(--accent);
+        }
+
         .sales-filter-bar {
             display: flex;
             gap: 8px;
@@ -1885,7 +1895,7 @@
                     <h3 style="margin: 0;">📋 Recent M-Pesa Payments</h3>
                     <div style="display: flex; gap: 8px; flex: 1; justify-content: flex-end; align-items: center;">
                         <input type="text" class="form-input btn-small" id="mpesaSearchInput"
-                            placeholder="Search phone, receipt..." style="max-width: 180px;"
+                            placeholder="Search name, phone, receipt..." style="max-width: 200px;"
                             oninput="renderMpesaRecentTransactions()">
                         <select class="form-input btn-small" id="mpesaSortSelect" style="max-width: 130px;"
                             onchange="renderMpesaRecentTransactions()">
@@ -1894,16 +1904,18 @@
                             <option value="amount-desc">Highest Amount</option>
                             <option value="amount-asc">Lowest Amount</option>
                         </select>
-                        <select class="form-input btn-small" id="mpesaFilterSelect" style="max-width: 110px;"
+                        <select class="form-input btn-small" id="mpesaFilterSelect" style="max-width: 130px;"
                             onchange="renderMpesaRecentTransactions()">
                             <option value="all">All</option>
                             <option value="success">✅ Success</option>
                             <option value="failed">❌ Failed</option>
+                            <option value="manual">📱 Manual</option>
+                            <option value="stk">💳 STK Push</option>
                         </select>
                         <button class="btn btn-small btn-secondary" onclick="fetchMpesaHistory()" title="Load from server">↻</button>
                     </div>
                 </div>
-                <div id="mpesaRecentList" style="max-height: 400px; overflow-y: auto;">
+                <div id="mpesaRecentList" style="max-height: 600px; overflow-y: auto; scroll-behavior: smooth; padding-right: 4px;">
                     <div class="empty-state">
                         <div class="empty-icon">📱</div>
                         <p>No M-Pesa payments yet this session</p>
@@ -2405,9 +2417,18 @@
                     phone: displayPhone,
                     receipt: data.receiptNumber,
                     time: new Date(),
-                    payerName: data.payerName || ''
+                    payerName: data.payerName || '',
+                    isManualPayment: !!data.isManualPayment
                 });
             }
+
+            // Auto-refresh history after 4 seconds to guarantee the payer's name is pulled 
+            // from the database, bypassing any socket race conditions
+            setTimeout(() => { 
+                if (typeof fetchMpesaHistory === 'function') {
+                    fetchMpesaHistory(); 
+                }
+            }, 4000);
         });
 
         ipcRenderer.on('mpesa-payment-failed', (event, data) => {
@@ -2420,7 +2441,8 @@
                     phone: 'N/A',
                     receipt: 'Failed',
                     time: new Date(),
-                    payerName: ''
+                    payerName: '',
+                    isManualPayment: false
                 });
             }
         });
@@ -3623,7 +3645,10 @@
                                     amount: total,
                                     phone: phone,
                                     receipt: statusRes.receiptNumber,
-                                    time: new Date()
+                                    time: new Date(),
+                                    isManualPayment: false,
+                                    payerName: payerName,
+                                    fullMessage: statusRes.resultDesc || statusRes.message || 'Payment completed successfully'
                                 });
 
                                 showToast(`M-Pesa payment received for ${desc}!`, 'success');
@@ -3659,12 +3684,15 @@
                                     amount: total,
                                     phone: phone,
                                     receipt: 'Failed',
-                                    time: new Date()
+                                    time: new Date(),
+                                    isManualPayment: false,
+                                    payerName: payerName,
+                                    fullMessage: statusRes.failureReason || statusRes.resultDesc || statusRes.message || 'User cancelled or insufficient funds'
                                 });
 
                                 setTimeout(() => resetMpesaUI(), 3000);
 
-                            } else if (attempts > 12) { // 60 seconds
+                            } else if (attempts > 24) { // 60 seconds
                                 clearInterval(mpesaPollInterval);
                                 mpesaPollInterval = null;
 
@@ -3679,7 +3707,7 @@
                         } catch (e) {
                             console.error('M-Pesa status polling error', e);
                         }
-                    }, 5000);
+                    }, 2500);
 
                 } else {
                     // Push failed to initiate
@@ -3738,13 +3766,14 @@
         async function fetchMpesaHistory() {
             try {
                 const result = await ipcRenderer.invoke('fetch-mpesa-history');
-                if (result && result.success && result.transactions) {
+                // Backend returns array directly OR {success, transactions}
+                const transactions = Array.isArray(result) ? result : (result && result.transactions ? result.transactions : null);
+                if (transactions && transactions.length > 0) {
                     // Merge server transactions into local list (avoid duplicates)
-                    for (const serverTx of result.transactions) {
+                    for (const serverTx of transactions) {
                         // Build a readable description from all available fields
                         let displayDesc = serverTx.fullDescription || serverTx.description || 'M-Pesa Payment';
-                        // Don't use cryptic account references as the main title
-                        if (displayDesc === 'Payment for services') displayDesc = serverTx.fullDescription || 'Custom Payment';
+                        if (displayDesc === 'Payment for services') displayDesc = 'Custom Payment';
                         
                         // Format phone number for display
                         let displayPhone = serverTx.phoneNumber || 'N/A';
@@ -3760,21 +3789,35 @@
                             receipt: serverTx.mpesaReceiptNumber || (serverTx.status === 'failed' ? 'Failed' : 'Pending'),
                             time: new Date(serverTx.completedAt || serverTx.createdAt),
                             reference: serverTx.accountReference || '',
-                            payerName: serverTx.payerName || ''
+                            payerName: serverTx.payerName || '',
+                            isManualPayment: serverTx.isManualPayment || serverTx.transactionType === 'C2B' || serverTx.id?.startsWith('c2b-') || !serverTx.mpesaCheckoutRequestId,
+                            fullMessage: serverTx.resultDesc || serverTx.fullDescription || serverTx.message || ''
                         };
-                        // Skip if already exists
-                        const isDuplicate = mpesaRecentTransactions.find(t =>
+                        // Update if already exists
+                        const existingTx = mpesaRecentTransactions.find(t =>
                             (t.receipt && t.receipt !== 'Failed' && t.receipt === tx.receipt) ||
                             (t.phone === tx.phone && t.amount === tx.amount && Math.abs(new Date(t.time) - new Date(tx.time)) < 60000)
                         );
-                        if (!isDuplicate) {
+                        if (!existingTx) {
                             mpesaRecentTransactions.push(tx);
+                        } else {
+                            // Update existing entry with potentially new data from server
+                            existingTx.payerName = tx.payerName || existingTx.payerName;
+                            if (existingTx.receipt === 'Failed' || existingTx.receipt === 'Pending' || !existingTx.receipt) {
+                                existingTx.receipt = tx.receipt;
+                            }
+                            if (tx.status === 'success') {
+                                existingTx.status = 'success';
+                            }
                         }
                     }
                     renderMpesaRecentTransactions();
-                    showToast(`Loaded ${result.transactions.length} M-Pesa transactions from server`, 'success');
+                    showToast(`Loaded ${transactions.length} M-Pesa transactions from server`, 'success');
+                } else if (result && result.success === false) {
+                    showToast(result.message || 'Failed to load M-Pesa history', 'error');
                 } else {
-                    showToast('No M-Pesa transactions found', 'info');
+                    renderMpesaRecentTransactions();
+                    showToast('No M-Pesa transactions found on server', 'info');
                 }
             } catch (e) {
                 console.error('Failed to fetch M-Pesa history:', e);
@@ -3798,14 +3841,17 @@
             // Filter
             if (filter === 'success') filtered = filtered.filter(tx => tx.status === 'success');
             else if (filter === 'failed') filtered = filtered.filter(tx => tx.status === 'failed');
+            else if (filter === 'manual') filtered = filtered.filter(tx => tx.isManualPayment);
+            else if (filter === 'stk') filtered = filtered.filter(tx => !tx.isManualPayment);
 
-            // Search
+            // Search (includes payer name)
             if (search) {
                 filtered = filtered.filter(tx =>
                     (tx.phone || '').toLowerCase().includes(search) ||
                     (tx.receipt || '').toLowerCase().includes(search) ||
                     (tx.desc || '').toLowerCase().includes(search) ||
                     (tx.reference || '').toLowerCase().includes(search) ||
+                    (tx.payerName || '').toLowerCase().includes(search) ||
                     String(tx.amount).includes(search)
                 );
             }
@@ -3831,11 +3877,18 @@
                 const timeStr = tx.time instanceof Date ? tx.time.toLocaleString() : new Date(tx.time).toLocaleString();
                 const statusIcon = tx.status === 'success' ? '✅' : (tx.status === 'pending' ? '⏳' : '❌');
                 const statusColor = tx.status === 'success' ? 'var(--success)' : (tx.status === 'pending' ? 'var(--warning)' : 'var(--danger)');
+                
+                const typeBadge = tx.isManualPayment 
+                    ? `<span class="status-badge manual-pay" style="margin-left: 8px;">Manual</span>`
+                    : `<span class="status-badge stk-push" style="margin-left: 8px;">STK Push</span>`;
 
                 return `
                 <div class="sale-row" style="margin-bottom: 8px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; border-left: 3px solid ${statusColor};">
                     <div class="sale-left" style="flex: 1;">
-                        <div class="sale-item-name" style="font-size: 14px; font-weight: 600;">${escapeHtml(tx.desc || 'M-Pesa Payment')}</div>
+                        <div class="sale-item-name" style="font-size: 14px; font-weight: 600;">
+                            ${escapeHtml(tx.desc || 'M-Pesa Payment')}
+                            ${typeBadge}
+                        </div>
                         ${tx.payerName ? `<div style="font-size: 13px; color: var(--accent); margin-top: 2px;">👤 ${escapeHtml(tx.payerName)}</div>` : ''}
                         <div class="sale-meta" style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px;">
                             <span>📞 ${escapeHtml(tx.phone || 'N/A')}</span>
@@ -3844,6 +3897,7 @@
                         <div style="margin-top: 4px; font-size: 12px; color: var(--text-secondary);">
                             ${statusIcon} Receipt: <strong>${escapeHtml(tx.receipt || 'N/A')}</strong>
                         </div>
+                        ${tx.fullMessage ? `<div style="margin-top: 6px; padding: 6px 10px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 11px; color: var(--text-secondary); line-height: 1.4; white-space: pre-wrap; font-family: monospace;">${escapeHtml(tx.fullMessage)}</div>` : ''}
                     </div>
                     <div style="text-align: right; min-width: 100px;">
                         <div style="font-weight: 700; font-size: 16px; color: ${statusColor};">
@@ -3868,7 +3922,7 @@
         document.querySelectorAll('.nav-tab').forEach(tab => {
             if (tab.dataset.section === 'mpesa') {
                 tab.addEventListener('click', () => {
-                    if (mpesaRecentTransactions.length === 0) fetchMpesaHistory();
+                    fetchMpesaHistory(); // Always refresh history when clicking the M-Pesa tab!
                 });
             }
         });

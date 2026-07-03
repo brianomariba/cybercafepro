@@ -1,6 +1,6 @@
 {
   "name": "desktop-agent",
-  "version": "1.8.15",
+  "version": "1.8.16",
   "description": "HawkNine Desktop Tracking Agent for HawkNine Cybercafe Management System",
   "main": "main.js",
   "author": "HawkNine Group",

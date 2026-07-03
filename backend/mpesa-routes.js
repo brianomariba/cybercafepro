@@ -560,7 +560,9 @@ module.exports = function(app, io) {
      * Call this once after deployment (or whenever the server URL changes).
      */
     app.post('/api/v1/c2b/register', generateToken, async (req, res) => {
-        const tillNumber = process.env.MPESA_TILL_NUMBER || process.env.MPESA_SHORTCODE;
+        // Must use the head-office shortcode (not the child till) — Safaricom requires
+        // the ShortCode to match the API credential owner for C2B registration
+        const tillNumber = process.env.MPESA_SHORTCODE;
         const apiUrl = process.env.API_URL || 'https://api.hawkninegroup.com';
 
         if (!tillNumber) {

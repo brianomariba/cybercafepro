@@ -917,7 +917,8 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
         try {
             let totalPrints = 0;
             let totalHardware = 0;
-            let cancelledJobs = 0;
+            let cancelledSoftware = 0;
+            let cancelledHardware = 0;
             let allIntervals = [];
 
             for (const pName of allPrinterNames) {
@@ -931,17 +932,25 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
                     });
                     
                     filtered.forEach(interval => {
-                        const diff = (interval.printPages || 0) - (interval.counterDiff || 0);
-                        const cancelled = diff > 0 ? diff : 0;
+                        const printPages = interval.printPages || 0;
+                        const printPagesCanceled = interval.printPagesCanceled || 0;
+                        const counterDiff = interval.counterDiff || 0;
                         
-                        totalPrints += (interval.printPages || 0);
-                        totalHardware += (interval.counterDiff || 0);
-                        cancelledJobs += cancelled;
+                        const successfulSpooled = Math.max(0, printPages - printPagesCanceled);
+                        const diffHardware = successfulSpooled - counterDiff;
+                        const hwCanceled = diffHardware > 0 ? diffHardware : 0;
+                        
+                        totalPrints += printPages;
+                        totalHardware += counterDiff;
+                        cancelledSoftware += printPagesCanceled;
+                        cancelledHardware += hwCanceled;
                         
                         allIntervals.push({
                             ...interval,
                             printerName: pName,
-                            cancelled
+                            cancelledSoftware: printPagesCanceled,
+                            cancelledHardware: hwCanceled,
+                            cancelled: printPagesCanceled + hwCanceled
                         });
                     });
                 }
@@ -949,7 +958,7 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
             
             const cancelledIntervals = allIntervals.filter(i => i.cancelled > 0).sort((a,b) => new Date(b.endReading.recordedAt) - new Date(a.endReading.recordedAt));
             
-            setStats({ totalPrints, totalHardware, cancelledJobs });
+            setStats({ totalPrints, totalHardware, cancelledSoftware, cancelledHardware, totalCancelled: cancelledSoftware + cancelledHardware });
             setIntervals(cancelledIntervals);
 
         } catch (e) {
@@ -983,8 +992,16 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
             render: v => <Text style={{ color: '#b0b0c0', fontWeight: 600 }}>{(v || 0).toLocaleString()} sheets</Text>
         },
         { 
-            title: 'Cancelled Jobs', dataIndex: 'cancelled', key: 'cancelled',
-            render: v => <Tag color="error" style={{ fontSize: 14, fontWeight: 700 }}>{(v || 0).toLocaleString()} sheets</Tag>
+            title: 'Cancelled Jobs Breakdown', dataIndex: 'cancelled', key: 'cancelled',
+            render: (_, record) => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Tag color="error" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>
+                        {((record.cancelledSoftware || 0) + (record.cancelledHardware || 0)).toLocaleString()} sheets
+                    </Tag>
+                    {record.cancelledSoftware > 0 && <Text type="secondary" style={{ fontSize: 11 }}>• {record.cancelledSoftware.toLocaleString()} Software (Spooler)</Text>}
+                    {record.cancelledHardware > 0 && <Text type="secondary" style={{ fontSize: 11 }}>• {record.cancelledHardware.toLocaleString()} Hardware (Jammed)</Text>}
+                </div>
+            )
         }
     ];
 
@@ -1006,33 +1023,43 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
             </div>
 
             <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-                <Col span={8}>
+                <Col span={6}>
                     <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
                         <Statistic
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Total Tracked Prints (Spooler)</span>}
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Total Tracked (Spooler)</span>}
                             value={stats.totalPrints}
                             prefix={<FileTextOutlined style={{ color: '#00B4D8' }} />}
                             valueStyle={{ color: '#00B4D8' }}
                         />
                     </Card>
                 </Col>
-                <Col span={8}>
+                <Col span={6}>
                     <Card size="small" style={{ borderLeft: '4px solid #b0b0c0', height: '100%', background: 'rgba(176,176,192,0.03)' }}>
                         <Statistic
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Actual Hardware Prints (Counter)</span>}
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Hardware Prints (Counter)</span>}
                             value={stats.totalHardware}
                             prefix={<PrinterOutlined style={{ color: '#b0b0c0' }} />}
                             valueStyle={{ color: '#b0b0c0' }}
                         />
                     </Card>
                 </Col>
-                <Col span={8}>
+                <Col span={6}>
                     <Card size="small" style={{ borderLeft: '4px solid #ff4d4f', height: '100%', background: 'rgba(255,77,79,0.08)' }}>
                         <Statistic
-                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Failed/Cancelled Prints</span>}
-                            value={stats.cancelledJobs}
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Software Cancelled</span>}
+                            value={stats.cancelledSoftware}
                             prefix={<ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />}
                             valueStyle={{ color: '#ff4d4f', fontWeight: 'bold' }}
+                        />
+                    </Card>
+                </Col>
+                <Col span={6}>
+                    <Card size="small" style={{ borderLeft: '4px solid #faad14', height: '100%', background: 'rgba(250,173,20,0.08)' }}>
+                        <Statistic
+                            title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Hardware Jammed/Lost</span>}
+                            value={stats.cancelledHardware}
+                            prefix={<ExclamationCircleOutlined style={{ color: '#faad14' }} />}
+                            valueStyle={{ color: '#faad14', fontWeight: 'bold' }}
                         />
                     </Card>
                 </Col>

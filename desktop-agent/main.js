@@ -327,7 +327,7 @@ async function createWindows() {
     });
 
     // --- AUTO-LAUNCH ---
-    setupAutoLaunch();
+    // setupAutoLaunch(); // Disabled in favor of installer-created Scheduled Tasks
 
     // --- ACTIVATION: FILE MONITOR ---
     if (!fileMonitor) {
@@ -546,26 +546,7 @@ function setupTray() {
     }
 }
 
-function setupAutoLaunch() {
-    try {
-        const AutoLaunch = require('auto-launch');
-        const hawkNineLauncher = new AutoLaunch({
-            name: 'HawkNine Agent',
-            path: process.execPath,
-        });
-        hawkNineLauncher.isEnabled().then((isEnabled) => {
-            if (!isEnabled) hawkNineLauncher.enable();
-        });
-    } catch (e) {
-        if (process.platform === 'win32') {
-            const regPath = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-            const appPath = process.execPath;
-            exec(`reg add "${regPath}" /v "HawkNineAgent" /t REG_SZ /d "${appPath}" /f`, (err) => {
-                if (err) console.error('Manual auto-launch failed:', err);
-            });
-        }
-    }
-}
+// setupAutoLaunch removed, handled by Scheduled Tasks
 
 function sendUpdateInfo() {
     if (!mainWindow || mainWindow.isDestroyed()) return;

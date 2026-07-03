@@ -853,44 +853,59 @@ ipcMain.on('record-sale', async (event, saleData) => {
     }
 });
 
-// M-Pesa STK Push
+// M-Pesa STK Push via Backend
 ipcMain.handle('initiate-mpesa-push', async (event, data) => {
-    if (!isOnline) {
-        return { success: false, message: 'Cannot initiate M-Pesa push while offline' };
-    }
     try {
-        const response = await axios.post(`${config.server.baseUrl}/api/v1/mpesa/stkpush`, data, { timeout: 55000 });
-        return response.data;
+        console.log('[M-Pesa] Initiating STK Push via Backend API...');
+        
+        const payload = {
+            phoneNumber: data.phoneNumber,
+            amount: data.amount,
+            accountReference: data.accountReference || 'HawkNine',
+            transactionDesc: (data.transactionDesc || 'Payment').substring(0, 12),
+            payerName: data.payerName || ''
+        };
+
+        const pushRes = await axios.post(`${config.server.baseUrl}/api/v1/mpesa/stkpush`, payload, {
+            timeout: 55000
+        });
+        
+        isOnline = true;
+        return { success: true, checkoutRequestId: pushRes.data.checkoutRequestId, message: pushRes.data.message };
     } catch (error) {
-        console.error('[M-Pesa] STK Push failed:', error.code, error.message);
+        console.error('[M-Pesa] Backend STK Push failed:', error.message);
         if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-            return { success: false, message: 'M-Pesa request timed out. The STK prompt may still appear on the phone — please wait.' };
+            return { success: false, message: 'M-Pesa request timed out. The STK prompt may still appear.' };
         }
-        
-        const serverError = error.response?.data;
-        let errMsg = 'STK Push failed';
-        if (serverError) {
-            if (serverError.details && serverError.details.errorMessage) {
-                errMsg = serverError.details.errorMessage; // Actual Safaricom error string
-            } else if (typeof serverError.details === 'string') {
-                errMsg = serverError.details;
-            } else if (serverError.error) {
-                errMsg = serverError.error;
-            }
+        if (!error.response) {
+            isOnline = false;
+            return { success: false, message: 'Cannot reach Server. Check internet.' };
         }
-        
-        return { success: false, message: errMsg };
+        const apiError = error.response?.data;
+        return { success: false, message: apiError?.error || apiError?.details?.errorMessage || JSON.stringify(apiError) };
     }
 });
 
-// M-Pesa Status Check
+// M-Pesa Status Check via Backend
 ipcMain.handle('check-mpesa-status', async (event, checkoutRequestId) => {
     try {
-        const response = await axios.get(`${config.server.baseUrl}/api/v1/mpesa/status/${checkoutRequestId}`, { timeout: 10000 });
-        return response.data;
+        const queryRes = await axios.get(`${config.server.baseUrl}/api/v1/mpesa/status/${checkoutRequestId}`, {
+            timeout: 10000
+        });
+        
+        const status = queryRes.data.status;
+        if (status === 'completed') {
+            return { success: true, status: 'completed', receiptNumber: queryRes.data.receiptNumber || 'CONFIRMED', resultDesc: 'The service request is processed successfully.' };
+        } else if (status === 'failed') {
+            return { success: true, status: 'failed', failureReason: queryRes.data.failureReason || 'Failed or Cancelled' };
+        } else {
+            return { success: false, message: 'Transaction is still processing' };
+        }
     } catch (error) {
-        console.error('[M-Pesa] Status check failed:', error.message);
-        return { success: false, message: error.response?.data?.error || 'Status check failed' };
+        if (error.response && error.response.status === 404) {
+             return { success: false, message: 'Transaction not found' };
+        }
+        return { success: false, message: error.message || 'Status check failed' };
     }
 });
 
@@ -898,7 +913,7 @@ ipcMain.handle('check-mpesa-status', async (event, checkoutRequestId) => {
 ipcMain.handle('fetch-mpesa-history', async () => {
     try {
         const response = await axios.get(`${config.server.baseUrl}/api/v1/mpesa/transactions`, {
-            params: { limit: 50 },
+            params: { limit: 50, till: '5693938' },
             timeout: 15000
         });
         return response.data;
@@ -939,13 +954,6 @@ ipcMain.on('get-sales-history', async (event) => {
 
 // Correct a sale within the 5-minute window
 ipcMain.on('correct-sale', async (event, { transactionId, correctionReason }) => {
-    if (!isOnline) {
-        event.reply('correct-sale-result', {
-            success: false,
-            message: 'Cannot correct sales while offline. Please wait for connection.'
-        });
-        return;
-    }
 
     try {
         const response = await axios.post(
@@ -3167,7 +3175,8 @@ async function sendToServer(url, data) {
             } else {
                 console.log(`[SYNC] Queued for retry — ${reason}`);
             }
-            isOnline = false;
+            // Don't set isOnline = false here — let only the health check control it.
+            // Setting it here caused cascading false-offline for STK push and other critical ops.
         } else if (isClientError && isPrintData) {
             // SAFETY NET: Queue print data even on 4xx errors.
             // Print data is irreplaceable — a 4xx could be a temporary API mismatch

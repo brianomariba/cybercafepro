@@ -3256,9 +3256,12 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         }
 
         // Get all readings for this printer, ordered oldest first
-        // Use regex to match base name + variants like (Copy 1), (Copy 2)
-        const escapedPName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const printerQuery = { printerName: { $regex: new RegExp(escapedPName, 'i') } };
+        // The desktop agent strips "(Copy X)" before saving, so we must query the base name.
+        const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
+        const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        const printerQuery = { printerName: { $regex: new RegExp('^' + escBase + '$', 'i') } };
         const readings = await PageCounterReading.find(printerQuery)
             .sort({ recordedAt: 1 });
 
@@ -3283,9 +3286,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         let totalPrintPages = 0;
 
         // Build a regex that matches printer names flexibly for print job lookups
-        const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
-        const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // (escName, baseName, and escBase are already declared above)
 
         const printerMatchConditions = [
             { 'data.printer': printerName },
