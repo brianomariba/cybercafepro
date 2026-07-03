@@ -258,11 +258,13 @@ function Tasks() {
                     </Tooltip>
                     <Popconfirm
                         title="Delete this task?"
+                        description="This action cannot be undone."
                         onConfirm={() => handleDeleteTask(record.id)}
+                        okText="Delete"
+                        okType="danger"
+                        cancelText="Cancel"
                     >
-                        <Tooltip title="Delete">
-                            <Button size="small" danger icon={<DeleteOutlined />} />
-                        </Tooltip>
+                        <Button size="small" danger icon={<DeleteOutlined />} />
                     </Popconfirm>
                 </Space>
             ),
