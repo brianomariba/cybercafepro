@@ -4,6 +4,26 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const Transaction = require('./models/Transaction');
+const Till = require('./models/Till');
+const Settings = require('./models/Settings');
+
+async function maskPaymentPayload(payload) {
+    try {
+        const displaySetting = await Settings.findOne({ key: 'paymentDisplayOption' });
+        const option = displaySetting ? displaySetting.value : 'both';
+        
+        const masked = { ...payload };
+        if (option === 'phone') {
+            masked.payerName = '***';
+        } else if (option === 'name') {
+            masked.phoneNumber = '***';
+            masked.reference = '***';
+        }
+        return masked;
+    } catch (e) {
+        return payload;
+    }
+}
 
 module.exports = function(app, io) {
     // Middleware to generate OAuth Token
@@ -126,7 +146,7 @@ module.exports = function(app, io) {
      * Initiate STK Push
      */
     app.post('/api/v1/mpesa/stkpush', generateToken, async (req, res) => {
-        const { phoneNumber, amount, accountReference, transactionDesc, fullDescription, payerName } = req.body;
+        const { phoneNumber, amount, accountReference, transactionDesc, fullDescription, payerName, agentUsername } = req.body;
 
         if (!phoneNumber || !amount) {
             return res.status(400).json({ error: 'Phone number and amount are required' });
@@ -141,7 +161,20 @@ module.exports = function(app, io) {
         }
 
         const shortcode = process.env.MPESA_SHORTCODE || '4563421'; // Head Office (HO) Number
-        const tillNumber = process.env.MPESA_TILL_NUMBER || shortcode; // Child Till Number (defaults to HO if not set)
+        let tillNumber = process.env.MPESA_TILL_NUMBER || shortcode; // Default fallback
+
+        // Dynamically fetch assigned till if agentUsername is provided
+        if (agentUsername) {
+            try {
+                const assignedTill = await Till.findOne({ agents: agentUsername, isActive: true });
+                if (assignedTill) {
+                    tillNumber = assignedTill.tillNumber;
+                    console.log(`[M-Pesa] Using dynamically assigned till ${tillNumber} for agent ${agentUsername}`);
+                }
+            } catch (err) {
+                console.error('[M-Pesa] Error fetching assigned till:', err);
+            }
+        }
         const passkey = process.env.MPESA_PASSKEY;
         
         if (!passkey) {
@@ -234,12 +267,13 @@ module.exports = function(app, io) {
                     const amountMatch = callbackMetadata.find(item => item.Name === 'Amount');
                     const phoneMatch = callbackMetadata.find(item => item.Name === 'PhoneNumber');
                     
-                    io.emit('payment-completed', {
+                    io.emit('payment-completed', await maskPaymentPayload({
                         checkoutRequestId: checkoutRequestId,
                         receiptNumber: receiptMatch ? receiptMatch.Value : 'N/A',
                         amount: amountMatch ? amountMatch.Value : 0,
-                        reference: phoneMatch ? phoneMatch.Value : 'Unknown'
-                    });
+                        reference: phoneMatch ? phoneMatch.Value : 'Unknown',
+                        phoneNumber: phoneMatch ? phoneMatch.Value : 'Unknown'
+                    }));
                 }
                 
                 return res.json({ ResultCode: 0, ResultDesc: "Accepted but not found" });
@@ -256,7 +290,7 @@ module.exports = function(app, io) {
                 await transaction.save();
 
                 // Notify agents/dashboard that this payment is complete
-                io.emit('payment-completed', {
+                io.emit('payment-completed', await maskPaymentPayload({
                     checkoutRequestId: transaction.mpesaCheckoutRequestId,
                     receiptNumber: transaction.mpesaReceiptNumber,
                     amount: transaction.amount,
@@ -265,7 +299,7 @@ module.exports = function(app, io) {
                     description: transaction.description,
                     fullDescription: transaction.fullDescription,
                     payerName: transaction.payerName
-                });
+                }));
 
                 console.log(`Payment successful for request ${checkoutRequestId}`);
 
@@ -338,15 +372,13 @@ module.exports = function(app, io) {
     app.get('/api/v1/mpesa/transactions', async (req, res) => {
         try {
             const limit = parseInt(req.query.limit) || 50;
-            const tillFilter = process.env.MPESA_TILL_NUMBER;
-            const shortcodeFilter = process.env.MPESA_SHORTCODE;
+            const tillFilter = req.query.till || process.env.MPESA_TILL_NUMBER;
             
             const query = { type: 'mpesa' };
             if (tillFilter) {
-                // Return transactions belonging to the specific till, the main shortcode (for manual C2B), or legacy ones that don't have it set
+                // Return transactions belonging ONLY to the specific till, or legacy ones that don't have it set
                 query.$or = [
                     { businessShortCode: tillFilter },
-                    { businessShortCode: shortcodeFilter },
                     { businessShortCode: { $exists: false } },
                     { businessShortCode: null }
                 ];
@@ -413,10 +445,10 @@ module.exports = function(app, io) {
 
                         if (updateResult.modifiedCount > 0) {
                             // Notify desktop agents of the updated name
-                            io.emit('payment-name-updated', {
+                            io.emit('payment-name-updated', await maskPaymentPayload({
                                 receiptNumber: receiptNumber,
                                 payerName: payerName
-                            });
+                            }));
                         }
                     }
                 }
@@ -502,10 +534,10 @@ module.exports = function(app, io) {
                         { $set: { payerName: payerName } }
                     );
                     console.log(`[C2B] Payer name updated: ${payerName} for receipt ${TransID}`);
-                    io.emit('payment-name-updated', {
+                    io.emit('payment-name-updated', await maskPaymentPayload({
                         receiptNumber: TransID,
                         payerName: payerName
-                    });
+                    }));
                 }
                 return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
             }
@@ -540,7 +572,7 @@ module.exports = function(app, io) {
             console.log(`[C2B] Manual payment saved: KSH ${amount} from ${phoneNumber} (${payerName}) — Receipt: ${TransID}`);
 
             // Notify desktop agents
-            io.emit('payment-completed', {
+            io.emit('payment-completed', await maskPaymentPayload({
                 receiptNumber: TransID,
                 amount: amount,
                 phoneNumber: phoneNumber,
@@ -549,7 +581,7 @@ module.exports = function(app, io) {
                 fullDescription: transaction.fullDescription,
                 reference: transaction.accountReference,
                 isManualPayment: true
-            });
+            }));
 
             res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
         } catch (error) {

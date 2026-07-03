@@ -34,8 +34,11 @@ import {
     ReloadOutlined,
     DisconnectOutlined,
     SendOutlined,
+    ShopOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import TillsSettings from './TillsSettings';
+import PaymentSettings from './PaymentSettings';
 import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp } from '../services/api';
 
 const { Text, Title } = Typography;
@@ -1640,6 +1643,16 @@ function Settings() {
                     </Col>
                 </Row>
             ),
+        },
+        {
+            key: 'tills',
+            label: <span><ShopOutlined /> Till Management</span>,
+            children: <TillsSettings />,
+        },
+        {
+            key: 'payments',
+            label: <span><DollarOutlined /> Payment Management</span>,
+            children: <PaymentSettings />,
         },
     ];
 

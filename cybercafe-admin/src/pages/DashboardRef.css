@@ -1,0 +1,312 @@
+/* Dashboard Reference Image Redesign */
+.dashboard-ref-container {
+    background-color: #0d1722;
+    min-height: 100vh;
+    padding: 24px;
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+}
+
+.ref-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.ref-title h1 {
+    color: #ffffff;
+    font-size: 24px;
+    margin: 0;
+    font-weight: 600;
+}
+
+.ref-title p {
+    color: #8b99a6;
+    margin: 4px 0 0 0;
+    font-size: 14px;
+}
+
+.ref-header-actions {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+.ref-date-picker {
+    background-color: #131f2f;
+    border: 1px solid #1e2b3c;
+    color: #ffffff;
+    padding: 8px 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ref-user-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ref-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.ref-card {
+    background-color: #131f2f;
+    border: 1px solid #1e2b3c;
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+.ref-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.ref-badge {
+    background-color: #9c27b0;
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.ref-card-title {
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.ref-card-subtitle {
+    color: #8b99a6;
+    font-size: 12px;
+    display: block;
+    margin-top: 4px;
+}
+
+.ref-panels {
+    display: flex;
+    gap: 12px;
+    flex: 1;
+}
+
+.ref-panel {
+    flex: 1;
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.ref-panel-blue {
+    background-color: #0b1a2c;
+    border: 1px solid #0f2c4b;
+}
+
+.ref-panel-green {
+    background-color: #0b221a;
+    border: 1px solid #0f3d2a;
+}
+
+.ref-panel-title {
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.ref-panel-blue .ref-panel-title {
+    color: #3b82f6;
+}
+
+.ref-panel-green .ref-panel-title {
+    color: #22c55e;
+}
+
+.ref-revenue-val {
+    font-size: 20px;
+    font-weight: bold;
+    color: #ffffff;
+    margin-bottom: 16px;
+}
+
+.ref-list-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 13px;
+    color: #d1d5db;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.ref-list-item:last-child {
+    border-bottom: none;
+}
+
+.ref-list-link {
+    color: #3b82f6;
+    font-size: 12px;
+    margin-top: auto;
+    padding-top: 12px;
+    display: block;
+    cursor: pointer;
+}
+
+.ref-footer-bar {
+    background-color: #131f2f;
+    border-top: 1px solid #1e2b3c;
+    margin: 16px -20px -20px -20px;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 0 0 12px 12px;
+}
+
+.ref-footer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.ref-footer-val {
+    color: #eab308;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* Computers Grid */
+.ref-pc-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.ref-pc-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.ref-pc-icon {
+    width: 32px;
+    height: 32px;
+    border: 2px solid #374151;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ref-pc-icon.online {
+    border-color: #22c55e;
+}
+
+.ref-pc-icon i {
+    font-size: 16px;
+    color: #9ca3af;
+}
+
+.ref-pc-icon.online i {
+    color: #22c55e;
+}
+
+.ref-pc-label {
+    font-size: 11px;
+    color: #9ca3af;
+}
+
+.ref-stat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.ref-online-count {
+    text-align: right;
+    font-size: 12px;
+}
+.ref-online-count strong {
+    color: #22c55e;
+    font-size: 14px;
+}
+
+.ref-toggle-group {
+    display: flex;
+    background: #0f172a;
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.ref-toggle-btn {
+    padding: 4px 12px;
+    font-size: 12px;
+    color: #9ca3af;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.ref-toggle-btn.active {
+    background: #3b82f6;
+    color: white;
+}
+
+/* Service Progress */
+.ref-service-row {
+    margin-bottom: 12px;
+}
+.ref-service-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #d1d5db;
+    margin-bottom: 6px;
+}
+.ref-service-bar-bg {
+    height: 6px;
+    background: #1e2b3c;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.ref-service-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+}
+.ref-service-bar-fill.blue { background: #3b82f6; }
+.ref-service-bar-fill.green { background: #22c55e; }
+
+/* Ranks */
+.ref-rank-badge {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #374151;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: bold;
+}
+.ref-rank-badge.gold { background: #eab308; }
+.ref-rank-badge.silver { background: #94a3b8; }
+.ref-rank-badge.bronze { background: #d97706; }

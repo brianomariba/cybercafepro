@@ -72,6 +72,7 @@ const OnlineService = require('./models/OnlineService');
 const PageCounterReading = require('./models/PageCounterReading');
 const TrackableService = require('./models/TrackableService');
 const ActivityRecord = require('./models/ActivityRecord');
+const Till = require('./models/Till');
 
 const app = express();
 const server = http.createServer(app);
@@ -1274,7 +1275,7 @@ app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
  */
 app.get('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
     try {
-        const users = await User.find({ type: 'agent' }).sort({ createdAt: -1 });
+        const users = await User.find({ type: 'agent' }).select('-passwordHash').sort({ createdAt: -1 });
         res.json(users);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch users' });
@@ -1361,7 +1362,7 @@ app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, r
  */
 app.get('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
     try {
-        const admins = await User.find({ type: 'admin' }).sort({ createdAt: -1 });
+        const admins = await User.find({ type: 'admin' }).select('-passwordHash').sort({ createdAt: -1 });
         res.json(admins);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch staff' });
@@ -1472,7 +1473,7 @@ app.delete('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (r
  */
 app.get('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
     try {
-        const users = await User.find({ type: 'portal' }).sort({ createdAt: -1 });
+        const users = await User.find({ type: 'portal' }).select('-passwordHash').sort({ createdAt: -1 });
         res.json(users);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch portal users' });
@@ -2253,6 +2254,14 @@ app.post('/api/v1/agent/sync', async (req, res) => {
             return res.status(400).json({ error: 'Missing clientId' });
         }
 
+        // Check if computer is permanently deleted
+        const existingComputer = await Computer.findOne({ clientId: data.clientId });
+        if (existingComputer && existingComputer.isDeleted) {
+            console.log(`[SYNC] Rejected sync from deleted computer: ${data.hostname} (${data.clientId})`);
+            return res.status(403).json({ error: 'Computer has been permanently removed.' });
+        }
+
+
         // Update computer status in MongoDB
         const computerData = {
             hostname: data.hostname,
@@ -2656,7 +2665,7 @@ app.get('/api/v1/admin/download-agent', (req, res) => {
  */
 app.get('/api/v1/admin/computers', async (req, res) => {
     try {
-        const computerDocs = await Computer.find();
+        const computerDocs = await Computer.find({ isDeleted: { $ne: true } });
         const now = new Date();
         const computerList = computerDocs.map(c => {
             const doc = c.toObject();
@@ -2691,6 +2700,28 @@ app.get('/api/v1/admin/computers/:clientId', async (req, res) => {
         res.json({ ...computer.toObject(), recentActivity });
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch computer details' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/computers/:clientId
+ * Soft deletes a computer to permanently remove it
+ */
+app.delete('/api/v1/admin/computers/:clientId', async (req, res) => {
+    try {
+        const computer = await Computer.findOneAndUpdate(
+            { clientId: req.params.clientId },
+            { $set: { isDeleted: true } },
+            { new: true }
+        );
+        if (!computer) {
+            return res.status(404).json({ error: 'Computer not found' });
+        }
+        // Remove from in-memory map
+        computers.delete(req.params.clientId);
+        res.json({ message: 'Computer permanently removed', computer });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete computer' });
     }
 });
 
@@ -3256,9 +3287,12 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         }
 
         // Get all readings for this printer, ordered oldest first
-        // Use regex to match base name + variants like (Copy 1), (Copy 2)
-        const escapedPName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const printerQuery = { printerName: { $regex: new RegExp(escapedPName, 'i') } };
+        // The desktop agent strips "(Copy X)" before saving, so we must query the base name.
+        const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
+        const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        const printerQuery = { printerName: { $regex: new RegExp('^' + escBase + '$', 'i') } };
         const readings = await PageCounterReading.find(printerQuery)
             .sort({ recordedAt: 1 });
 
@@ -3283,9 +3317,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
         let totalPrintPages = 0;
 
         // Build a regex that matches printer names flexibly for print job lookups
-        const escName = printerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const baseName = printerName.replace(/\s*\(Copy\s*\d+\)\s*$/i, '').trim();
-        const escBase = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // (escName, baseName, and escBase are already declared above)
 
         const printerMatchConditions = [
             { 'data.printer': printerName },
@@ -3348,6 +3380,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
             // Also track page impressions for BW/Color breakdown (Tag36 counters use pages, not sheets)
             let printImpressionsBW = 0;
             let printImpressionsColor = 0;
+            let printPagesCanceled = 0;
             for (const log of printLogs) {
                 const d = log.data || {};
                 const pageImpressions = (d.totalPages || d.pages || 1) * (d.copies || 1);
@@ -3356,6 +3389,11 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
                 const sheets = counterIsSheets && d.totalSheets > 0
                     ? d.totalSheets
                     : pageImpressions;
+                
+                if (d.status === 'canceled') {
+                    printPagesCanceled += sheets;
+                }
+
                 if (d.printType === 'color' || d.isColorPrint) {
                     printSheetsColor += sheets;
                     printImpressionsColor += pageImpressions;
@@ -3389,6 +3427,7 @@ app.get('/api/v1/admin/photocopy-data', requireAdminAuth, async (req, res) => {
 
             intervals.push({
                 printerName: pName,
+                printPagesCanceled,
                 startReading: {
                     id: startReading._id,
                     counterValue: startReading.counterValue,
@@ -4472,13 +4511,17 @@ app.put('/api/v1/admin/tasks/:id', async (req, res) => {
  * DELETE /api/v1/admin/tasks/:id
  * Delete a task
  */
-app.delete('/api/v1/admin/tasks/:id', (req, res) => {
-    const idx = tasks.findIndex(t => t.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+app.delete('/api/v1/admin/tasks/:id', async (req, res) => {
+    try {
+        const deleted = await Task.findOneAndDelete({ id: req.params.id });
+        if (!deleted) return res.status(404).json({ error: 'Task not found' });
 
-    const deleted = tasks.splice(idx, 1)[0];
-    io.emit('task-deleted', { id: deleted.id });
-    res.json({ success: true });
+        io.emit('task-deleted', { id: deleted.id });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[TASK DELETE] Error:', error);
+        res.status(500).json({ error: 'Failed to delete task' });
+    }
 });
 
 /**
@@ -6990,6 +7033,30 @@ app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
     }
 });
 
+/**
+ * DELETE /api/v1/admin/transactions/payment/:id
+ * Manually delete a payment record
+ */
+app.delete('/api/v1/admin/transactions/payment/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Also look up MpesaTransaction if applicable
+        const MpesaTransaction = require('./models/MpesaTransaction');
+        
+        // Delete from Transaction model
+        const deletedTxn = await Transaction.findByIdAndDelete(id);
+        
+        if (deletedTxn && deletedTxn.paymentMethod === 'mpesa' && deletedTxn.mpesaReceiptNumber) {
+            await MpesaTransaction.deleteOne({ mpesaReceiptNumber: deletedTxn.mpesaReceiptNumber });
+        }
+        
+        res.json({ success: true, message: 'Payment record deleted successfully' });
+    } catch (error) {
+        console.error('[TRANSACTIONS] Delete failed:', error);
+        res.status(500).json({ error: 'Failed to delete payment record' });
+    }
+});
+
 
 
 // ==================== PUBLIC DOCUMENT REQUESTS (LANDING PAGE) ====================
@@ -8019,6 +8086,78 @@ app.delete('/api/v1/agent/submissions/:id', async (req, res) => {
     }
 });
 
+// ==================== TILL MANAGEMENT ====================
+
+/**
+ * POST /api/v1/admin/tills
+ * Admin creates a new Child Till
+ */
+app.post('/api/v1/admin/tills', requireAdminAuth, async (req, res) => {
+    try {
+        const { tillNumber, name, shop, agents, isActive } = req.body;
+        if (!tillNumber || !name) {
+            return res.status(400).json({ error: 'Till number and name are required' });
+        }
+        
+        // Check if till already exists
+        const existing = await Till.findOne({ tillNumber });
+        if (existing) {
+            return res.status(400).json({ error: 'A till with this number already exists' });
+        }
+
+        const till = await Till.create({
+            tillNumber, name, shop, agents: agents || [], isActive: isActive !== false
+        });
+        res.status(201).json(till);
+    } catch (error) {
+        console.error('Create till error:', error);
+        res.status(500).json({ error: 'Failed to create till' });
+    }
+});
+
+/**
+ * GET /api/v1/admin/tills
+ * Admin lists all Child Tills
+ */
+app.get('/api/v1/admin/tills', requireAdminAuth, async (req, res) => {
+    try {
+        const tills = await Till.find().sort({ createdAt: -1 });
+        res.json(tills);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch tills' });
+    }
+});
+
+/**
+ * PUT /api/v1/admin/tills/:id
+ * Admin updates a Child Till
+ */
+app.put('/api/v1/admin/tills/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const updates = req.body;
+        updates.updatedAt = new Date();
+        const till = await Till.findByIdAndUpdate(req.params.id, updates, { new: true });
+        if (!till) return res.status(404).json({ error: 'Till not found' });
+        res.json(till);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update till' });
+    }
+});
+
+/**
+ * DELETE /api/v1/admin/tills/:id
+ * Admin deletes a Child Till
+ */
+app.delete('/api/v1/admin/tills/:id', requireAdminAuth, async (req, res) => {
+    try {
+        const till = await Till.findByIdAndDelete(req.params.id);
+        if (!till) return res.status(404).json({ error: 'Till not found' });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete till' });
+    }
+});
+
 // ==================== TRACKABLE SERVICES & ACTIVITY RECORDS ====================
 
 /**
@@ -8283,6 +8422,45 @@ app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res
         res.status(500).json({ error: 'Failed to generate report data' });
     }
 });
+
+// ==================== AUTOMATIC PAYMENT DELETION ====================
+const runPaymentRetentionJob = async () => {
+    try {
+        const Settings = require('./models/Settings');
+        const Transaction = require('./models/Transaction');
+        const MpesaTransaction = require('./models/MpesaTransaction');
+        
+        const retentionSetting = await Settings.findOne({ key: 'paymentRetentionDays' });
+        if (retentionSetting && retentionSetting.value && Number(retentionSetting.value) > 0) {
+            const days = Number(retentionSetting.value);
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - days);
+            
+            console.log(`[PAYMENT-RETENTION] Running cleanup for records older than ${days} days (${cutoffDate})`);
+            
+            // Delete from Transaction where paymentMethod = 'mpesa'
+            const txnResult = await Transaction.deleteMany({
+                paymentMethod: 'mpesa',
+                createdAt: { $lt: cutoffDate }
+            });
+            
+            const mpesaResult = await MpesaTransaction.deleteMany({
+                createdAt: { $lt: cutoffDate }
+            });
+            
+            if (txnResult.deletedCount > 0 || mpesaResult.deletedCount > 0) {
+                console.log(`[PAYMENT-RETENTION] Deleted ${txnResult.deletedCount} Transactions and ${mpesaResult.deletedCount} MpesaTransactions.`);
+            }
+        }
+    } catch (error) {
+        console.error('[PAYMENT-RETENTION] Error running cleanup job:', error);
+    }
+};
+
+// Run on startup
+setTimeout(runPaymentRetentionJob, 5000);
+// Run every 24 hours
+setInterval(runPaymentRetentionJob, 24 * 60 * 60 * 1000);
 
 // ==================== SERVER START ====================
 

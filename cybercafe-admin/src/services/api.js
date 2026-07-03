@@ -353,8 +353,13 @@ export const getTransactions = async (params = {}) => {
     return response.data;
 };
 
-export const getTransactionSummary = async () => {
-    const response = await api.get('/admin/transactions/summary');
+export const getTransactionSummary = async (params) => {
+    const response = await api.get('/admin/transactions/summary', { params });
+    return response.data;
+};
+
+export const deletePaymentRecord = async (id) => {
+    const response = await api.delete(`/admin/transactions/payment/${id}`);
     return response.data;
 };
 
@@ -632,9 +637,11 @@ export const rejectSubmission = async (id, notes) =>
     (await api.put(`/admin/submissions/${id}/reject`, { notes })).data;
 export const deleteSubmission = async (id) => (await api.delete(`/admin/submissions/${id}`)).data;
 
-// ==================== COMPUTER DISCONNECT ====================
+// ==================== COMPUTER DISCONNECT & REMOVAL ====================
 export const disconnectComputer = async (clientId, quit = false) =>
     (await api.post('/admin/command', { clientId, command: 'disconnect', params: { quit } })).data;
+export const deleteComputer = async (clientId) =>
+    (await api.delete(`/admin/computers/${clientId}`)).data;
 
 // ==================== ONLINE SERVICES ====================
 export const getOnlineServices = async () => (await api.get('/admin/online-services')).data;
@@ -648,6 +655,27 @@ export const deleteTrackableService = async (id) => (await api.delete(`/admin/tr
 // ==================== ACTIVITY RECORDS ====================
 export const getActivityRecords = async (params = {}) => (await api.get('/admin/activity-records', { params })).data;
 export const deleteActivityRecords = async () => (await api.delete('/admin/activity-records')).data;
+
+// ==================== TILL MANAGEMENT ====================
+export const getTills = async () => {
+    const response = await api.get('/admin/tills');
+    return response.data;
+};
+
+export const createTill = async (tillData) => {
+    const response = await api.post('/admin/tills', tillData);
+    return response.data;
+};
+
+export const updateTill = async (id, tillData) => {
+    const response = await api.put(`/admin/tills/${id}`, tillData);
+    return response.data;
+};
+
+export const deleteTill = async (id) => {
+    const response = await api.delete(`/admin/tills/${id}`);
+    return response.data;
+};
 
 // Default export
 export default {
@@ -678,6 +706,8 @@ export default {
     getComputers,
     getComputer,
     getSessions,
+
+
     getPrintJobs,
     getPrinters,
     deleteAllPrinterData,
@@ -706,6 +736,7 @@ export default {
     assignTask,
     getTransactions,
     getTransactionSummary,
+    deletePaymentRecord,
     getDocuments,
     getDocumentStats,
     uploadDocument,
@@ -767,6 +798,7 @@ export default {
 
     // Computer Management
     disconnectComputer,
+    deleteComputer,
 
     // Online Services
     getOnlineServices,
@@ -779,5 +811,11 @@ export default {
 
     // Activity Records
     getActivityRecords,
-    deleteActivityRecords
+    deleteActivityRecords,
+
+    // Till Management
+    getTills,
+    createTill,
+    updateTill,
+    deleteTill
 };

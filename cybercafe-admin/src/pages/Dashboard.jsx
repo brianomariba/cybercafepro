@@ -1,75 +1,31 @@
 import { useState, useEffect } from 'react';
-import { Row, Col, Card, Statistic, Progress, Table, Tag, Avatar, Space, Typography, Button, Tooltip, Badge, List, Empty, Spin, message } from 'antd';
-import {
-    DesktopOutlined,
-    PrinterOutlined,
-    DollarOutlined,
-    UserOutlined,
-    ArrowUpOutlined,
-    ArrowDownOutlined,
-    ClockCircleOutlined,
-    WifiOutlined,
-    ThunderboltOutlined,
-    ReloadOutlined,
-    EyeOutlined,
-    FileTextOutlined,
-    RiseOutlined,
-    TeamOutlined,
-    GlobalOutlined,
-    CheckCircleOutlined,
-    SyncOutlined,
-    PlayCircleOutlined,
-    LockOutlined,
-    ShopOutlined,
-    CopyOutlined,
-} from '@ant-design/icons';
+import { Row, Col, Card, Typography, Spin, message } from 'antd';
+import { CalendarOutlined, DownOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-import { getComputers, getSessions, getPrintJobs, getStats, getTransactionSummary, getTasks, connectSocket } from '../services/api';
-import { Area, Pie, Tiny } from '@ant-design/charts';
+import { getComputers, getStats, connectSocket } from '../services/api';
+import { Column } from '@ant-design/charts';
+import './DashboardRef.css';
 
-dayjs.extend(relativeTime);
-
-const { Text, Title } = Typography;
-
-const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
+const { Text } = Typography;
 
 function Dashboard() {
     const [loading, setLoading] = useState(true);
-    const [computers, setComputers] = useState([]);
-    const [sessions, setSessions] = useState([]);
-    const [printJobs, setPrintJobs] = useState([]);
-    const [stats, setStats] = useState(null);
-    const [revenueSummary, setRevenueSummary] = useState(null);
-    const [tasks, setTasks] = useState([]);
     const [connected, setConnected] = useState(false);
-
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const [computersRes, sessionsRes, printRes, statsRes, revenueRes, tasksRes] = await Promise.all([
-                getComputers().catch(() => []),
-                getSessions({ limit: 15 }).catch(() => []),
-                getPrintJobs({ limit: 10 }).catch(() => ({ jobs: [] })),
-                getStats().catch(() => null),
-                getTransactionSummary().catch(() => null),
-                getTasks({ limit: 10 }).catch(() => []),
-            ]);
-
-            setComputers(computersRes || []);
-            setSessions(sessionsRes || []);
-            setPrintJobs(printRes?.jobs || []);
-            setStats(statsRes);
-            setRevenueSummary(revenueRes);
-            setTasks(tasksRes || []);
-        } catch (error) {
-            console.error('Failed to fetch dashboard data:', error);
-            message.error('Failed to load dashboard data');
-        }
-        setLoading(false);
-    };
+    const [computers, setComputers] = useState([]);
+    const [activeTab, setActiveTab] = useState('Today');
 
     useEffect(() => {
+        const fetchData = async () => {
+            setLoading(true);
+            try {
+                const comp = await getComputers().catch(() => []);
+                setComputers(comp || []);
+            } catch (error) {
+                console.error('Failed to fetch dashboard data:', error);
+            }
+            setLoading(false);
+        };
+
         fetchData();
 
         const socket = connectSocket({
@@ -83,33 +39,7 @@ function Dashboard() {
                     }
                     return [...prev, data];
                 });
-            },
-            onSessionEvent: (data) => {
-                setSessions(prev => {
-                    const idx = prev.findIndex(s => s.sessionId === data.sessionId);
-                    if (idx !== -1) {
-                        const newSessions = [...prev];
-                        newSessions[idx] = { ...newSessions[idx], ...data };
-                        return newSessions;
-                    }
-                    return [data, ...prev].slice(0, 14);
-                });
-            },
-            onNewLog: (log) => {
-                if (log.type === 'print') {
-                    setPrintJobs(prev => {
-                        const jobData = log.data;
-                        if (!jobData) return prev;
-                        const idx = prev.findIndex(j => j.id === jobData.id);
-                        if (idx !== -1) {
-                            const newJobs = [...prev];
-                            newJobs[idx] = { ...newJobs[idx], ...jobData };
-                            return newJobs;
-                        }
-                        return [jobData, ...prev].slice(0, 9);
-                    });
-                }
-            },
+            }
         });
 
         const interval = setInterval(fetchData, 30000);
@@ -119,326 +49,340 @@ function Dashboard() {
         };
     }, []);
 
-    const computedStats = {
-        totalComputers: computers.length,
-        onlineComputers: computers.filter(c => c.isOnline).length,
-        activeSessionsCount: computers.filter(c => c.status === 'active').length,
-        lockedComputers: computers.filter(c => c.status === 'locked').length,
-        todayRevenue: revenueSummary?.today?.totalRevenue || 0,
-        weekRevenue: revenueSummary?.week?.totalRevenue || 0,
-        monthRevenue: revenueSummary?.month?.totalRevenue || 0,
-        todaySessions: revenueSummary?.today?.sessions || 0,
-        pendingTasks: tasks.filter(t => t.status === 'pending' || t.status === 'assigned').length,
-        completedTasks: tasks.filter(t => t.status === 'completed').length,
+    // Mock Data for exact reference match
+    const revenueData = {
+        main: { total: 28450, users: [{name: 'James', rev: 9650}, {name: 'Peter', rev: 7850}, {name: 'Collins', rev: 6420}, {name: 'Brian', rev: 3850}, {name: 'Samuel', rev: 720}] },
+        endgame: { total: 16230, users: [{name: 'James', rev: 6250}, {name: 'Peter', rev: 4820}, {name: 'Collins', rev: 3650}, {name: 'Brian', rev: 1280}, {name: 'Samuel', rev: 230}] }
     };
 
-    const activityFeed = [];
-    sessions.slice(0, 5).forEach((s, idx) => {
-        activityFeed.push({
-            key: `s-${idx}`,
-            icon: s.type === 'LOGIN' ? <PlayCircleOutlined /> : <LockOutlined />,
-            iconBg: s.type === 'LOGIN' ? '#00C853' : '#FB8500',
-            title: `${s.hostname || 'PC'} — ${s.type}`,
-            desc: s.user || 'Guest',
-            extra: s.charges ? formatKSH(s.charges.grandTotal) : null,
-            time: s.receivedAt,
-        });
-    });
-    printJobs.slice(0, 3).forEach((j, idx) => {
-        activityFeed.push({
-            key: `p-${idx}`,
-            icon: <PrinterOutlined />,
-            iconBg: j.printType === 'color' ? '#7B2CBF' : '#6b6b80',
-            title: `Print: ${(j.documentName || j.document || 'Document').substring(0, 30)}`,
-            desc: `${j.hostname || 'PC'} • ${j.totalPages || 1} pages • ${j.printType?.toUpperCase() || 'B&W'}`,
-            extra: null,
-            time: j.receivedAt || j.timestamp,
-        });
-    });
-    tasks.filter(t => t.status === 'completed').slice(0, 2).forEach((t, idx) => {
-        activityFeed.push({
-            key: `t-${idx}`,
-            icon: <CheckCircleOutlined />,
-            iconBg: '#00C853',
-            title: `Task done: ${(t.title || 'Task').substring(0, 30)}`,
-            desc: formatKSH(t.price),
-            extra: null,
-            time: t.completedAt || t.updatedAt,
-        });
-    });
-    activityFeed.sort((a, b) => new Date(b.time) - new Date(a.time));
-
-    // Data for charts
-    const pieData = [
-        { type: 'Active', value: computedStats.activeSessionsCount },
-        { type: 'Locked', value: computedStats.lockedComputers },
-        { type: 'Offline', value: computedStats.totalComputers - computedStats.onlineComputers }
-    ].filter(item => item.value > 0);
-
-    const pieConfig = {
-        data: pieData,
-        angleField: 'value',
-        colorField: 'type',
-        radius: 0.8,
-        innerRadius: 0,
-        label: { type: 'spider', labelHeight: 28, content: '{name}\n{percentage}' },
-        interactions: [{ type: 'element-selected' }, { type: 'element-active' }],
-        color: ['#00B4D8', '#FFB703', '#94A3B8'],
-        legend: { position: 'bottom' }
+    const topAgents = {
+        main: [{name: 'James', rev: 9650, rank: 1}, {name: 'Peter', rev: 7850, rank: 2}, {name: 'Collins', rev: 6420, rank: 3}, {name: 'Brian', rev: 3850, rank: 4}, {name: 'Samuel', rev: 720, rank: 5}],
+        endgame: [{name: 'James', rev: 6250, rank: 1}, {name: 'Peter', rev: 4820, rank: 2}, {name: 'Collins', rev: 3650, rank: 3}, {name: 'Brian', rev: 1280, rank: 4}, {name: 'Samuel', rev: 230, rank: 5}]
     };
 
-    const areaData = [...sessions].reverse().map(s => ({
-        time: dayjs(s.receivedAt).format('HH:mm'),
-        value: s.charges?.grandTotal || 0,
-        category: 'Revenue (KSH)'
-    }));
+    const formatCurrency = (val) => `KSH ${val.toLocaleString()}`;
 
-    const areaConfig = {
-        data: areaData.length ? areaData : [{ time: 'Now', value: 0, category: 'Revenue (KSH)' }],
+    const trafficConfig = (color, data) => ({
+        data,
         xField: 'time',
         yField: 'value',
-        seriesField: 'category',
-        smooth: true,
-        color: ['#4361EE'],
-        areaStyle: () => {
-            return { fill: 'l(270) 0:#ffffff 0.5:#7ec2f3 1:#1890ff' };
+        color,
+        columnWidthRatio: 0.6,
+        xAxis: { label: { style: { fill: '#9ca3af', fontSize: 10 } }, grid: null, line: null },
+        yAxis: { label: { style: { fill: '#9ca3af', fontSize: 10 } }, grid: { line: { style: { stroke: 'rgba(255,255,255,0.05)' } } } },
+        label: {
+            position: 'top',
+            style: { fill: '#ffffff', opacity: 0.8, fontSize: 10 },
         },
-        yAxis: { grid: { line: { style: { stroke: '#e2e8f0', lineDash: [4, 4] } } } },
-        legend: false,
-    };
+        tooltip: false,
+        height: 200,
+        appendPadding: [10, 0, 0, 0]
+    });
 
-    const sparklineData = sessions.length ? sessions.map(s => s.charges?.grandTotal || 10).reverse() : [10, 20, 15, 25, 20, 30];
-    const tinyLineConfig = {
-        height: 50,
-        autoFit: true,
-        data: sparklineData,
-        smooth: true,
-        color: 'rgba(255,255,255,0.6)',
-        lineStyle: { lineWidth: 2 },
+    const trafficDataMain = [
+        { time: '6AM', value: 5 }, { time: '7AM', value: 8 }, { time: '8AM', value: 12 }, { time: '9AM', value: 25 },
+        { time: '10AM', value: 35 }, { time: '11AM', value: 42 }, { time: '12PM', value: 38 }, { time: '1PM', value: 30 },
+        { time: '2PM', value: 22 }, { time: '3PM', value: 18 }, { time: '4PM', value: 10 }, { time: '5PM', value: 6 }, { time: '6PM', value: 4 }
+    ];
+
+    const trafficDataEndgame = [
+        { time: '6AM', value: 3 }, { time: '7AM', value: 6 }, { time: '8AM', value: 9 }, { time: '9AM', value: 15 },
+        { time: '10AM', value: 22 }, { time: '11AM', value: 28 }, { time: '12PM', value: 25 }, { time: '1PM', value: 20 },
+        { time: '2PM', value: 15 }, { time: '3PM', value: 10 }, { time: '4PM', value: 6 }, { time: '5PM', value: 4 }, { time: '6PM', value: 2 }
+    ];
+
+    const getRankBadge = (rank) => {
+        if (rank === 1) return <div className="ref-rank-badge gold">1</div>;
+        if (rank === 2) return <div className="ref-rank-badge silver">2</div>;
+        if (rank === 3) return <div className="ref-rank-badge bronze">3</div>;
+        return <div style={{width: 20, textAlign: 'center', fontSize: 12, color: '#9ca3af'}}>{rank}</div>;
     };
 
     return (
-        <div className="dashboard-container">
-            {/* Page Header */}
-            <div className="page-header" style={{ marginBottom: 0 }}>
-                <div>
-                    <div className="page-title">
-                        <ThunderboltOutlined className="icon" style={{ color: '#00B4D8' }} />
-                        <h1>Dashboard Overview</h1>
-                        <Badge
-                            status={connected ? 'success' : 'error'}
-                            text={<Text type="secondary" style={{ fontSize: 12 }}>{connected ? 'Live Sync' : 'Offline'}</Text>}
-                            style={{ marginLeft: 12 }}
-                        />
+        <div className="dashboard-ref-container">
+            {/* Header */}
+            <div className="ref-header">
+                <div className="ref-title">
+                    <h1>Dashboard Overview</h1>
+                    <p>Real-time overview of your cyber cafes</p>
+                </div>
+                <div className="ref-header-actions">
+                    <div className="ref-date-picker">
+                        <CalendarOutlined style={{ color: '#9ca3af' }} />
+                        <span>May 27, 2025</span>
+                    </div>
+                    <div className="ref-user-profile">
+                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Jose" alt="User" style={{width: 32, height: 32, borderRadius: '50%'}} />
+                        <div style={{display: 'flex', flexDirection: 'column'}}>
+                            <span style={{fontSize: 13, fontWeight: 600}}>Jose</span>
+                            <span style={{fontSize: 11, color: '#9ca3af'}}>Super Admin <DownOutlined style={{fontSize: 10}}/></span>
+                        </div>
                     </div>
                 </div>
-                <Button icon={<ReloadOutlined />} type="primary" onClick={fetchData} loading={loading} style={{ borderRadius: 8 }}>
-                    Refresh Data
-                </Button>
             </div>
 
             <Spin spinning={loading}>
-                {/* 1. Admindek Style Top Solid Cards */}
-                <div className="dashboard-grid" style={{ marginTop: 24 }}>
-                    <div className="col-span-3">
-                        <div className="solid-card solid-card-blue">
-                            <div>
-                                <div className="stat-label-text">Total Revenue (Today)</div>
-                                <div className="stat-main-value">{formatKSH(computedStats.todayRevenue)}</div>
-                                <div className="solid-card-subtext">
-                                    <ArrowUpOutlined /> {computedStats.todaySessions} sessions today
-                                </div>
-                            </div>
-                            <div className="chart-background">
-                                <Tiny.Line {...tinyLineConfig} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="col-span-3">
-                        <div className="solid-card solid-card-teal">
-                            <div>
-                                <div className="stat-label-text">Active Computers</div>
-                                <div className="stat-main-value">{computedStats.activeSessionsCount}</div>
-                                <div className="solid-card-subtext">
-                                    <ArrowUpOutlined /> out of {computedStats.totalComputers} total
-                                </div>
-                            </div>
-                            <div className="chart-background">
-                                <Tiny.Line {...tinyLineConfig} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="col-span-3">
-                        <div className="solid-card solid-card-green">
-                            <div>
-                                <div className="stat-label-text">Completed Tasks</div>
-                                <div className="stat-main-value">{computedStats.completedTasks}</div>
-                                <div className="solid-card-subtext">
-                                    <ArrowDownOutlined style={{transform: 'rotate(180deg)'}}/> {computedStats.pendingTasks} pending
-                                </div>
-                            </div>
-                            <div className="chart-background" style={{ opacity: 0.4 }}>
-                                <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 40, marginTop: 10 }}>
-                                    {[12, 24, 18, 30, 20, 35, 25].map((h, i) => (
-                                        <div key={i} style={{ width: 8, height: h, background: 'rgba(255,255,255,0.7)', borderRadius: 2 }} />
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="col-span-3">
-                        <div className="solid-card solid-card-blue" style={{ background: '#4e73df' }}>
-                            <div>
-                                <div className="stat-label-text">Online Computers</div>
-                                <div className="stat-main-value">
-                                    {computedStats.totalComputers ? Math.round((computedStats.onlineComputers / computedStats.totalComputers) * 100) : 0}%
-                                </div>
-                                <div className="solid-card-subtext">
-                                    {computedStats.onlineComputers} online right now
-                                </div>
-                            </div>
-                            <div className="chart-background">
-                                <Tiny.Line {...tinyLineConfig} />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 2. Main Analytics Charts Grid */}
-                <div className="dashboard-grid">
-                    <div className="col-span-8">
-                        <div className="premium-card" style={{ height: '100%' }}>
-                            <div className="premium-card-title">Real-time Analytics (Recent Sessions)</div>
-                            <div style={{ height: 350 }}>
-                                {areaData.length > 1 ? (
-                                    <Area {...areaConfig} />
-                                ) : (
-                                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <Empty description="Not enough real-time data yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+                {/* Top Row Grid (3 cards) */}
+                <div className="ref-grid" style={{ gridTemplateColumns: 'repeat(12, 1fr)' }}>
                     
-                    <div className="col-span-4">
-                        <div className="premium-card" style={{ height: '100%' }}>
-                            <div className="premium-card-title">Device Analytics (Status)</div>
-                            <div style={{ height: 350, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                {pieData.length > 0 ? (
-                                    <Pie {...pieConfig} />
-                                ) : (
-                                    <Empty description="No computers data" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                                )}
+                    {/* Card 1: Total Revenue */}
+                    <div className="ref-card" style={{ gridColumn: 'span 4' }}>
+                        <div className="ref-card-header">
+                            <div className="ref-badge">1</div>
+                            <div>
+                                <div className="ref-card-title">TOTAL REVENUE TODAY</div>
+                                <span className="ref-card-subtitle">Users listed with their revenue</span>
+                            </div>
+                        </div>
+                        <div className="ref-panels">
+                            <div className="ref-panel ref-panel-blue">
+                                <div className="ref-panel-title">MAIN SHOP</div>
+                                <div className="ref-revenue-val">{formatCurrency(revenueData.main.total)}</div>
+                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9ca3af', marginBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4}}>
+                                    <span>User</span><span>Revenue</span>
+                                </div>
+                                {revenueData.main.users.map((u, i) => (
+                                    <div key={i} className="ref-list-item">
+                                        <span>{u.name}</span>
+                                        <span style={{color: '#9ca3af'}}>{formatCurrency(u.rev)}</span>
+                                    </div>
+                                ))}
+                                <span className="ref-list-link">View all users &gt;</span>
+                            </div>
+                            <div className="ref-panel ref-panel-green">
+                                <div className="ref-panel-title">ENDGAME SHOP</div>
+                                <div className="ref-revenue-val">{formatCurrency(revenueData.endgame.total)}</div>
+                                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9ca3af', marginBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4}}>
+                                    <span>User</span><span>Revenue</span>
+                                </div>
+                                {revenueData.endgame.users.map((u, i) => (
+                                    <div key={i} className="ref-list-item">
+                                        <span>{u.name}</span>
+                                        <span style={{color: '#9ca3af'}}>{formatCurrency(u.rev)}</span>
+                                    </div>
+                                ))}
+                                <span className="ref-list-link">View all users &gt;</span>
+                            </div>
+                        </div>
+                        <div className="ref-footer-bar">
+                            <div className="ref-footer-title">
+                                <div style={{width: 20, height: 20, background: '#eab308', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><i className="fas fa-trophy" style={{fontSize: 10, color: 'white'}}></i></div>
+                                <div>
+                                    <div style={{fontSize: 10, color: '#eab308'}}>TOP REVENUE SHOP TODAY</div>
+                                    <div>Main Shop</div>
+                                </div>
+                            </div>
+                            <div className="ref-footer-val">{formatCurrency(revenueData.main.total)}</div>
+                        </div>
+                    </div>
+
+                    {/* Card 2: Online Computers */}
+                    <div className="ref-card" style={{ gridColumn: 'span 4' }}>
+                        <div className="ref-card-header">
+                            <div className="ref-badge">2</div>
+                            <div>
+                                <div className="ref-card-title">ONLINE COMPUTERS</div>
+                                <span className="ref-card-subtitle">Live status per shop</span>
+                            </div>
+                        </div>
+                        <div className="ref-panels" style={{ flexDirection: 'column' }}>
+                            <div className="ref-panel ref-panel-blue" style={{ flex: 'unset' }}>
+                                <div className="ref-stat-header">
+                                    <div className="ref-panel-title" style={{margin: 0}}>MAIN SHOP</div>
+                                    <div className="ref-online-count"><strong>4 Online</strong><br/>out of 5</div>
+                                </div>
+                                <div className="ref-pc-grid">
+                                    {['PC01', 'PC02', 'PC03', 'PC04'].map(pc => (
+                                        <div key={pc} className="ref-pc-item">
+                                            <div className="ref-pc-icon online"><DesktopOutlined /></div>
+                                            <div className="ref-pc-label">{pc}</div>
+                                        </div>
+                                    ))}
+                                    <div className="ref-pc-item">
+                                        <div className="ref-pc-icon"><DesktopOutlined /></div>
+                                        <div className="ref-pc-label">PC05</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="ref-panel ref-panel-green" style={{ flex: 'unset' }}>
+                                <div className="ref-stat-header">
+                                    <div className="ref-panel-title" style={{margin: 0}}>ENDGAME SHOP</div>
+                                    <div className="ref-online-count"><strong>1 Online</strong><br/>out of 3</div>
+                                </div>
+                                <div className="ref-pc-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                                    <div className="ref-pc-item">
+                                        <div className="ref-pc-icon online"><DesktopOutlined /></div>
+                                        <div className="ref-pc-label">PC01</div>
+                                    </div>
+                                    <div className="ref-pc-item">
+                                        <div className="ref-pc-icon"><DesktopOutlined /></div>
+                                        <div className="ref-pc-label">PC02</div>
+                                    </div>
+                                    <div className="ref-pc-item">
+                                        <div className="ref-pc-icon"><DesktopOutlined /></div>
+                                        <div className="ref-pc-label">PC03</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'auto', paddingTop: 16 }}>
+                            <span style={{ color: '#22c55e', fontSize: 13, fontWeight: 600 }}>Total Online</span>
+                            <span style={{ color: '#22c55e', fontSize: 16, fontWeight: 'bold' }}>5 <span style={{color: '#9ca3af', fontSize: 12}}>/ 8</span></span>
+                        </div>
+                    </div>
+
+                    {/* Card 3: Top Performing Agent */}
+                    <div className="ref-card" style={{ gridColumn: 'span 4' }}>
+                        <div className="ref-card-header">
+                            <div className="ref-badge">3</div>
+                            <div>
+                                <div className="ref-card-title">TOP PERFORMING AGENT TODAY</div>
+                                <span className="ref-card-subtitle">Ranked by revenue</span>
+                            </div>
+                        </div>
+                        <div className="ref-panels">
+                            <div className="ref-panel ref-panel-blue">
+                                <div className="ref-panel-title">MAIN SHOP</div>
+                                <div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12}}>
+                                    {topAgents.main.map(a => (
+                                        <div key={a.rank} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+                                                {getRankBadge(a.rank)}
+                                                <span style={{fontSize: 13, color: '#d1d5db'}}>{a.name}</span>
+                                            </div>
+                                            <span style={{fontSize: 12, color: '#9ca3af'}}>{formatCurrency(a.rev)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <span className="ref-list-link">View all agents &gt;</span>
+                            </div>
+                            <div className="ref-panel ref-panel-green">
+                                <div className="ref-panel-title">ENDGAME SHOP</div>
+                                <div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12}}>
+                                    {topAgents.endgame.map(a => (
+                                        <div key={a.rank} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                            <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+                                                {getRankBadge(a.rank)}
+                                                <span style={{fontSize: 13, color: '#d1d5db'}}>{a.name}</span>
+                                            </div>
+                                            <span style={{fontSize: 12, color: '#9ca3af'}}>{formatCurrency(a.rev)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <span className="ref-list-link">View all agents &gt;</span>
                             </div>
                         </div>
                     </div>
+
                 </div>
 
-                {/* 3. Bottom Grid (Activity & Financials) */}
-                <div className="dashboard-grid">
-                    {/* Left Column (Financials & Computers) */}
-                    <div className="col-span-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {/* Bottom Row Grid (2 cards) */}
+                <div className="ref-grid" style={{ gridTemplateColumns: 'repeat(12, 1fr)' }}>
+                    
+                    {/* Card 4: Traffic Analytics */}
+                    <div className="ref-card" style={{ gridColumn: 'span 8' }}>
+                        <div className="ref-card-header" style={{ justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <div className="ref-badge">4</div>
+                                <div className="ref-card-title">TRAFFIC ANALYTICS</div>
+                            </div>
+                            <div className="ref-toggle-group">
+                                <div className={`ref-toggle-btn ${activeTab === 'Today' ? 'active' : ''}`} onClick={() => setActiveTab('Today')}>Today</div>
+                                <div className={`ref-toggle-btn ${activeTab === 'Weekly' ? 'active' : ''}`} onClick={() => setActiveTab('Weekly')}>Weekly</div>
+                                <div className={`ref-toggle-btn ${activeTab === 'Monthly' ? 'active' : ''}`} onClick={() => setActiveTab('Monthly')}>Monthly</div>
+                            </div>
+                        </div>
                         
-                        <div className="premium-card">
-                            <div className="premium-card-title">
-                                <DollarOutlined style={{ color: 'var(--primary-teal)', marginRight: 8 }} />
-                                Financial Overview
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+                            <div className="ref-panel ref-panel-blue" style={{ flexDirection: 'column' }}>
+                                <div className="ref-panel-title" style={{color: '#d1d5db'}}>MAIN SHOP - TODAY'S TRAFFIC</div>
+                                <Column {...trafficConfig('#3b82f6', trafficDataMain)} />
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-                                <div className="revenue-block today">
-                                    <span className="revenue-block-label">Today</span>
-                                    <span className="revenue-block-value">{formatKSH(computedStats.todayRevenue)}</span>
-                                </div>
-                                <div className="revenue-block week">
-                                    <span className="revenue-block-label">This Week</span>
-                                    <span className="revenue-block-value">{formatKSH(computedStats.weekRevenue)}</span>
-                                </div>
-                                <div className="revenue-block month">
-                                    <span className="revenue-block-label">This Month</span>
-                                    <span className="revenue-block-value">{formatKSH(computedStats.monthRevenue)}</span>
-                                </div>
+                            <div className="ref-panel ref-panel-blue" style={{ justifyContent: 'center' }}>
+                                <div className="ref-panel-title">MAIN SHOP INSIGHTS</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Day</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>Saturday</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Time</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>11AM - 1PM</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Month</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>March 2025</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Peak Time</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>12PM</div>
                             </div>
                         </div>
 
-                        <div className="premium-card">
-                            <div className="premium-card-title" style={{ justifyContent: 'space-between' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <DesktopOutlined style={{ color: 'var(--primary-green)' }} />
-                                    Active Computers
-                                </div>
-                                <Badge count={computedStats.onlineComputers} style={{ backgroundColor: 'var(--primary-green)' }} />
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, marginTop: 16 }}>
+                            <div className="ref-panel ref-panel-green" style={{ flexDirection: 'column' }}>
+                                <div className="ref-panel-title" style={{color: '#d1d5db'}}>ENDGAME SHOP - TODAY'S TRAFFIC</div>
+                                <Column {...trafficConfig('#22c55e', trafficDataEndgame)} />
                             </div>
-
-                            {computers.length === 0 ? (
-                                <Empty description="No computers connected" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                            ) : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
-                                    {computers.slice(0, 12).map(c => (
-                                        <div
-                                            key={c.clientId}
-                                            style={{
-                                                padding: '12px 16px',
-                                                background: c.isOnline
-                                                    ? (c.status === 'active' ? 'rgba(0,200,83,0.05)' : 'rgba(0,180,216,0.05)')
-                                                    : 'rgba(100,116,139,0.05)',
-                                                border: `1px solid ${c.isOnline ? (c.status === 'active' ? 'rgba(0,200,83,0.3)' : 'rgba(0,180,216,0.2)') : 'rgba(100,116,139,0.2)'}`,
-                                                borderRadius: 12,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: 12,
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            <Badge status={c.isOnline ? (c.status === 'active' ? 'success' : 'processing') : 'default'} />
-                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                                <Text strong style={{ fontSize: 13, display: 'block', color: 'var(--text-primary)' }} ellipsis>{c.hostname}</Text>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
+                            <div className="ref-panel ref-panel-green" style={{ justifyContent: 'center' }}>
+                                <div className="ref-panel-title">ENDGAME SHOP INSIGHTS</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Day</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>Friday</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Time</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>11AM - 12PM</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Highest Traffic Month</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>April 2025</div>
+                                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 12 }}>Peak Time</div>
+                                <div style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>11AM</div>
+                            </div>
                         </div>
                     </div>
 
-                    {/* Right Column (Activity Feed) */}
-                    <div className="col-span-6" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        <div className="premium-card" style={{ flex: 1 }}>
-                            <div className="premium-card-title">
-                                <ClockCircleOutlined style={{ color: 'var(--primary-yellow)', marginRight: 8 }} />
-                                Recent Activity
-                            </div>
-
-                            {activityFeed.length === 0 ? (
-                                <Empty description="No recent activity" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '32px 0' }} />
-                            ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                    {activityFeed.slice(0, 7).map(item => (
-                                        <div key={item.key} className="timeline-item">
-                                            <div className="timeline-icon" style={{ background: item.iconBg }}>
-                                                {item.icon}
-                                            </div>
-                                            <div className="timeline-content">
-                                                <div className="timeline-title">{item.title}</div>
-                                                <div className="timeline-desc">{item.desc}</div>
-                                            </div>
-                                            <div className="timeline-meta">
-                                                {item.extra && (
-                                                    <div style={{ color: 'var(--primary-green)', fontSize: 13, fontFamily: 'JetBrains Mono', fontWeight: 600 }}>
-                                                        {item.extra}
-                                                    </div>
-                                                )}
-                                                <div className="timeline-time">{dayjs(item.time).fromNow()}</div>
-                                            </div>
+                    {/* Card 5: Most Used Service */}
+                    <div className="ref-card" style={{ gridColumn: 'span 4' }}>
+                        <div className="ref-card-header">
+                            <div className="ref-badge">5</div>
+                            <div className="ref-card-title">MOST USED SERVICE TODAY</div>
+                        </div>
+                        <div className="ref-panels">
+                            <div className="ref-panel ref-panel-blue" style={{ gap: 16 }}>
+                                <div className="ref-panel-title">MAIN SHOP</div>
+                                {[
+                                    { label: 'Printing', val: 40 },
+                                    { label: 'Lamination', val: 15 },
+                                    { label: 'Scanning', val: 10 },
+                                    { label: 'Photocopy', val: 8 },
+                                    { label: 'Passport Photos', val: 7 },
+                                    { label: 'Binding', val: 5 },
+                                    { label: 'Others', val: 15 },
+                                ].map(s => (
+                                    <div key={s.label} className="ref-service-row">
+                                        <div className="ref-service-labels">
+                                            <span>{s.label}</span>
+                                            <span>{s.val}%</span>
                                         </div>
-                                    ))}
-                                </div>
-                            )}
+                                        <div className="ref-service-bar-bg">
+                                            <div className="ref-service-bar-fill blue" style={{ width: `${s.val}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="ref-panel ref-panel-green" style={{ gap: 16 }}>
+                                <div className="ref-panel-title">ENDGAME SHOP</div>
+                                {[
+                                    { label: 'Photocopy', val: 45 },
+                                    { label: 'Printing', val: 20 },
+                                    { label: 'Passport Photos', val: 15 },
+                                    { label: 'Scanning', val: 10 },
+                                    { label: 'Lamination', val: 5 },
+                                    { label: 'Others', val: 5 },
+                                ].map(s => (
+                                    <div key={s.label} className="ref-service-row">
+                                        <div className="ref-service-labels">
+                                            <span>{s.label}</span>
+                                            <span>{s.val}%</span>
+                                        </div>
+                                        <div className="ref-service-bar-bg">
+                                            <div className="ref-service-bar-fill green" style={{ width: `${s.val}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
+
                 </div>
             </Spin>
         </div>

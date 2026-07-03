@@ -5,6 +5,7 @@ const ComputerSchema = new mongoose.Schema({
     hostname: { type: String },
     ip: { type: String },
     status: { type: String, enum: ['locked', 'unlocked', 'active', 'offline'], default: 'offline' },
+    isDeleted: { type: Boolean, default: false },
     sessionId: { type: String },
     sessionUser: { type: String },
     uptime: { type: mongoose.Schema.Types.Mixed }, // Can be number or string

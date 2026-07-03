@@ -11,7 +11,6 @@ import {
     MailOutlined,
     PhoneOutlined,
     CalendarOutlined,
-    DollarOutlined,
     ClockCircleOutlined,
     DesktopOutlined,
     ReloadOutlined,
@@ -77,13 +76,11 @@ function Users() {
     const getUserStats = (username) => {
         const userSessions = sessions.filter(s => s.user === username);
         const totalSessions = userSessions.length;
-        const totalSpent = userSessions.reduce((sum, s) => sum + (s.charges?.grandTotal || 0), 0);
         const totalHours = userSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60;
         const lastSession = userSessions[0]; // Most recent
 
         return {
             totalSessions,
-            totalSpent,
             totalHours: Math.round(totalHours),
             lastSessionDate: lastSession ? dayjs(lastSession.endTime || lastSession.receivedAt).format('MMM DD, YYYY') : 'Never',
         };
@@ -97,6 +94,7 @@ function Users() {
 
     const handleEditUser = (user) => {
         setEditingUser(user);
+        form.resetFields();
         form.setFieldsValue({
             username: user.username,
             name: user.name,
@@ -218,7 +216,6 @@ function Users() {
         totalUsers: (users || []).length,
         activeUsers: (users || []).filter(u => u && u.active).length,
         inactiveUsers: (users || []).filter(u => u && !u.active).length,
-        totalRevenue: (sessions || []).reduce((sum, s) => sum + (s?.charges?.grandTotal || 0), 0),
     };
 
     // Filter users
@@ -279,19 +276,6 @@ function Users() {
                 return <Text>{stats.totalSessions}</Text>;
             },
             sorter: (a, b) => getUserStats(a.username).totalSessions - getUserStats(b.username).totalSessions,
-        },
-        {
-            title: 'Total Spent',
-            key: 'spent',
-            render: (_, record) => {
-                const stats = getUserStats(record.username);
-                return (
-                    <Text style={{ fontFamily: 'JetBrains Mono', color: stats.totalSpent > 0 ? '#00C853' : '#64748B' }}>
-                        KSH {stats.totalSpent.toLocaleString()}
-                    </Text>
-                );
-            },
-            sorter: (a, b) => getUserStats(a.username).totalSpent - getUserStats(b.username).totalSpent,
         },
         {
             title: 'Hours',
@@ -425,15 +409,7 @@ function Users() {
                         <div className="stat-label">Disabled</div>
                     </div>
 
-                    <div className="stat-card purple">
-                        <div className="stat-header">
-                            <div className="stat-icon purple">
-                                <DollarOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">KSH {stats.totalRevenue.toLocaleString()}</div>
-                        <div className="stat-label">Total Revenue</div>
-                    </div>
+
                 </div>
             </Spin>
 

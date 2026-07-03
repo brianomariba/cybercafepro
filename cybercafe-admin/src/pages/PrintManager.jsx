@@ -21,7 +21,8 @@ import {
     BarsOutlined,
     BarChartOutlined,
     PieChartOutlined,
-    UserOutlined
+    UserOutlined,
+    DownloadOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -63,17 +64,37 @@ function PhotocopyTracker({ printers, refreshTrigger }) {
         }
     }, [allPrinterNames, selectedPrinter]);
 
+    const [employeeStats, setEmployeeStats] = useState([]);
+
     // Fetch readings and photocopy data when printer changes
     const fetchPhotocopyInfo = async () => {
         if (!selectedPrinter) return;
         setLoading(true);
         try {
-            const [readingsRes, photoRes] = await Promise.all([
+            const params = {};
+            if (dateRange && dateRange[0]) params.startDate = dateRange[0].format('YYYY-MM-DD');
+            if (dateRange && dateRange[1]) params.endDate = dateRange[1].format('YYYY-MM-DD');
+
+            const [readingsRes, photoRes, records] = await Promise.all([
                 getPageCounterReadings({ printerName: selectedPrinter }),
-                getPhotocopyData({ printerName: selectedPrinter })
+                getPhotocopyData({ printerName: selectedPrinter }),
+                getActivityRecords(params)
             ]);
             setReadings(readingsRes.readings || []);
             setPhotocopyData(photoRes);
+
+            const relevantRecords = (records || []).filter(r => (r.serviceName || '').toLowerCase().includes('copy') || (r.serviceName || '').toLowerCase().includes('photocop'));
+            const groupings = {};
+            relevantRecords.forEach(r => {
+                const user = r.agentUser || 'Unknown';
+                const qty = r.quantity || 0;
+                const revenue = r.totalAmount || 0;
+                if (!groupings[user]) groupings[user] = { user, totalPhotocopies: 0, totalRevenue: 0 };
+                groupings[user].totalPhotocopies += qty;
+                groupings[user].totalRevenue += revenue;
+            });
+            setEmployeeStats(Object.values(groupings).sort((a, b) => b.totalPhotocopies - a.totalPhotocopies));
+
         } catch (e) {
             console.error('Photocopy data fetch error', e);
             message.error('Failed to load photocopy data');
@@ -84,7 +105,7 @@ function PhotocopyTracker({ printers, refreshTrigger }) {
 
     useEffect(() => {
         fetchPhotocopyInfo();
-    }, [selectedPrinter, refreshTrigger]);
+    }, [selectedPrinter, refreshTrigger, dateRange]);
 
     const handleDeleteReading = async (id) => {
         try {
@@ -338,6 +359,31 @@ function PhotocopyTracker({ printers, refreshTrigger }) {
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* Employee Statistics */}
+            {employeeStats.length > 0 && (
+                <Card
+                    title={
+                        <Space>
+                            <UserOutlined style={{ color: '#00d4ff' }} />
+                            <span>Employee Photocopy Statistics</span>
+                        </Space>
+                    }
+                    style={{ marginBottom: 24 }}
+                >
+                    <Table
+                        dataSource={employeeStats}
+                        rowKey="user"
+                        pagination={false}
+                        size="small"
+                        columns={[
+                            { title: 'Employee', dataIndex: 'user', key: 'user', render: v => <Tag color="blue">{v}</Tag> },
+                            { title: 'Total Photocopies', dataIndex: 'totalPhotocopies', key: 'totalPhotocopies', render: v => <Text strong>{(v || 0).toLocaleString()}</Text> },
+                            { title: 'Revenue Generated', dataIndex: 'totalRevenue', key: 'totalRevenue', render: v => <Text style={{ color: '#00ff88', fontFamily: 'JetBrains Mono' }}>{formatKSH(v)}</Text> },
+                        ]}
+                    />
+                </Card>
             )}
 
             {/* Photocopy Intervals Table */}
@@ -727,56 +773,39 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
         },
     ];
 
-    const renderComparisonCard = (title, icon, machineVal, submittedVal, diff, isDeficit, color, description) => (
-        <Row gutter={[16, 16]}>
-            <Col span={8}>
-                <Card size="small" style={{ borderLeft: `4px solid ${color}`, height: '100%', background: `${color}08` }}>
-                    <Statistic
-                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Machine Detected {title}</span>}
-                        value={machineVal}
-                        prefix={icon}
-                        suffix="sheets"
-                        valueStyle={{ color }}
-                    />
-                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
-                        {description[0]}
-                    </Text>
-                </Card>
-            </Col>
-            <Col span={8}>
-                <Card size="small" style={{ borderLeft: '4px solid #00B4D8', height: '100%', background: 'rgba(0,180,216,0.03)' }}>
-                    <Statistic
-                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Agent Submitted {title}</span>}
-                        value={submittedVal}
-                        prefix={<DesktopOutlined />}
-                        suffix="sheets"
-                        valueStyle={{ color: '#00B4D8' }}
-                    />
-                    <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
-                        {description[1]}
-                    </Text>
-                </Card>
-            </Col>
-            <Col span={8}>
-                <Card size="small" style={{ borderLeft: `4px solid ${isDeficit ? '#ff4d4f' : '#52c41a'}`, height: '100%', background: isDeficit ? 'rgba(255,77,79,0.08)' : 'rgba(82,196,26,0.08)' }}>
-                    <Statistic
-                        title={<span style={{ color: 'rgba(255,255,255,0.65)' }}>Discrepancy</span>}
-                        value={Math.abs(diff)}
-                        prefix={isDeficit ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
-                        suffix="sheets"
-                        valueStyle={{ color: isDeficit ? '#ff4d4f' : '#52c41a', fontWeight: 'bold' }}
-                    />
-                    <Text style={{ fontSize: 12, marginTop: 8, display: 'block', color: isDeficit ? '#ff4d4f' : '#52c41a' }}>
-                        {isDeficit ? `Agents under-reported by ${Math.abs(diff)} ${title.toLowerCase()}.` : `Agents accurately matched or exceeded!`}
-                    </Text>
-                </Card>
-            </Col>
-        </Row>
-    );
+    const renderSimpleAudit = (title, machineVal, submittedVal) => {
+        let diffText = '';
+        const diff = machineVal - submittedVal;
+        if (diff > 0) {
+            diffText = `${diff} Pages Underreported`;
+        } else if (diff < 0) {
+            diffText = `${Math.abs(diff)} Pages Overreported`;
+        } else {
+            diffText = `0 Pages Difference (Matched)`;
+        }
+
+        return (
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 16, marginBottom: 32, paddingLeft: 16 }}>
+                <Title level={4} style={{ fontFamily: 'Georgia, serif', marginBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>{title}</Title>
+                <div style={{ marginBottom: 16 }}>
+                    <div>Employee Report</div>
+                    <div>{submittedVal} Pages</div>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                    <div>Machine Counter</div>
+                    <div>{machineVal} Pages</div>
+                </div>
+                <div>
+                    <div>Difference</div>
+                    <div>{diffText}</div>
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div>
-            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                 <Text type="secondary">Evaluation Period:</Text>
                 <RangePicker
                     value={dateRange}
@@ -792,30 +821,22 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                 <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Compare Data</Button>
             </div>
 
-            {/* ---- PHOTOCOPY COMPARISON ---- */}
-            <Card size="small" style={{ marginBottom: 16, background: 'rgba(123,44,191,0.03)', border: '1px solid rgba(123,44,191,0.12)' }}
-                title={<Space><PrinterOutlined style={{ color: '#7b2cbf' }} /><span>Photocopy Comparison</span><Tag color="purple">{submittedPhotocopies} submitted vs {machinePhotocopies} detected</Tag></Space>}
-            >
-                {renderComparisonCard(
-                    'Photocopies', <PrinterOutlined />, machinePhotocopies, submittedPhotocopies,
-                    photocopyDiff, photocopyDeficit, '#7b2cbf',
-                    ['Calculated from hardware page counters minus tracked print jobs.', 'From activity records with photocopy/copy services.']
-                )}
-            </Card>
+            <div style={{ background: 'rgba(255,255,255,0.02)', padding: 32, borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }}>
+                <Title level={2} style={{ fontFamily: 'Georgia, serif', marginBottom: 24 }}>Print Audit Comparison</Title>
+                
+                <div style={{ marginBottom: 32, fontSize: 16, fontFamily: 'Georgia, serif' }}>
+                    The system should compare:
+                    <br /><br />
+                    Employee Recorded Pages
+                    <br />
+                    vs
+                    <br />
+                    Machine Recorded Pages
+                </div>
 
-            {/* ---- PRINTING COMPARISON ---- */}
-            <Card size="small" style={{ marginBottom: 16, background: 'rgba(0,180,216,0.03)', border: '1px solid rgba(0,180,216,0.12)' }}
-                title={<Space><PrinterOutlined style={{ color: '#00B4D8' }} /><span>Printing Comparison</span><Tag color="cyan">{submittedPrints} submitted vs {machinePrints.total} detected</Tag></Space>}
-            >
-                {renderComparisonCard(
-                    'Prints', <PrinterOutlined />, machinePrints.total, submittedPrints,
-                    printDiff, printDeficit, '#00B4D8',
-                    [
-                        `Auto-tracked print jobs (${machinePrints.bw} B&W, ${machinePrints.color} Color).`,
-                        'From activity records with printing services.'
-                    ]
-                )}
-            </Card>
+                {renderSimpleAudit('Printing', machinePrints.total, submittedPrints)}
+                {renderSimpleAudit('Photocopying', machinePhotocopies, submittedPhotocopies)}
+            </div>
 
             {/* ---- AGENT BREAKDOWN ---- */}
             <Card
@@ -830,28 +851,6 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                     pagination={false}
                     size="small"
                     locale={{ emptyText: <Empty description="No agents submitted photocopy or printing records in this date range" /> }}
-                    summary={() => {
-                        if (agentBreakdown.length <= 1) return null;
-                        const totals = agentBreakdown.reduce((acc, r) => ({
-                            photocopyQty: acc.photocopyQty + r.photocopyQty,
-                            printQty: acc.printQty + r.printQty,
-                            machineSubmitted: acc.machineSubmitted + r.machineSubmitted,
-                            selfSubmitted: acc.selfSubmitted + r.selfSubmitted,
-                            revenue: acc.revenue + r.revenue,
-                        }), { photocopyQty: 0, printQty: 0, machineSubmitted: 0, selfSubmitted: 0, revenue: 0 });
-                        return (
-                            <Table.Summary fixed>
-                                <Table.Summary.Row>
-                                    <Table.Summary.Cell index={0}><Text strong style={{ color: '#7b2cbf' }}>Totals</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={1}><Text strong style={{ color: '#7b2cbf' }}>{totals.photocopyQty.toLocaleString()}</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={2}><Text strong style={{ color: '#00B4D8' }}>{totals.printQty.toLocaleString()}</Text></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={3}><Tag color="purple" style={{ fontWeight: 700 }}>{totals.machineSubmitted.toLocaleString()}</Tag></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={4}><Tag color="orange" style={{ fontWeight: 700 }}>{totals.selfSubmitted.toLocaleString()}</Tag></Table.Summary.Cell>
-                                    <Table.Summary.Cell index={5}><Text strong style={{ color: '#52c41a', fontFamily: 'JetBrains Mono' }}>{formatKSH(totals.revenue)}</Text></Table.Summary.Cell>
-                                </Table.Summary.Row>
-                            </Table.Summary>
-                        );
-                    }}
                 />
             </Card>
 
@@ -881,14 +880,6 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
                     scroll={{ x: 1100 }}
                     locale={{ emptyText: <Empty description="No photocopy or printing activity records in this date range" /> }}
                 />
-            </Card>
-
-            <Card size="small" style={{ marginTop: 24, background: 'rgba(255,255,255,0.02)' }} title={<Space><FileTextOutlined /><span>About Data Comparison</span></Space>}>
-                <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
-                    <strong>📋 Photocopy Comparison:</strong> Cross-references <strong>untamperable hardware sheet counters</strong> (read directly from EPSON printers) against agent-submitted <em>photocopy activity records</em>. A deficit means copies were made but not reported.<br />
-                    <strong>🖨️ Printing Comparison:</strong> Cross-references <strong>auto-tracked print jobs</strong> (intercepted by the desktop agent) against agent-submitted <em>printing activity records</em>. This verifies agents are accurately logging all print jobs they facilitate.<br />
-                    <em style={{ opacity: 0.7 }}>A red discrepancy indicates resources consumed but not financially accounted for.</em>
-                </p>
             </Card>
         </div>
     );
@@ -1074,6 +1065,244 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
     );
 }
 // ==================== END CANCELLED JOBS TAB ====================
+
+// ==================== CONSUMABLE PRINT REPORTS ====================
+function ConsumablePrintReports({ printers, refreshTrigger }) {
+    const [loading, setLoading] = useState(false);
+    const [dateRange, setDateRange] = useState([dayjs().startOf('month'), dayjs().endOf('month')]);
+    
+    const [printerData, setPrinterData] = useState([]);
+    const [agentData, setAgentData] = useState([]);
+    const [paperData, setPaperData] = useState([]);
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            // 1. Fetch Print Jobs
+            const printJobsRes = await getPrintJobs({ limit: 10000 });
+            let allPrintJobs = [];
+            if (printJobsRes && printJobsRes.jobs) {
+                allPrintJobs = printJobsRes.jobs.filter(j => {
+                    if (!dateRange || !dateRange[0] || !dateRange[1]) return true;
+                    const d = dayjs(j.timestamp);
+                    return d.isAfter(dateRange[0]) && d.isBefore(dateRange[1]);
+                });
+            }
+
+            // 2. Fetch Activity Records for Agents
+            let records = [];
+            if (dateRange && dateRange[0] && dateRange[1]) {
+                const activityRes = await getActivityRecords({
+                    startDate: dateRange[0].toISOString(),
+                    endDate: dateRange[1].toISOString(),
+                    limit: 10000
+                });
+                records = activityRes?.records || [];
+            }
+
+            // 3. Process Data
+            const pMap = {}; // { printerName: { printed, photocopied, cancelled } }
+            const aMap = {}; // { agentName: { printed, photocopied } }
+            const paperMap = {}; // { paperType: count }
+
+            // Initialize from connected printers
+            (printers || []).forEach(client => {
+                (client.printers || []).forEach(p => {
+                    if (p.name) pMap[p.name] = { printed: 0, photocopied: 0, cancelled: 0 };
+                });
+            });
+
+            // Process Print Jobs (Printer Prints, Paper Types)
+            allPrintJobs.forEach(job => {
+                const pName = job.printerName || 'Unknown';
+                if (!pMap[pName]) pMap[pName] = { printed: 0, photocopied: 0, cancelled: 0 };
+                
+                if (job.status === 'Cancelled' || job.status === 'Error') {
+                    pMap[pName].cancelled += job.pages || 0;
+                } else {
+                    pMap[pName].printed += job.pages || 0;
+                }
+
+                const paperType = job.mediaType || job.paperType || 'Plain Paper';
+                paperMap[paperType] = (paperMap[paperType] || 0) + (job.pages || 0);
+            });
+
+            // Process Activity Records (Agent Prints & Photocopies)
+            records.forEach(r => {
+                const agent = r.agentUser || 'Unknown';
+                if (!aMap[agent]) aMap[agent] = { printed: 0, photocopied: 0 };
+                
+                if (r.recordType === 'printing' || (r.serviceName && r.serviceName.toLowerCase().includes('print'))) {
+                    aMap[agent].printed += r.quantity || 0;
+                } else if (r.recordType === 'photocopy' || (r.serviceName && r.serviceName.toLowerCase().includes('copy'))) {
+                    aMap[agent].photocopied += r.quantity || 0;
+                    
+                    // Add to printer photocopy count if not handled by hardware counters
+                    const pName = r.station || 'Unknown';
+                    if (!pMap[pName]) pMap[pName] = { printed: 0, photocopied: 0, cancelled: 0 };
+                    pMap[pName].photocopied += r.quantity || 0;
+                }
+            });
+
+            // For Hardware Photocopy/Cancelled, fetch intervals
+            for (const pName of Object.keys(pMap)) {
+                const res = await getPhotocopyData({ printerName: pName });
+                if (res && res.intervals) {
+                    const filtered = res.intervals.filter(interval => {
+                        if (!dateRange || !dateRange[0] || !dateRange[1]) return true;
+                        const start = dayjs(interval.startReading?.recordedAt);
+                        const end = dayjs(interval.endReading?.recordedAt);
+                        return end.isAfter(dateRange[0]) && start.isBefore(dateRange[1]);
+                    });
+                    
+                    let hardwareCopied = 0;
+                    let hwCancelled = 0;
+                    filtered.forEach(interval => {
+                        const hw = interval.counterDiff || 0;
+                        const spool = interval.printPages || 0;
+                        
+                        if (spool > hw) {
+                            hwCancelled += (spool - hw);
+                        } else if (hw > spool) {
+                            hardwareCopied += (hw - spool);
+                        }
+                    });
+                    
+                    // Hardware is more accurate. If we found hardware counts, override the agent ones.
+                    if (hardwareCopied > 0) pMap[pName].photocopied = hardwareCopied;
+                    if (hwCancelled > 0) pMap[pName].cancelled = hwCancelled;
+                }
+            }
+
+            // Convert to arrays
+            setPrinterData(Object.keys(pMap).map(name => ({ name, ...pMap[name] })).filter(p => p.printed > 0 || p.photocopied > 0 || p.cancelled > 0).sort((a,b) => b.printed - a.printed));
+            setAgentData(Object.keys(aMap).map(name => ({ name, ...aMap[name] })).sort((a,b) => b.printed - a.printed));
+            setPaperData(Object.keys(paperMap).map(name => ({ name, count: paperMap[name] })).sort((a,b) => b.count - a.count));
+
+        } catch (error) {
+            console.error("Error fetching consumables", error);
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        fetchData();
+    }, [dateRange, refreshTrigger, printers]);
+
+    const handlePrint = () => {
+        window.print();
+    };
+
+    const handleDownloadCSV = () => {
+        let csv = 'Consumable Print Reports\n\n';
+        csv += 'Printer Breakdown\n';
+        csv += 'Printer,Printed,Photocopied,Cancelled\n';
+        printerData.forEach(p => csv += `"${p.name}",${p.printed},${p.photocopied},${p.cancelled}\n`);
+        
+        csv += '\nAgent Breakdown\n';
+        csv += 'Agent,Printed,Photocopied\n';
+        agentData.forEach(a => csv += `"${a.name}",${a.printed},${a.photocopied}\n`);
+        
+        csv += '\nPaper Types Breakdown\n';
+        csv += 'Paper Type,Count\n';
+        paperData.forEach(p => csv += `"${p.name}",${p.count}\n`);
+        
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `consumable_reports_${dayjs().format('YYYY-MM-DD')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <div className="consumables-report-container">
+            <style>{`
+                @media print {
+                    body * { visibility: hidden !important; }
+                    .consumables-report-container, .consumables-report-container * {
+                        visibility: visible !important;
+                    }
+                    .consumables-report-container {
+                        position: absolute;
+                        left: 0;
+                        top: 0;
+                        width: 100%;
+                        background: white !important;
+                        color: black !important;
+                        padding: 40px;
+                        margin: 0;
+                    }
+                    .no-print { display: none !important; }
+                    .ant-layout-sider { display: none !important; }
+                    .ant-layout-header { display: none !important; }
+                    h2, h3, h4 { color: black !important; }
+                }
+            `}</style>
+            
+            <div className="no-print" style={{ marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <Text type="secondary">Evaluation Period:</Text>
+                    <RangePicker
+                        value={dateRange}
+                        onChange={setDateRange}
+                        presets={[
+                            { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                            { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('day')] },
+                            { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('day')] },
+                        ]}
+                    />
+                    <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="small">Generate</Button>
+                </div>
+                <Space>
+                    <Button icon={<PrinterOutlined />} onClick={handlePrint} type="primary">Print</Button>
+                    <Button icon={<DownloadOutlined />} onClick={handleDownloadCSV}>Download CSV</Button>
+                </Space>
+            </div>
+
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 16, color: '#e0e0e0', background: 'rgba(255,255,255,0.02)', padding: 40, borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }} className="print-content-area">
+                <Typography.Title level={2} style={{ fontFamily: 'Georgia, serif', marginBottom: 24 }} className="print-heading">Consumable Print Reports</Typography.Title>
+                <div style={{ marginBottom: 32 }}>The administrator should immediately understand:</div>
+                
+                {printerData.length > 0 && printerData.map(p => (
+                    <div key={p.name} style={{ marginBottom: 24 }}>
+                        <div>{p.name}</div>
+                        <ul style={{ marginTop: 8, paddingLeft: 24, listStyleType: 'disc' }}>
+                            <li>Printed {p.printed} pages</li>
+                            <li>Photocopied {p.photocopied} pages</li>
+                            <li>Cancelled {p.cancelled} pages</li>
+                        </ul>
+                    </div>
+                ))}
+                
+                {agentData.length > 0 && agentData.map(a => (
+                    <div key={a.name} style={{ marginBottom: 24 }}>
+                        <div>Agent {a.name}</div>
+                        <ul style={{ marginTop: 8, paddingLeft: 24, listStyleType: 'disc' }}>
+                            <li>Printed {a.printed} pages</li>
+                            <li>Photocopied {a.photocopied} pages</li>
+                        </ul>
+                    </div>
+                ))}
+
+                <div style={{ marginTop: 40, marginBottom: 16 }}>Paper Types</div>
+                <div style={{ marginBottom: 8 }}>Separate usage by:</div>
+                <ul style={{ paddingLeft: 24, marginBottom: 32, listStyleType: 'disc' }}>
+                    {paperData.length > 0 ? paperData.map(p => (
+                        <li key={p.name}>{p.name} ({p.count} pages)</li>
+                    )) : <li>No paper data</li>}
+                </ul>
+
+                <div style={{ marginTop: 40 }}>The purpose is to know paper consumption over time.</div>
+                <div>Reports should be viewable and downloadable where applicable.</div>
+            </div>
+        </div>
+    );
+}
+// ==================== END CONSUMABLE PRINT REPORTS ====================
+
 
 function PrintManager() {
     const [printJobs, setPrintJobs] = useState([]);
@@ -1621,103 +1850,114 @@ function PrintManager() {
                                                 }
                                                 extra={<Text type="secondary" style={{ fontSize: 12 }}>Last seen: {dayjs(client.lastUpdated).fromNow()}</Text>}
                                             >
-                                                <List
-                                                    itemLayout="horizontal"
-                                                    dataSource={client.printers}
-                                                    renderItem={(printer) => (
-                                                        <List.Item
-                                                            actions={[
-                                                                <Button type="link" onClick={() => {
-                                                                    setSelectedPrinter({ ...printer, hostname: client.hostname });
-                                                                    setPrinterDetailsVisible(true);
-                                                                }}>Details</Button>,
-                                                                <Popconfirm
-                                                                    title={`Remove "${printer.name}"?`}
-                                                                    description="This printer will reappear if the agent reports it again."
-                                                                    onConfirm={async () => {
-                                                                        try {
-                                                                            await removeSinglePrinter(client.clientId, printer.name);
-                                                                            message.success(`Removed ${printer.name}`);
-                                                                            fetchData();
-                                                                        } catch {
-                                                                            message.error('Failed to remove printer');
-                                                                        }
-                                                                    }}
-                                                                    okText="Remove"
-                                                                    okButtonProps={{ danger: true }}
+                                                {[
+                                                    { title: 'Physical Printers', data: client.printers?.filter(p => !p.isVirtual) || [], color: '#00d4ff' },
+                                                    { title: 'Virtual Printers', data: client.printers?.filter(p => p.isVirtual) || [], color: '#b0b0c0' }
+                                                ].filter(g => g.data.length > 0).map((group, idx) => (
+                                                    <div key={group.title} style={{ marginTop: idx > 0 ? 16 : 0 }}>
+                                                        <div style={{ marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                                            <Text strong style={{ color: group.color }}>{group.title}</Text>
+                                                            <Tag style={{ marginLeft: 8, fontSize: 10, background: 'rgba(255,255,255,0.05)', border: 'none', color: group.color }}>{group.data.length}</Tag>
+                                                        </div>
+                                                        <List
+                                                            itemLayout="horizontal"
+                                                            dataSource={group.data}
+                                                            renderItem={(printer) => (
+                                                                <List.Item
+                                                                    actions={[
+                                                                        <Button type="link" onClick={() => {
+                                                                            setSelectedPrinter({ ...printer, hostname: client.hostname });
+                                                                            setPrinterDetailsVisible(true);
+                                                                        }}>Details</Button>,
+                                                                        <Popconfirm
+                                                                            title={`Remove "${printer.name}"?`}
+                                                                            description="This printer will reappear if the agent reports it again."
+                                                                            onConfirm={async () => {
+                                                                                try {
+                                                                                    await removeSinglePrinter(client.clientId, printer.name);
+                                                                                    message.success(`Removed ${printer.name}`);
+                                                                                    fetchData();
+                                                                                } catch {
+                                                                                    message.error('Failed to remove printer');
+                                                                                }
+                                                                            }}
+                                                                            okText="Remove"
+                                                                            okButtonProps={{ danger: true }}
+                                                                        >
+                                                                            <Button type="link" danger size="small">Remove</Button>
+                                                                        </Popconfirm>
+                                                                    ]}
                                                                 >
-                                                                    <Button type="link" danger size="small">Remove</Button>
-                                                                </Popconfirm>
-                                                            ]}
-                                                        >
-                                                            <List.Item.Meta
-                                                                avatar={
-                                                                    <div style={{
-                                                                        width: 40, height: 40, borderRadius: 8,
-                                                                        background: 'rgba(255,255,255,0.05)', display: 'flex',
-                                                                        alignItems: 'center', justifyContent: 'center',
-                                                                        fontSize: 20, color: getPrinterStatusColor(printer.status, printer.isOnline)
-                                                                    }}>
-                                                                        <PrinterOutlined />
-                                                                    </div>
-                                                                }
-                                                                title={
-                                                                    <Space>
-                                                                        <Text strong>{printer.name}</Text>
-                                                                        {printer.isColor && <Tag color="magenta" style={{ margin: 0, fontSize: 10 }}>Color</Tag>}
-                                                                        {printer.isDefault && <Tag color="gold" style={{ margin: 0, fontSize: 10 }}>Default</Tag>}
-                                                                        {printer.isNetwork && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>Network</Tag>}
-                                                                    </Space>
-                                                                }
-                                                                description={
-                                                                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                                        <Space size="small">
-                                                                            <Badge
-                                                                                status={printer.isOnline ? "success" : "error"}
-                                                                                text={<Text type="secondary" style={{ fontSize: 12 }}>{printer.status || 'Unknown'}</Text>}
-                                                                            />
-                                                                            {printer.activeJobs > 0 && (
-                                                                                <Tag color="processing" style={{ margin: 0, fontSize: 10 }}>
-                                                                                    {printer.activeJobs} active
-                                                                                </Tag>
-                                                                            )}
-                                                                        </Space>
-                                                                        <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
-                                                                        {/* Show page counters */}
-                                                                        {(printer.totalPagesPrinted > 0 || printer.totalJobsPrinted > 0) && (
-                                                                            <div style={{ display: 'flex', gap: 12, marginTop: 2 }}>
-                                                                                <Tooltip title="Lifetime pages printed (from system counters)">
-                                                                                    <Text style={{ fontSize: 11, color: '#00d4ff' }}>
-                                                                                        📄 {printer.totalPagesPrinted?.toLocaleString()} pages
-                                                                                    </Text>
-                                                                                </Tooltip>
-                                                                                <Tooltip title="Lifetime jobs printed (from system counters)">
-                                                                                    <Text style={{ fontSize: 11, color: '#b0b0c0' }}>
-                                                                                        🖨️ {printer.totalJobsPrinted?.toLocaleString()} jobs
-                                                                                    </Text>
-                                                                                </Tooltip>
+                                                                    <List.Item.Meta
+                                                                        avatar={
+                                                                            <div style={{
+                                                                                width: 40, height: 40, borderRadius: 8,
+                                                                                background: 'rgba(255,255,255,0.05)', display: 'flex',
+                                                                                alignItems: 'center', justifyContent: 'center',
+                                                                                fontSize: 20, color: getPrinterStatusColor(printer.status, printer.isOnline)
+                                                                            }}>
+                                                                                <PrinterOutlined />
                                                                             </div>
-                                                                        )}
-                                                                        {/* Show today's / last 24h B&W vs Color breakdown */}
-                                                                        {printer.todayStats && (printer.todayStats.totalPages > 0) && (
-                                                                            <div style={{ marginTop: 4 }}>
-                                                                                {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
-                                                                                {/* Show sync status when agent has more data than server */}
-                                                                                {printer.todayStats.agentReported > 0 && printer.todayStats.serverSynced < printer.todayStats.agentReported && (
-                                                                                    <Tooltip title={`${printer.todayStats.serverSynced} of ${printer.todayStats.agentReported} jobs synced to server`}>
-                                                                                        <Text style={{ fontSize: 10, color: '#ff9500' }}>
-                                                                                            ⏳ {printer.todayStats.agentReported - printer.todayStats.serverSynced} pending sync
-                                                                                        </Text>
-                                                                                    </Tooltip>
+                                                                        }
+                                                                        title={
+                                                                            <Space>
+                                                                                <Text strong>{printer.name}</Text>
+                                                                                {printer.isColor && <Tag color="magenta" style={{ margin: 0, fontSize: 10 }}>Color</Tag>}
+                                                                                {printer.isDefault && <Tag color="gold" style={{ margin: 0, fontSize: 10 }}>Default</Tag>}
+                                                                                {printer.isNetwork && <Tag color="cyan" style={{ margin: 0, fontSize: 10 }}>Network</Tag>}
+                                                                            </Space>
+                                                                        }
+                                                                        description={
+                                                                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                                                <Space size="small">
+                                                                                    <Badge
+                                                                                        status={printer.isOnline ? "success" : "error"}
+                                                                                        text={<Text type="secondary" style={{ fontSize: 12 }}>{printer.status || 'Unknown'}</Text>}
+                                                                                    />
+                                                                                    {printer.activeJobs > 0 && (
+                                                                                        <Tag color="processing" style={{ margin: 0, fontSize: 10 }}>
+                                                                                            {printer.activeJobs} active
+                                                                                        </Tag>
+                                                                                    )}
+                                                                                </Space>
+                                                                                <Text type="secondary" style={{ fontSize: 11 }}>{printer.driver}</Text>
+                                                                                {/* Show page counters */}
+                                                                                {(printer.totalPagesPrinted > 0 || printer.totalJobsPrinted > 0) && (
+                                                                                    <div style={{ display: 'flex', gap: 12, marginTop: 2 }}>
+                                                                                        <Tooltip title="Lifetime pages printed (from system counters)">
+                                                                                            <Text style={{ fontSize: 11, color: '#00d4ff' }}>
+                                                                                                📄 {printer.totalPagesPrinted?.toLocaleString()} pages
+                                                                                            </Text>
+                                                                                        </Tooltip>
+                                                                                        <Tooltip title="Lifetime jobs printed (from system counters)">
+                                                                                            <Text style={{ fontSize: 11, color: '#b0b0c0' }}>
+                                                                                                🖨️ {printer.totalJobsPrinted?.toLocaleString()} jobs
+                                                                                            </Text>
+                                                                                        </Tooltip>
+                                                                                    </div>
                                                                                 )}
-                                                                            </div>
-                                                                        )}
-                                                                    </Space>
-                                                                }
-                                                            />
-                                                        </List.Item>
-                                                    )}
-                                                />
+                                                                                {/* Show today's / last 24h B&W vs Color breakdown */}
+                                                                                {printer.todayStats && (printer.todayStats.totalPages > 0) && (
+                                                                                    <div style={{ marginTop: 4 }}>
+                                                                                        {renderPageBreakdown(printer.todayStats.bwPages, printer.todayStats.colorPages)}
+                                                                                        {/* Show sync status when agent has more data than server */}
+                                                                                        {printer.todayStats.agentReported > 0 && printer.todayStats.serverSynced < printer.todayStats.agentReported && (
+                                                                                            <Tooltip title={`${printer.todayStats.serverSynced} of ${printer.todayStats.agentReported} jobs synced to server`}>
+                                                                                                <Text style={{ fontSize: 10, color: '#ff9500' }}>
+                                                                                                    ⏳ {printer.todayStats.agentReported - printer.todayStats.serverSynced} pending sync
+                                                                                                </Text>
+                                                                                            </Tooltip>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )}
+                                                                            </Space>
+                                                                        }
+                                                                    />
+                                                                </List.Item>
+                                                            )}
+                                                        />
+                                                    </div>
+                                                ))}
                                             </Card>
                                         </Col>
                                     ))}
@@ -1732,13 +1972,18 @@ function PrintManager() {
                     },
                     {
                         key: 'audit',
-                        label: <span><FileTextOutlined style={{ marginRight: 6 }} /> Comparison & Audit</span>,
+                        label: <span><FileTextOutlined style={{ marginRight: 6 }} /> Print Audit Comparison</span>,
                         children: <PhotocopyAudit printers={printers} refreshTrigger={photocopyRefresh} />
                     },
                     {
                         key: 'cancelled',
                         label: <span style={{ color: '#ff4d4f' }}><ExclamationCircleOutlined style={{ marginRight: 6 }} /> Cancelled Jobs</span>,
                         children: <CancelledJobsAudit printers={printers} refreshTrigger={photocopyRefresh} />
+                    },
+                    {
+                        key: 'consumables',
+                        label: <span><FileTextOutlined style={{ marginRight: 6 }} /> Consumables Report</span>,
+                        children: <ConsumablePrintReports printers={printers} refreshTrigger={photocopyRefresh} />
                     }
                 ]}
             />

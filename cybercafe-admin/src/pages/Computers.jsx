@@ -29,9 +29,10 @@ import {
     SortAscendingOutlined,
     FieldTimeOutlined,
     DownloadOutlined,
+    FolderOpenOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, requestScreenshot, connectSocket, sendDocumentToComputer, disconnectComputer } from '../services/api';
+import { getComputers, getComputer, getSessions, getBrowserHistory, getFileActivity, getPrintJobs, getPrinters, sendCommand, requestScreenshot, connectSocket, sendDocumentToComputer, disconnectComputer, deleteComputer } from '../services/api';
 
 const { Text, Title } = Typography;
 const { Search } = Input;
@@ -403,8 +404,8 @@ function Computers() {
                                 />
                                 <div className="computer-name">{computer.hostname}</div>
                                 <div className="computer-status">
-                                    <Tag color={computer.isOnline ? (computer.status === 'active' ? 'success' : 'processing') : 'default'}>
-                                        {computer.isOnline ? computer.status?.toUpperCase() : 'OFFLINE'}
+                                    <Tag color={computer.isOnline ? 'success' : 'default'}>
+                                        {computer.isOnline ? 'ACTIVE' : 'OFFLINE'}
                                     </Tag>
                                 </div>
                                 {computer.sessionUser && (
@@ -464,8 +465,8 @@ function Computers() {
                                 dataIndex: 'status',
                                 key: 'status',
                                 render: (status, record) => (
-                                    <Tag color={record.isOnline ? (status === 'active' ? 'success' : 'processing') : 'default'}>
-                                        {status?.toUpperCase() || 'OFFLINE'}
+                                    <Tag color={record.isOnline ? 'success' : 'default'}>
+                                        {record.isOnline ? 'ACTIVE' : 'OFFLINE'}
                                     </Tag>
                                 ),
                             },
@@ -530,8 +531,8 @@ function Computers() {
                                 <Col span={8}>
                                     <Text type="secondary">Status</Text>
                                     <br />
-                                    <Tag color={selectedComputer.status === 'active' ? 'success' : 'processing'}>
-                                        {selectedComputer.status?.toUpperCase()}
+                                    <Tag color={selectedComputer?.isOnline ? 'success' : 'default'}>
+                                        {selectedComputer?.isOnline ? 'ACTIVE' : 'OFFLINE'}
                                     </Tag>
                                 </Col>
                                 <Col span={8}>
@@ -540,6 +541,26 @@ function Computers() {
                                     <Text strong>{selectedComputer.sessionUser || 'None'}</Text>
                                 </Col>
                             </Row>
+                            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(0, 180, 216, 0.1)' }}>
+                                <Text strong style={{ display: 'block', marginBottom: 8 }}>Online Duration</Text>
+                                <Row gutter={16}>
+                                    <Col span={8}>
+                                        <Text type="secondary">Time online</Text>
+                                        <br />
+                                        <Text strong>{selectedComputer.uptime || 'N/A'}</Text>
+                                    </Col>
+                                    <Col span={8}>
+                                        <Text type="secondary">Last seen</Text>
+                                        <br />
+                                        <Text strong>{selectedComputer.lastSeen ? dayjs(selectedComputer.lastSeen).format('MMM D, h:mm A') : 'N/A'}</Text>
+                                    </Col>
+                                    <Col span={8}>
+                                        <Text type="secondary">Current session duration</Text>
+                                        <br />
+                                        <Text strong>{selectedComputer.sessionDuration || 'N/A'}</Text>
+                                    </Col>
+                                </Row>
+                            </div>
                         </Card>
 
                         {/* Quick Actions */}
@@ -552,6 +573,9 @@ function Computers() {
                             </Button>
                             <Button icon={<SendOutlined />} onClick={handleSendFileClick}>
                                 Send File
+                            </Button>
+                            <Button icon={<FolderOpenOutlined />} onClick={() => handleCommand(selectedComputer, 'browse')}>
+                                Browse Files
                             </Button>
                             <Button icon={<CameraOutlined />} onClick={handleScreenshotRequest}>
                                 Screenshot
@@ -581,6 +605,32 @@ function Computers() {
                             >
                                 <Button danger icon={<DisconnectOutlined />}>
                                     Disconnect
+                                </Button>
+                            </Popconfirm>
+                            <Popconfirm
+                                title="Delete Computer Permanently?"
+                                description="This will completely remove the computer from the database and block future connections."
+                                onConfirm={async () => {
+                                    try {
+                                        await deleteComputer(selectedComputer.clientId);
+                                        message.success(`Computer ${selectedComputer.hostname} permanently removed`);
+                                        setActivityDrawerOpen(false);
+
+                                        // Persistently remove from list for this session
+                                        setHiddenComputers(prev => new Set(prev).add(selectedComputer.clientId));
+
+                                        // Optimistically update current list as well
+                                        setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
+                                    } catch (error) {
+                                        message.error('Failed to delete computer');
+                                    }
+                                }}
+                                okText="Delete"
+                                cancelText="Cancel"
+                                okButtonProps={{ danger: true }}
+                            >
+                                <Button danger type="primary">
+                                    Delete
                                 </Button>
                             </Popconfirm>
                         </Space>
