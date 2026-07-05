@@ -668,9 +668,13 @@ function Finance() {
                                         yField="amount"
                                         smooth
                                         color="#00B4D8"
-                                        areaStyle={{ fill: 'l(270) 0:#1e293b 1:#00B4D8' }}
-                                        xAxis={{ label: { style: { fill: '#94a3b8' } } }}
-                                        yAxis={{ label: { style: { fill: '#94a3b8' } } }}
+                                        areaStyle={{ fill: 'l(270) 0:rgba(0,180,216,0.1) 1:rgba(0,180,216,0.8)' }}
+                                        xAxis={{ label: { style: { fill: '#ffffff' } } }}
+                                        yAxis={{ 
+                                            label: { style: { fill: '#ffffff' } },
+                                            grid: { line: { style: { stroke: '#334155' } } }
+                                        }}
+                                        tooltip={{ theme: 'dark' }}
                                     />
                                 ) : <Empty description="No data" />}
                             </div>
@@ -756,8 +760,12 @@ function Finance() {
                                     xField="hour"
                                     yField="rev"
                                     color="#00B4D8"
-                                    xAxis={{ label: { style: { fill: '#94a3b8' } } }}
-                                    yAxis={{ label: { style: { fill: '#94a3b8' } } }}
+                                    xAxis={{ label: { style: { fill: '#ffffff' } } }}
+                                    yAxis={{ 
+                                        label: { style: { fill: '#ffffff' } },
+                                        grid: { line: { style: { stroke: '#334155' } } }
+                                    }}
+                                    tooltip={{ theme: 'dark' }}
                                 />
                             </div>
                         </Card>
