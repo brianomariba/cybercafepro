@@ -261,6 +261,11 @@ export const getStats = async () => {
     return response.data;
 };
 
+export const getDatabaseStats = async () => {
+    const response = await api.get('/admin/db-stats');
+    return response.data;
+};
+
 // ==================== PRICING ====================
 
 export const getPricing = async () => {
@@ -736,6 +741,7 @@ export default {
     getUsbEvents,
     getActivityLogs,
     getStats,
+    getDatabaseStats,
     getPricing,
     updatePricing,
     sendCommand,

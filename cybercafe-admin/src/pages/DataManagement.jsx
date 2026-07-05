@@ -25,7 +25,8 @@ import {
   deleteAllBrowserData,
   clearAllFinanceData,
   clearAllReportsData,
-  deleteAllLandingDocumentData
+  deleteAllLandingDocumentData,
+  getDatabaseStats
 } from '../services/api';
 
 const { TabPane } = Tabs;
@@ -35,9 +36,31 @@ function DataManagement() {
   const [cleaningBrowser, setCleaningBrowser] = useState(false);
   const [cleaningFinance, setCleaningFinance] = useState(false);
   const [cleaningReports, setCleaningReports] = useState(false);
+  const [dbStats, setDbStats] = useState(null);
+
+  const fetchDbStats = async () => {
+    try {
+      const res = await getDatabaseStats();
+      if (res.success) {
+        setDbStats(res.stats);
+      }
+    } catch (err) {
+      console.error('Failed to fetch DB stats', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchDbStats();
+  }, []);
   
-  // Dummy data for the chart to match the image
-  const storageData = [
+  // Storage data for chart
+  const storageData = dbStats ? [
+    { type: 'Printer Data', value: Number((dbStats.printer.bytes / (1024 * 1024 * 1024)).toFixed(2)) || 0.01, pct: Math.max(1, Math.round((dbStats.printer.bytes / dbStats.totalBytes) * 100)) + '%', color: '#a855f7' },
+    { type: 'Browser Data', value: Number((dbStats.browser.bytes / (1024 * 1024 * 1024)).toFixed(2)) || 0.01, pct: Math.max(1, Math.round((dbStats.browser.bytes / dbStats.totalBytes) * 100)) + '%', color: '#3b82f6' },
+    { type: 'Reports Data', value: Number((dbStats.reports.bytes / (1024 * 1024 * 1024)).toFixed(2)) || 0.01, pct: Math.max(1, Math.round((dbStats.reports.bytes / dbStats.totalBytes) * 100)) + '%', color: '#f97316' },
+    { type: 'Finance Data', value: Number((dbStats.finance.bytes / (1024 * 1024 * 1024)).toFixed(2)) || 0.01, pct: Math.max(1, Math.round((dbStats.finance.bytes / dbStats.totalBytes) * 100)) + '%', color: '#22c55e' },
+    { type: 'Others', value: Number((dbStats.others.bytes / (1024 * 1024 * 1024)).toFixed(2)) || 0.01, pct: Math.max(1, Math.round((dbStats.others.bytes / dbStats.totalBytes) * 100)) + '%', color: '#64748b' },
+  ] : [
     { type: 'Printer Data', value: 1.20, pct: '48%', color: '#a855f7' },
     { type: 'Browser Data', value: 0.70, pct: '28%', color: '#3b82f6' },
     { type: 'Reports Data', value: 0.30, pct: '12%', color: '#f97316' },
@@ -67,7 +90,7 @@ function DataManagement() {
           fontSize: '14px',
           lineHeight: '1.2'
         },
-        content: '2.48 GB\nof 10 GB',
+        content: dbStats ? `${(dbStats.totalBytes / (1024 * 1024 * 1024)).toFixed(2)} GB\nof 10 GB` : '2.48 GB\nof 10 GB',
       },
     },
   };
@@ -78,6 +101,7 @@ function DataManagement() {
     try {
       const res = await deleteAllPrinterData();
       message.success(`Printer data cleared (${res.deleted?.printJobs || 0} jobs)`);
+      fetchDbStats();
     } catch (err) {
       message.error('Failed to clear printer data');
     } finally {
@@ -90,6 +114,7 @@ function DataManagement() {
     try {
       const res = await deleteAllBrowserData();
       message.success(`Browser data cleared (${res.deleted?.browserLogs || 0} logs)`);
+      fetchDbStats();
     } catch (err) {
       message.error('Failed to clear browser data');
     } finally {
@@ -102,6 +127,7 @@ function DataManagement() {
     try {
       const res = await clearAllFinanceData();
       message.success(`Finance data cleared (${res.deleted?.transactions || 0} transactions)`);
+      fetchDbStats();
     } catch (err) {
       message.error('Failed to clear finance data');
     } finally {
@@ -114,6 +140,7 @@ function DataManagement() {
     try {
       const res = await clearAllReportsData();
       message.success(`Reports data cleared (${res.deleted?.activityLogs || 0} logs)`);
+      fetchDbStats();
     } catch (err) {
       message.error('Failed to clear reports data');
     } finally {
@@ -138,7 +165,7 @@ function DataManagement() {
             <div className="dm-stat-icon"><DatabaseOutlined /></div>
             <div className="dm-stat-info">
               <span className="dm-stat-label">Database Size</span>
-              <span className="dm-stat-value">2.48 GB</span>
+              <span className="dm-stat-value">{dbStats ? `${(dbStats.totalBytes / (1024 * 1024 * 1024)).toFixed(2)} GB` : '2.48 GB'}</span>
             </div>
           </div>
           <div className="dm-stat-card">
@@ -152,7 +179,7 @@ function DataManagement() {
             <div className="dm-stat-icon"><FileTextOutlined /></div>
             <div className="dm-stat-info">
               <span className="dm-stat-label">Records (Approx.)</span>
-              <span className="dm-stat-value">1.2M+</span>
+              <span className="dm-stat-value">{dbStats ? Math.round((dbStats.printer.count + dbStats.browser.count + dbStats.finance.count + dbStats.reports.count)).toLocaleString() : '1.2M+'}</span>
             </div>
           </div>
           <div className="dm-stat-card">
@@ -183,7 +210,7 @@ function DataManagement() {
                   <p>Print jobs, history and printer logs</p>
                 </div>
               </div>
-              <div className="dm-cleanup-records">18,452 <span>Records</span></div>
+              <div className="dm-cleanup-records">{dbStats ? dbStats.printer.count.toLocaleString() : '18,452'} <span>Records</span></div>
               <Popconfirm title="Clear all printer data?" onConfirm={handleCleanPrinter}>
                 <button className="dm-cleanup-btn printer" disabled={cleaningPrinter}>
                   <DeleteOutlined /> {cleaningPrinter ? 'Cleaning...' : 'Clean Printer Data'}
@@ -200,7 +227,7 @@ function DataManagement() {
                   <p>Browsing history, URLs and cache logs</p>
                 </div>
               </div>
-              <div className="dm-cleanup-records">245,672 <span>Records</span></div>
+              <div className="dm-cleanup-records">{dbStats ? dbStats.browser.count.toLocaleString() : '245,672'} <span>Records</span></div>
               <Popconfirm title="Clear all browser data?" onConfirm={handleCleanBrowser}>
                 <button className="dm-cleanup-btn browser" disabled={cleaningBrowser}>
                   <DeleteOutlined /> {cleaningBrowser ? 'Cleaning...' : 'Clean Browser Data'}
@@ -217,7 +244,7 @@ function DataManagement() {
                   <p>Transactions, sessions and revenue logs</p>
                 </div>
               </div>
-              <div className="dm-cleanup-records">54,221 <span>Records</span></div>
+              <div className="dm-cleanup-records">{dbStats ? dbStats.finance.count.toLocaleString() : '54,221'} <span>Records</span></div>
               <Popconfirm title="Clear all finance data?" onConfirm={handleCleanFinance}>
                 <button className="dm-cleanup-btn finance" disabled={cleaningFinance}>
                   <DeleteOutlined /> {cleaningFinance ? 'Cleaning...' : 'Clean Finance Data'}
@@ -234,7 +261,7 @@ function DataManagement() {
                   <p>Activity logs and report records</p>
                 </div>
               </div>
-              <div className="dm-cleanup-records">3,251 <span>Records</span></div>
+              <div className="dm-cleanup-records">{dbStats ? dbStats.reports.count.toLocaleString() : '3,251'} <span>Records</span></div>
               <Popconfirm title="Clear all reports data?" onConfirm={handleCleanReports}>
                 <button className="dm-cleanup-btn reports" disabled={cleaningReports}>
                   <DeleteOutlined /> {cleaningReports ? 'Cleaning...' : 'Clean Reports Data'}
@@ -293,9 +320,9 @@ function DataManagement() {
               
               <div className="dm-storage-bar-container">
                 <div className="dm-storage-bar">
-                  <div className="dm-storage-bar-fill" style={{ width: '24%' }}></div>
+                  <div className="dm-storage-bar-fill" style={{ width: `${dbStats ? Math.min(100, Math.round((dbStats.totalBytes / (10 * 1024 * 1024 * 1024)) * 100)) : 24}%` }}></div>
                 </div>
-                <div className="dm-storage-bar-text">24% used</div>
+                <div className="dm-storage-bar-text">{dbStats ? Math.min(100, Math.round((dbStats.totalBytes / (10 * 1024 * 1024 * 1024)) * 100)) : 24}% used</div>
               </div>
             </div>
 

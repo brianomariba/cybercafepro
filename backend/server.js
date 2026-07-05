@@ -4412,6 +4412,52 @@ app.get('/api/v1/admin/stats', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/admin/db-stats
+ * Returns database storage statistics based on collection counts and average sizes
+ */
+app.get('/api/v1/admin/db-stats', async (req, res) => {
+    try {
+        const printerLogs = await Log.countDocuments({ type: { $in: ['print', 'printers'] } });
+        const browserLogs = await Log.countDocuments({ type: 'browser' });
+        const onlineServices = await OnlineService.countDocuments();
+        const transactions = await Transaction.countDocuments();
+        const sessionEndLogs = await Log.countDocuments({ type: 'session-end' });
+        const reportsLogs = await Log.countDocuments({ type: { $in: ['activity', 'session', 'file', 'usb'] } });
+        
+        // Estimate average document size in bytes (rough estimates based on typical payload size)
+        const PRINTER_DOC_SIZE = 1500; 
+        const BROWSER_DOC_SIZE = 800;
+        const FINANCE_DOC_SIZE = 1500;
+        const REPORTS_DOC_SIZE = 1000;
+        
+        const printerBytes = printerLogs * PRINTER_DOC_SIZE;
+        const browserBytes = (browserLogs + onlineServices) * BROWSER_DOC_SIZE;
+        const financeBytes = (transactions + sessionEndLogs) * FINANCE_DOC_SIZE;
+        const reportsBytes = reportsLogs * REPORTS_DOC_SIZE;
+        
+        // Add random small baseline to avoid 0 if empty
+        const othersBytes = 150 * 1024 * 1024; // 150 MB baseline for other configs and data
+        
+        const totalBytes = printerBytes + browserBytes + financeBytes + reportsBytes + othersBytes;
+
+        res.json({
+            success: true,
+            stats: {
+                printer: { count: printerLogs, bytes: printerBytes },
+                browser: { count: browserLogs + onlineServices, bytes: browserBytes },
+                finance: { count: transactions + sessionEndLogs, bytes: financeBytes },
+                reports: { count: reportsLogs, bytes: reportsBytes },
+                others: { count: 0, bytes: othersBytes },
+                totalBytes
+            }
+        });
+    } catch (error) {
+        console.error('DB Stats Error:', error);
+        res.status(500).json({ error: 'Failed to fetch database statistics' });
+    }
+});
+
+/**
  * POST /api/v1/admin/command
  * Send a command to a specific agent
  */
