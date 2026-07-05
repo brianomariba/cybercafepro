@@ -106,19 +106,7 @@ function Dashboard() {
                     <h1>Dashboard Overview</h1>
                     <p>Real-time overview of your cyber cafes</p>
                 </div>
-                <div className="ref-header-actions">
-                    <div className="ref-date-picker">
-                        <CalendarOutlined style={{ color: '#9ca3af' }} />
-                        <span>{dayjs().format('MMM DD, YYYY')}</span>
-                    </div>
-                    <div className="ref-user-profile">
-                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Admin" alt="User" style={{width: 32, height: 32, borderRadius: '50%'}} />
-                        <div style={{display: 'flex', flexDirection: 'column'}}>
-                            <span style={{fontSize: 13, fontWeight: 600}}>Admin</span>
-                            <span style={{fontSize: 11, color: '#9ca3af'}}>Super Admin <DownOutlined style={{fontSize: 10}}/></span>
-                        </div>
-                    </div>
-                </div>
+
             </div>
 
             <Spin spinning={loading}>

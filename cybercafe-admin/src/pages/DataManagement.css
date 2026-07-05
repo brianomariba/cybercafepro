@@ -1,6 +1,6 @@
 .data-management-container {
   padding: 24px;
-  background-color: #0b1121; /* A deep dark background matching the image */
+  background-color: var(--bg-primary); /* A deep dark background matching the image */
   color: #c9d1d9;
   border-radius: 12px;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;

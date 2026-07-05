@@ -1,9 +1,9 @@
 /* Dashboard Reference Image Redesign */
 .dashboard-ref-container {
-    background-color: #0d1722;
+    background-color: var(--bg-primary);
     min-height: 100vh;
     padding: 24px;
-    color: #ffffff;
+    color: var(--text-primary);
     font-family: 'Inter', sans-serif;
 }
 
@@ -15,14 +15,14 @@
 }
 
 .ref-title h1 {
-    color: #ffffff;
+    color: var(--text-primary);
     font-size: 24px;
     margin: 0;
     font-weight: 600;
 }
 
 .ref-title p {
-    color: #8b99a6;
+    color: var(--text-secondary);
     margin: 4px 0 0 0;
     font-size: 14px;
 }
@@ -34,9 +34,9 @@
 }
 
 .ref-date-picker {
-    background-color: #131f2f;
-    border: 1px solid #1e2b3c;
-    color: #ffffff;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-primary);
+    color: var(--text-primary);
     padding: 8px 16px;
     border-radius: 8px;
     display: flex;
@@ -58,8 +58,8 @@
 }
 
 .ref-card {
-    background-color: #131f2f;
-    border: 1px solid #1e2b3c;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-primary);
     border-radius: 12px;
     padding: 20px;
     display: flex;
@@ -87,14 +87,14 @@
 }
 
 .ref-card-title {
-    color: #ffffff;
+    color: var(--text-primary);
     font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.5px;
 }
 
 .ref-card-subtitle {
-    color: #8b99a6;
+    color: var(--text-secondary);
     font-size: 12px;
     display: block;
     margin-top: 4px;
@@ -141,7 +141,7 @@
 .ref-revenue-val {
     font-size: 20px;
     font-weight: bold;
-    color: #ffffff;
+    color: var(--text-primary);
     margin-bottom: 16px;
 }
 
@@ -168,8 +168,8 @@
 }
 
 .ref-footer-bar {
-    background-color: #131f2f;
-    border-top: 1px solid #1e2b3c;
+    background-color: var(--bg-card);
+    border-top: 1px solid var(--border-primary);
     margin: 16px -20px -20px -20px;
     padding: 16px 20px;
     display: flex;
@@ -182,7 +182,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    color: #ffffff;
+    color: var(--text-primary);
     font-size: 13px;
     font-weight: 600;
 }
@@ -224,7 +224,7 @@
 
 .ref-pc-icon i {
     font-size: 16px;
-    color: #9ca3af;
+    color: var(--text-secondary);
 }
 
 .ref-pc-icon.online i {
@@ -233,7 +233,7 @@
 
 .ref-pc-label {
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--text-secondary);
 }
 
 .ref-stat-header {
@@ -261,7 +261,7 @@
 .ref-toggle-btn {
     padding: 4px 12px;
     font-size: 12px;
-    color: #9ca3af;
+    color: var(--text-secondary);
     border-radius: 4px;
     cursor: pointer;
 }
@@ -283,7 +283,7 @@
 }
 .ref-service-bar-bg {
     height: 6px;
-    background: #1e2b3c;
+    background: var(--border-primary);
     border-radius: 3px;
     overflow: hidden;
 }

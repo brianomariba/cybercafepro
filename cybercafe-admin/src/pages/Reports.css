@@ -1,6 +1,6 @@
 .reports-container {
   padding: 24px;
-  background-color: #0b1121; /* Matches the deep dark UI */
+  background-color: var(--bg-primary); /* Matches the deep dark UI */
   color: #c9d1d9;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   min-height: 100vh;
@@ -67,7 +67,7 @@
 }
 
 .metric-card {
-  background-color: #111827;
+  background-color: var(--bg-secondary);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 12px;
   padding: 16px;
@@ -281,7 +281,7 @@
 
 /* Detailed Report View */
 .detailed-report-section {
-  background: #111827;
+  background: var(--bg-secondary);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 12px;
   padding: 24px;

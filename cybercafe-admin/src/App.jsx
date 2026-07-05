@@ -448,6 +448,11 @@ function App() {
     message.success(`Switched to ${!isDarkMode ? 'dark' : 'light'} mode`);
   };
 
+  // Sync theme with document for CSS variables
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
   const typeIcon = { sale: '💰', warning: '⚠️', submission: '📤', document: '📄', info: 'ℹ️' };
 
   const notificationItems = notifications.length > 0 ? [
