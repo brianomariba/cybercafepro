@@ -23,7 +23,8 @@ const SessionSchema = new mongoose.Schema({
         services: Number,
         grandTotal: Number
     },
-    receivedAt: { type: Date, default: Date.now }
+    receivedAt: { type: Date, default: Date.now },
+    shop: { type: String, default: 'Main Shop' }
 });
 
 module.exports = mongoose.model('Session', SessionSchema);

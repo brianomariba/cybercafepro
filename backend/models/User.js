@@ -9,7 +9,8 @@ const UserSchema = new mongoose.Schema({
     role: { type: String, enum: ['Super Admin', 'Admin', 'Staff'], default: 'Staff' },
     active: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now },
-    lastLogin: { type: Date }
+    lastLogin: { type: Date },
+    shop: { type: String, default: 'Main Shop' }
 });
 
 module.exports = mongoose.model('User', UserSchema);

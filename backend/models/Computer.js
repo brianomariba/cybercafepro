@@ -27,7 +27,8 @@ const ComputerSchema = new mongoose.Schema({
         printJobsActive: Number,
         hasScreenshot: Boolean
     },
-    lastSeen: { type: Date, default: Date.now }
+    lastSeen: { type: Date, default: Date.now },
+    shop: { type: String, default: 'Main Shop' }
 });
 
 module.exports = mongoose.model('Computer', ComputerSchema);

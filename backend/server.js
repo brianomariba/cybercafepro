@@ -4299,35 +4299,109 @@ app.get('/api/v1/admin/stats', async (req, res) => {
             Log.find({ type: 'print', receivedAt: { $gte: todayStart } })
         ]);
 
-        // Calculate session revenues
-        const todaySessionRevenue = todaySessions
-            .filter(s => s.type === 'LOGOUT' && s.charges)
-            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+        // Helper to get shop by clientId
+        const getShop = (clientId) => {
+            const comp = allComputers.find(c => c.clientId === clientId);
+            return (comp && comp.shop) ? comp.shop : 'Main Shop';
+        };
 
-        // Calculate printing revenues (using totalSheets which accounts for copies)
-        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+        const shopStats = {};
+
+        const initializeShop = (shopName) => {
+            if (!shopStats[shopName]) {
+                shopStats[shopName] = {
+                    name: shopName,
+                    computers: { total: 0, online: 0, busy: 0, offline: 0, list: [] },
+                    revenue: { total: 0, sessions: 0, printing: 0, other: 0 },
+                    sessions: { today: 0, active: 0 },
+                    users: {}
+                };
+            }
+        };
+
+        // Initialize from all computers
+        allComputers.forEach(c => {
+            const shopName = c.shop || 'Main Shop';
+            initializeShop(shopName);
+            shopStats[shopName].computers.total++;
+            shopStats[shopName].computers.list.push(c);
+            if (c.isOnline) shopStats[shopName].computers.online++;
+            else shopStats[shopName].computers.offline++;
+            
+            if (c.status === 'unlocked' && c.sessionUser) {
+                shopStats[shopName].computers.busy++;
+                shopStats[shopName].sessions.active++;
+            }
+        });
+
+        // Process sessions
+        todaySessions.forEach(s => {
+            const shopName = s.shop || getShop(s.clientId) || 'Main Shop';
+            initializeShop(shopName);
+            
+            if (s.type === 'LOGIN') {
+                shopStats[shopName].sessions.today++;
+            } else if (s.type === 'LOGOUT' && s.charges) {
+                const total = s.charges.grandTotal || 0;
+                shopStats[shopName].revenue.sessions += total;
+                shopStats[shopName].revenue.total += total;
+                
+                const user = s.user || 'Unknown';
+                if (!shopStats[shopName].users[user]) shopStats[shopName].users[user] = { name: user, rev: 0 };
+                shopStats[shopName].users[user].rev += total;
+            }
+        });
+
+        // Process print jobs
+        todayPrintJobs.forEach(j => {
+            const shopName = getShop(j.clientId) || 'Main Shop';
+            initializeShop(shopName);
+            
             const data = j.data || {};
             const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
             const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
-            return sum + (sheets * rate);
-        }, 0);
+            const rev = sheets * rate;
+            
+            shopStats[shopName].revenue.printing += rev;
+            shopStats[shopName].revenue.total += rev;
+            
+            // Print jobs are often done by the user logged into that PC
+            const user = j.sessionUser || 'Unknown';
+            if (!shopStats[shopName].users[user]) shopStats[shopName].users[user] = { name: user, rev: 0 };
+            shopStats[shopName].users[user].rev += rev;
+        });
+
+        // Format shop stats for response
+        const formattedShops = Object.values(shopStats).map(shop => {
+            // Convert users object to sorted array and add rank
+            const usersArr = Object.values(shop.users)
+                .sort((a, b) => b.rev - a.rev)
+                .map((u, i) => ({ ...u, rank: i + 1 }));
+                
+            return {
+                name: shop.name,
+                computers: shop.computers,
+                revenue: shop.revenue,
+                sessions: shop.sessions,
+                topAgents: usersArr.slice(0, 5),
+                allAgents: usersArr
+            };
+        });
+
+        // Ensure we always have Main Shop even if empty
+        if (formattedShops.length === 0) {
+            formattedShops.push({
+                name: 'Main Shop',
+                computers: { total: 0, online: 0, busy: 0, offline: 0, list: [] },
+                revenue: { total: 0, sessions: 0, printing: 0, other: 0 },
+                sessions: { today: 0, active: 0 },
+                topAgents: [],
+                allAgents: []
+            });
+        }
 
         res.json({
-            computers: {
-                total: allComputers.length,
-                online: allComputers.filter(c => c.isOnline).length,
-                busy: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length,
-                offline: allComputers.filter(c => !c.isOnline).length
-            },
-            revenue: {
-                today: todaySessionRevenue + todayPrintRevenue,
-                sessions: todaySessionRevenue,
-                printing: todayPrintRevenue
-            },
-            sessions: {
-                today: todaySessions.filter(s => s.type === 'LOGIN').length,
-                active: allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length
-            },
+            shops: formattedShops,
             recentActivity: todaySessions.slice(0, 10),
             pricing: pricing
         });
