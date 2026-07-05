@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Row, Col, Card, Typography, Spin, message } from 'antd';
-import { CalendarOutlined, DownOutlined } from '@ant-design/icons';
+import { CalendarOutlined, DownOutlined, DesktopOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getComputers, getStats, connectSocket } from '../services/api';
 import { Column } from '@ant-design/charts';
