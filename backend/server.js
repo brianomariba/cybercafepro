@@ -7266,6 +7266,36 @@ app.get('/api/v1/admin/transactions', requireAdminAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/v1/admin/transactions/manual
+ * Manually add an expense or a sale
+ */
+app.post('/api/v1/admin/transactions/manual', requireAdminAuth, async (req, res) => {
+    try {
+        const { type, amount, description, paymentMethod } = req.body;
+        if (!type || !amount) {
+            return res.status(400).json({ error: 'Type and amount are required' });
+        }
+
+        const newTxn = new Transaction({
+            id: `txn_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            type: type, // 'expense' or 'manual_sale'
+            amount: Number(amount),
+            description: description || '',
+            paymentMethod: paymentMethod || 'cash',
+            createdAt: new Date(),
+            status: 'completed',
+            seller: req.admin?.username || 'Admin'
+        });
+
+        await newTxn.save();
+        res.json({ success: true, transaction: newTxn });
+    } catch (error) {
+        console.error('[TRANSACTIONS] Manual add failed:', error);
+        res.status(500).json({ error: 'Failed to add manual transaction' });
+    }
+});
+
+/**
  * DELETE /api/v1/admin/transactions/payment/:id
  * Manually delete a payment record
  */

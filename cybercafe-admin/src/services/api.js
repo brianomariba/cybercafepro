@@ -364,8 +364,13 @@ export const getTransactions = async (params = {}) => {
 };
 
 export const getTransactionSummary = async (params) => {
-    const response = await api.get('/admin/transactions/summary', { params });
-    return response.data;
+    const res = await api.get('/admin/transactions/summary', { params });
+    return res.data;
+};
+
+export const addManualTransaction = async (data) => {
+    const res = await api.post('/admin/transactions/manual', data);
+    return res.data;
 };
 
 export const deletePaymentRecord = async (id) => {
@@ -749,6 +754,7 @@ export default {
     assignTask,
     getTransactions,
     getTransactionSummary,
+    addManualTransaction,
     deletePaymentRecord,
     getDocuments,
     getDocumentStats,

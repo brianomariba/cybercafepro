@@ -29,7 +29,7 @@ import {
 import { Area, Pie, Column } from '@ant-design/charts';
 import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween';
-import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getActivityRecords, deletePaymentRecord } from '../services/api';
+import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getActivityRecords, deletePaymentRecord, addManualTransaction } from '../services/api';
 
 dayjs.extend(isBetween);
 
@@ -53,6 +53,50 @@ function Finance() {
     const [filterType, setFilterType] = useState('all');
     const [searchText, setSearchText] = useState('');
     const [dateRange, setDateRange] = useState([dayjs().startOf('day'), dayjs().endOf('day')]);
+    
+    // Quick Actions State
+    const [isExpenseModalVisible, setIsExpenseModalVisible] = useState(false);
+    const [isSaleModalVisible, setIsSaleModalVisible] = useState(false);
+    const [manualAmount, setManualAmount] = useState('');
+    const [manualDescription, setManualDescription] = useState('');
+    const [manualPaymentMethod, setManualPaymentMethod] = useState('cash');
+    const [submittingManual, setSubmittingManual] = useState(false);
+
+    const handleManualSubmit = async (type) => {
+        if (!manualAmount) return message.error('Amount is required');
+        setSubmittingManual(true);
+        try {
+            await addManualTransaction({
+                type,
+                amount: manualAmount,
+                description: manualDescription,
+                paymentMethod: manualPaymentMethod
+            });
+            message.success(`${type === 'expense' ? 'Expense' : 'Sale'} added successfully`);
+            setIsExpenseModalVisible(false);
+            setIsSaleModalVisible(false);
+            setManualAmount('');
+            setManualDescription('');
+            setManualPaymentMethod('cash');
+            fetchData();
+        } catch (e) {
+            message.error('Failed to add transaction');
+        }
+        setSubmittingManual(false);
+    };
+
+    const exportDataToCSV = () => {
+        const header = ['ID', 'Type', 'Amount', 'Description', 'Date', 'Payment Method'].join(',');
+        const rows = transactions.map(t => [t.id || t._id, t.type, t.amount, `"${(t.description || '').replace(/"/g, '""')}"`, dayjs(t.createdAt).format('YYYY-MM-DD HH:mm:ss'), t.paymentMethod || 'cash'].join(','));
+        const csvContent = "data:text/csv;charset=utf-8," + [header, ...rows].join('\n');
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement('a');
+        link.setAttribute('href', encodedUri);
+        link.setAttribute('download', `hawknine_finance_${dayjs().format('YYYY-MM-DD')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
 
     // Fetch all data with date range
     const fetchData = async () => {
@@ -151,6 +195,10 @@ function Finance() {
     const totalRevenue = useMemo(() => {
         return revenueByType.inventory + revenueByType.printing + revenueByType.photocopies + revenueByType.lamination + revenueByType.internet + revenueByType.other;
     }, [revenueByType]);
+
+    const totalExpenses = useMemo(() => {
+        return transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + (t.amount || 0), 0);
+    }, [transactions]);
 
     const transactionCount = transactions.length + printJobs.length + activityRecords.length;
 
@@ -629,8 +677,8 @@ function Finance() {
                 <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
                     {[
                         { title: 'Total Revenue', value: totalRevenue, prefix: <DollarOutlined style={{ color: '#00B4D8' }} />, trend: '+13.0%', color: '#00C853' },
-                        { title: 'Total Profit', value: Math.max(0, totalRevenue - 6200), prefix: <RiseOutlined style={{ color: '#00C853' }} />, trend: '+15.6%', color: '#00C853' },
-                        { title: 'Total Expenses', value: 6200, prefix: <ArrowDownOutlined style={{ color: '#e040fb' }} />, trend: '-8.2%', color: '#ef4444' },
+                        { title: 'Total Profit', value: Math.max(0, totalRevenue - totalExpenses), prefix: <RiseOutlined style={{ color: '#00C853' }} />, trend: '+15.6%', color: '#00C853' },
+                        { title: 'Total Expenses', value: totalExpenses, prefix: <ArrowDownOutlined style={{ color: '#e040fb' }} />, trend: '-8.2%', color: '#ef4444' },
                         { title: 'Transactions', value: transactionCount, prefix: <FileTextOutlined style={{ color: '#00C853' }} />, trend: '+11.4%', color: '#00C853', isNumber: true },
                         { title: 'Average Transaction', value: transactionCount > 0 ? (totalRevenue / transactionCount) : 0, prefix: <PieChartOutlined style={{ color: '#00B4D8' }} />, trend: '+2.1%', color: '#00C853' },
                         { title: 'Pending Payments', value: 750, prefix: <ClockCircleOutlined style={{ color: '#FFB703' }} />, trend: '-0%', color: '#FFB703' },
@@ -861,7 +909,7 @@ function Finance() {
                     <Col span={5}>
                         <Card title={<span style={{ color: '#fff' }}>Quick Actions</span>} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8 }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
+                                <div onClick={() => setIsExpenseModalVisible(true)} style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
                                     <Avatar style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444' }} icon={<DollarOutlined />} />
                                     <div style={{ marginLeft: 12, flex: 1 }}>
                                         <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 500 }}>Add Expense</div>
@@ -869,7 +917,7 @@ function Finance() {
                                     </div>
                                     <ArrowUpOutlined style={{ color: '#64748b' }} />
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
+                                <div onClick={() => setIsSaleModalVisible(true)} style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
                                     <Avatar style={{ background: 'rgba(123,44,191,0.1)', color: '#7b2cbf' }} icon={<ShopOutlined />} />
                                     <div style={{ marginLeft: 12, flex: 1 }}>
                                         <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 500 }}>Add Sale</div>
@@ -877,7 +925,7 @@ function Finance() {
                                     </div>
                                     <ArrowUpOutlined style={{ color: '#64748b' }} />
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
+                                <div onClick={exportDataToCSV} style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
                                     <Avatar style={{ background: 'rgba(255,183,3,0.1)', color: '#FFB703' }} icon={<FileTextOutlined />} />
                                     <div style={{ marginLeft: 12, flex: 1 }}>
                                         <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 500 }}>Generate Report</div>
@@ -885,7 +933,7 @@ function Finance() {
                                     </div>
                                     <DownloadOutlined style={{ color: '#64748b' }} />
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
+                                <div onClick={exportDataToCSV} style={{ display: 'flex', alignItems: 'center', padding: 12, background: '#0f172a', borderRadius: 8, cursor: 'pointer', border: '1px solid transparent' }} className="quick-action-btn">
                                     <Avatar style={{ background: 'rgba(0,200,83,0.1)', color: '#00C853' }} icon={<CopyOutlined />} />
                                     <div style={{ marginLeft: 12, flex: 1 }}>
                                         <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 500 }}>Export Data</div>
@@ -982,6 +1030,42 @@ function Finance() {
                     </Col>
                 </Row>
             </Spin>
+
+            <Modal title="Add Expense" visible={isExpenseModalVisible} onCancel={() => setIsExpenseModalVisible(false)} onOk={() => handleManualSubmit('expense')} confirmLoading={submittingManual}>
+                <div style={{ marginBottom: 16 }}>
+                    <Text>Amount (KSH)</Text>
+                    <Input type="number" value={manualAmount} onChange={e => setManualAmount(e.target.value)} placeholder="e.g. 500" />
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                    <Text>Description</Text>
+                    <Input value={manualDescription} onChange={e => setManualDescription(e.target.value)} placeholder="e.g. Bought printer ink" />
+                </div>
+                <div>
+                    <Text>Payment Method</Text>
+                    <Select value={manualPaymentMethod} onChange={setManualPaymentMethod} style={{ width: '100%' }}>
+                        <Select.Option value="cash">Cash</Select.Option>
+                        <Select.Option value="mpesa">M-Pesa</Select.Option>
+                    </Select>
+                </div>
+            </Modal>
+
+            <Modal title="Add Sale" visible={isSaleModalVisible} onCancel={() => setIsSaleModalVisible(false)} onOk={() => handleManualSubmit('manual_sale')} confirmLoading={submittingManual}>
+                <div style={{ marginBottom: 16 }}>
+                    <Text>Amount (KSH)</Text>
+                    <Input type="number" value={manualAmount} onChange={e => setManualAmount(e.target.value)} placeholder="e.g. 100" />
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                    <Text>Description</Text>
+                    <Input value={manualDescription} onChange={e => setManualDescription(e.target.value)} placeholder="e.g. Sold an accessory" />
+                </div>
+                <div>
+                    <Text>Payment Method</Text>
+                    <Select value={manualPaymentMethod} onChange={setManualPaymentMethod} style={{ width: '100%' }}>
+                        <Select.Option value="cash">Cash</Select.Option>
+                        <Select.Option value="mpesa">M-Pesa</Select.Option>
+                    </Select>
+                </div>
+            </Modal>
 
             <style>{`
                 .dark-table .ant-table {
