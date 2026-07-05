@@ -975,7 +975,7 @@ function Finance() {
                 </Row>
             </Spin>
 
-            <style>{"
+            <style>{`
                 .dark-table .ant-table {
                     background: transparent !important;
                     color: #fff !important;
@@ -1000,7 +1000,7 @@ function Finance() {
                     border-bottom: 1px solid #334155 !important;
                     color: #fff !important;
                 }
-            "}</style>
+            `}</style>
         </div>
     );
 }
