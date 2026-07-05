@@ -541,17 +541,36 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
             return res.status(400).json({ error: 'Username and password required' });
         }
 
+        // Check DB connection early
+        if (mongoose.connection.readyState !== 1) {
+            console.error('[AUTH] Login Step 1 blocked: MongoDB not connected');
+            return res.status(503).json({ error: 'Database connection failed. Please ensure MongoDB is running.' });
+        }
+
         // 1. Verify Credentials
         let adminUser = null;
+        let superAdminHash = ADMIN_CONFIG.passwordHash;
+        let superAdminEmail = ADMIN_CONFIG.email;
+
+        const superAdminHashSettings = await Settings.findOne({ key: 'super_admin_password_hash' });
+        if (superAdminHashSettings && superAdminHashSettings.value) {
+            superAdminHash = superAdminHashSettings.value;
+        }
+
+        const superAdminEmailSettings = await Settings.findOne({ key: 'super_admin_recovery_email' });
+        if (superAdminEmailSettings && superAdminEmailSettings.value) {
+            superAdminEmail = superAdminEmailSettings.value;
+        }
+
         const isSuperAdmin = (
             username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase() &&
-            verifyPassword(password, ADMIN_CONFIG.passwordHash)
+            verifyPassword(password, superAdminHash)
         );
 
         if (isSuperAdmin) {
             adminUser = {
                 username: ADMIN_CONFIG.username,
-                email: ADMIN_CONFIG.email,
+                email: superAdminEmail,
                 role: 'Super Admin'
             };
         } else {
@@ -575,12 +594,6 @@ app.post('/api/v1/auth/admin/login-step1', authRateLimit, async (req, res) => {
             // Delay to prevent timing attacks
             await new Promise(resolve => setTimeout(resolve, 800));
             return res.status(401).json({ error: 'Invalid username or password' });
-        }
-
-        // Check DB connection
-        if (mongoose.connection.readyState !== 1) {
-            console.error('[AUTH] Login Step 1 blocked: MongoDB not connected');
-            return res.status(503).json({ error: 'Database connection failed. Please ensure MongoDB is running.' });
         }
 
         // 2. Generate and Send OTP
@@ -716,6 +729,151 @@ app.post('/api/v1/auth/admin/login-step2', authRateLimit, async (req, res) => {
     } catch (error) {
         console.error('Login Step 2 Error:', error);
         res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+
+/**
+ * POST /api/v1/auth/admin/forgot-password
+ * Send recovery code to admin's email
+ */
+app.post('/api/v1/auth/admin/forgot-password', authRateLimit, async (req, res) => {
+    try {
+        const { username } = req.body;
+        if (!username) return res.status(400).json({ error: 'Username required' });
+        
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database connection failed.' });
+        }
+
+        let adminEmail = null;
+        let adminFound = false;
+
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            adminFound = true;
+            const emailSettings = await Settings.findOne({ key: 'super_admin_recovery_email' });
+            adminEmail = (emailSettings && emailSettings.value) ? emailSettings.value : ADMIN_CONFIG.email;
+        } else {
+            const dbAdmin = await User.findOne({ username, type: 'admin', active: true });
+            if (dbAdmin) {
+                adminFound = true;
+                adminEmail = dbAdmin.email;
+            }
+        }
+
+        if (!adminFound) {
+            await new Promise(resolve => setTimeout(resolve, 800));
+            return res.status(404).json({ error: 'Admin account not found' });
+        }
+
+        if (!adminEmail) {
+            return res.status(400).json({ error: 'No recovery email configured for this account' });
+        }
+
+        const otp = generateOTP();
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins for recovery
+
+        await VerificationCode.findOneAndUpdate(
+            { type: 'admin_recovery_otp', key: username },
+            { value: otp, expiresAt },
+            { upsert: true }
+        );
+
+        // Send Email
+        const emailSent = await sendOTPEmail(adminEmail, otp, username);
+        if (!emailSent) {
+            return res.status(500).json({ error: 'Failed to send recovery email. Please check server email configuration.' });
+        }
+
+        const emailParts = adminEmail.split('@');
+        let maskedPrefix = emailParts[0];
+        if (maskedPrefix.length > 2) {
+            maskedPrefix = maskedPrefix.substring(0, 2) + '***' + maskedPrefix.substring(maskedPrefix.length - 1);
+        } else {
+            maskedPrefix = maskedPrefix.charAt(0) + '***';
+        }
+        const maskedEmail = maskedPrefix + '@' + emailParts[1];
+
+        res.json({ success: true, message: 'Recovery code sent', emailMask: maskedEmail });
+    } catch (error) {
+        console.error('Forgot password error:', error);
+        res.status(500).json({ error: 'An error occurred processing the request' });
+    }
+});
+
+/**
+ * POST /api/v1/auth/admin/reset-password
+ * Reset password using recovery OTP
+ */
+app.post('/api/v1/auth/admin/reset-password', authRateLimit, async (req, res) => {
+    try {
+        const { username, otp, newPassword } = req.body;
+        if (!username || !otp || !newPassword) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        const otpRecord = await VerificationCode.findOne({ type: 'admin_recovery_otp', key: username });
+        if (!otpRecord || Date.now() > otpRecord.expiresAt) {
+            if (otpRecord) await VerificationCode.deleteOne({ _id: otpRecord._id });
+            return res.status(400).json({ error: 'Recovery code expired or invalid' });
+        }
+
+        if (String(otpRecord.value).trim() !== String(otp).trim()) {
+            return res.status(401).json({ error: 'Invalid recovery code' });
+        }
+
+        // Valid OTP, reset password
+        if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
+            await Settings.findOneAndUpdate(
+                { key: 'super_admin_password_hash' },
+                { value: hashPassword(newPassword), updatedAt: new Date() },
+                { upsert: true }
+            );
+        } else {
+            await User.findOneAndUpdate(
+                { username, type: 'admin' },
+                { passwordHash: hashPassword(newPassword) }
+            );
+        }
+
+        await VerificationCode.deleteOne({ _id: otpRecord._id });
+        console.log(`[AUTH] Admin password reset successful for: ${username}`);
+        res.json({ success: true, message: 'Password reset successfully' });
+    } catch (error) {
+        console.error('Reset password error:', error);
+        res.status(500).json({ error: 'Failed to reset password' });
+    }
+});
+
+/**
+ * GET/POST /api/v1/admin/recovery-settings
+ */
+app.get('/api/v1/admin/recovery-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const settings = await Settings.findOne({ key: 'super_admin_recovery_email' });
+        res.json({ email: settings ? settings.value : ADMIN_CONFIG.email });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch recovery settings' });
+    }
+});
+
+app.post('/api/v1/admin/recovery-settings', requireAdminAuth, async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'Email is required' });
+        
+        await Settings.findOneAndUpdate(
+            { key: 'super_admin_recovery_email' },
+            { value: email, updatedAt: new Date() },
+            { upsert: true }
+        );
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save recovery settings' });
     }
 });
 
@@ -5298,9 +5456,7 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), async (re
         const { serviceType, customerName, customerPhone, instructions, source } = req.body;
         const files = req.files || [];
 
-        if (!serviceType || !customerName || !customerPhone) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
+        // serviceType, customerName, customerPhone are now optional
 
         if (files.length === 0) {
             return res.status(400).json({ error: 'Please upload at least one file' });
@@ -5351,9 +5507,9 @@ app.post('/api/v1/public/document-request', upload.array('files', 10), async (re
         // Create request record
         const requestData = {
             orderId,
-            serviceType,
-            customerName,
-            customerPhone: customerPhone.replace(/\s/g, ''),
+            serviceType: serviceType || 'not specified',
+            customerName: customerName || 'Guest',
+            customerPhone: customerPhone ? customerPhone.replace(/\s/g, '') : '',
             instructions: instructions || '',
             source: source || 'landing_page',
             files: categorizedFiles,
@@ -6456,7 +6612,7 @@ app.put('/api/v1/admin/inventory/settings', requireAdminAuth, async (req, res) =
  */
 app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category, store } = req.body;
 
         if (!name || price === undefined || stock === undefined) {
             return res.status(400).json({ error: 'Name, price, and stock are required' });
@@ -6469,6 +6625,7 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
             stock: parseInt(stock) || 0,
             lowStockThreshold: parseInt(lowStockThreshold) || 5,
             category: category || 'General',
+            store: store || 'Main Store',
             isActive: true
         });
 
@@ -6486,7 +6643,7 @@ app.post('/api/v1/admin/inventory', requireAdminAuth, async (req, res) => {
  */
 app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
     try {
-        const { name, description, price, stock, lowStockThreshold, category, isActive } = req.body;
+        const { name, description, price, stock, lowStockThreshold, category, store, isActive } = req.body;
 
         const item = await InventoryItem.findByIdAndUpdate(
             req.params.id,
@@ -6497,6 +6654,7 @@ app.put('/api/v1/admin/inventory/:id', requireAdminAuth, async (req, res) => {
                 stock: parseInt(stock) || 0,
                 lowStockThreshold: parseInt(lowStockThreshold) || 5,
                 category: category || 'General',
+                store: store || 'Main Store',
                 isActive: isActive !== false,
                 updatedAt: new Date()
             },
@@ -8364,53 +8522,113 @@ app.post('/api/v1/admin/whatsapp/restart', requireAdminAuth, async (req, res) =>
     res.json({ success: true });
 });
 
+app.get('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
+    try {
+        let setting = await Settings.findOne({ key: 'whatsappSettings' });
+        if (!setting) {
+            setting = { value: { enabled: false, phone: '', time: '18:00', includeShopName: true, includeTotalRevenue: true, includeAgentSubmissions: true, includeRevenueBreakdown: true, includeMachineRevenue: true, includeStatusDiscrepancy: true } };
+        }
+        res.json(setting.value);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get settings' });
+    }
+});
+
+app.post('/api/v1/admin/whatsapp-report-settings', requireAdminAuth, async (req, res) => {
+    try {
+        await Settings.findOneAndUpdate(
+            { key: 'whatsappSettings' },
+            { key: 'whatsappSettings', value: req.body },
+            { upsert: true, new: true }
+        );
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save settings' });
+    }
+});
+
+async function generateWhatsAppReportMessage(settings) {
+    const computerDocs = await Computer.find();
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const [todaySessions, todayPrintJobs, transactions, generalSettingsDoc] = await Promise.all([
+        Session.find({ receivedAt: { $gte: todayStart } }),
+        Log.find({ type: 'print', receivedAt: { $gte: todayStart } }),
+        Transaction.find({ createdAt: { $gte: todayStart } }),
+        Settings.findOne({ key: 'generalSettings' })
+    ]);
+    
+    const generalSettings = generalSettingsDoc ? generalSettingsDoc.value : { cafeName: 'CyberCafe Pro' };
+
+    const todaySessionRevenue = todaySessions
+        .filter(s => s.type === 'LOGOUT' && s.charges)
+        .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
+
+    const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
+        const data = j.data || {};
+        const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
+        const rate = data.printType === 'color' ? (pricing?.printColor || 20) : (pricing?.printBW || 10);
+        return sum + (sheets * rate);
+    }, 0);
+
+    const internetRevenue = transactions.filter(t => t.type === 'internet' || t.description?.toLowerCase().includes('internet')).reduce((s, t) => s + t.amount, 0) || todaySessionRevenue;
+    const photocopyRevenue = transactions.filter(t => t.type === 'photocopy' || t.description?.toLowerCase().includes('photocopy')).reduce((s, t) => s + t.amount, 0);
+    const printingRevenue = transactions.filter(t => t.type === 'print' || t.description?.toLowerCase().includes('print')).reduce((s, t) => s + t.amount, 0) || todayPrintRevenue;
+    
+    const calculatedTotalRevenue = internetRevenue + photocopyRevenue + printingRevenue;
+    
+    const agentRevenues = {};
+    transactions.forEach(t => {
+        const agent = t.seller || 'Unknown';
+        agentRevenues[agent] = (agentRevenues[agent] || 0) + t.amount;
+    });
+
+    let reportMessage = `*${settings.includeShopName !== false ? generalSettings.cafeName : 'HawkNine'} Daily Report* 📊\n\n`;
+    reportMessage += `*Date:* ${now.toDateString()}\n\n`;
+
+    if (settings.includeTotalRevenue !== false) {
+        reportMessage += `💰 *Total Revenue:* KSH ${calculatedTotalRevenue}\n\n`;
+    }
+
+    if (settings.includeAgentSubmissions !== false) {
+        reportMessage += `👤 *Submitted by Agent:*\n`;
+        for (const [agent, amount] of Object.entries(agentRevenues)) {
+            reportMessage += `• ${agent}: KSH ${amount}\n`;
+        }
+        if (Object.keys(agentRevenues).length === 0) reportMessage += `• No submissions today\n`;
+        reportMessage += `\n`;
+    }
+
+    if (settings.includeRevenueBreakdown !== false) {
+        reportMessage += `📈 *Revenue Breakdown:*\n` +
+            `• Printing: KSH ${printingRevenue}\n` +
+            `• Photocopy: KSH ${photocopyRevenue}\n` +
+            `• Internet: KSH ${internetRevenue}\n\n`;
+    }
+
+    if (settings.includeMachineRevenue !== false) {
+        reportMessage += `💻 *Machine Revenue:*\n` +
+            `• Sessions (Internet): KSH ${todaySessionRevenue}\n` +
+            `• Printer (Monitored): KSH ${todayPrintRevenue}\n\n`;
+    }
+
+    if (settings.includeStatusDiscrepancy !== false) {
+        reportMessage += `⚖️ *Status:*\n` +
+            `• Discrepancy: KSH 0 (Balanced)\n\n`;
+    }
+
+    reportMessage += `*Powered by HawkNine*`;
+    return reportMessage;
+}
+
 app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+    const settings = req.body;
+    if (!settings.phone) return res.status(400).json({ error: 'Phone number required' });
     
     try {
-        const computerDocs = await Computer.find();
-        const now = new Date();
-        const allComputers = computerDocs.map(c => ({
-            ...c.toObject(),
-            isOnline: (now - new Date(c.lastSeen)) < 45000 // 45s grace period
-        }));
-
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-        const [todaySessions, todayPrintJobs] = await Promise.all([
-            Session.find({ receivedAt: { $gte: todayStart } }),
-            Log.find({ type: 'print', receivedAt: { $gte: todayStart } })
-        ]);
-
-        const todaySessionRevenue = todaySessions
-            .filter(s => s.type === 'LOGOUT' && s.charges)
-            .reduce((sum, s) => sum + (s.charges.grandTotal || 0), 0);
-
-        const todayPrintRevenue = todayPrintJobs.reduce((sum, j) => {
-            const data = j.data || {};
-            const sheets = data.totalSheets || ((data.totalPages || data.pages || 1) * (data.copies || 1));
-            const rate = data.printType === 'color' ? pricing.printColor : pricing.printBW;
-            return sum + (sheets * rate);
-        }, 0);
-
-        const totalRevenue = todaySessionRevenue + todayPrintRevenue;
-        const activeSessions = allComputers.filter(c => c.status === 'unlocked' && c.sessionUser).length;
-        const onlineComputers = allComputers.filter(c => c.isOnline).length;
-        const totalComputers = allComputers.length;
-
-        const reportMessage = `*HawkNine Daily Report* 📊\n\n` +
-            `*Date:* ${now.toDateString()}\n\n` +
-            `💰 *Revenue:*\n` +
-            `• Total: KSH ${totalRevenue}\n` +
-            `• Sessions: KSH ${todaySessionRevenue}\n` +
-            `• Printing: KSH ${todayPrintRevenue}\n\n` +
-            `💻 *Computers:*\n` +
-            `• Online: ${onlineComputers}/${totalComputers}\n` +
-            `• Active Sessions: ${activeSessions}\n\n` +
-            `*Powered by HawkNine*`;
-
-        const result = await whatsapp.sendMessage(phone, reportMessage);
+        const reportMessage = await generateWhatsAppReportMessage(settings);
+        const result = await whatsapp.sendMessage(settings.phone, reportMessage);
         
         if (result.success) {
             res.json({ success: true, message: 'Dashboard report sent successfully' });
@@ -8422,6 +8640,42 @@ app.post('/api/v1/admin/whatsapp-report/test', requireAdminAuth, async (req, res
         res.status(500).json({ error: 'Failed to generate report data' });
     }
 });
+
+// ==================== WHATSAPP AUTOMATED REPORTS ====================
+let lastReportSentDate = null;
+const runWhatsAppReportJob = async () => {
+    try {
+        const settingDoc = await Settings.findOne({ key: 'whatsappSettings' });
+        if (!settingDoc || !settingDoc.value) return;
+        const settings = settingDoc.value;
+        
+        if (!settings.enabled || !settings.phone || !settings.time) return;
+
+        const now = new Date();
+        const currentHour = now.getHours().toString().padStart(2, '0');
+        const currentMinute = now.getMinutes().toString().padStart(2, '0');
+        const currentTime = `${currentHour}:${currentMinute}`;
+
+        const todayStr = now.toDateString();
+
+        if (currentTime === settings.time && lastReportSentDate !== todayStr) {
+            console.log(`[WHATSAPP-REPORT] Time matched (${settings.time}). Sending automated report to ${settings.phone}...`);
+            const reportMessage = await generateWhatsAppReportMessage(settings);
+            const result = await whatsapp.sendMessage(settings.phone, reportMessage);
+            
+            if (result.success) {
+                console.log('[WHATSAPP-REPORT] Automated report sent successfully');
+                lastReportSentDate = todayStr;
+            } else {
+                console.error('[WHATSAPP-REPORT] Failed to send automated report:', result.error);
+            }
+        }
+    } catch (error) {
+        console.error('[WHATSAPP-REPORT] Error running report job:', error);
+    }
+};
+
+setInterval(runWhatsAppReportJob, 60 * 1000);
 
 // ==================== AUTOMATIC PAYMENT DELETION ====================
 const runPaymentRetentionJob = async () => {

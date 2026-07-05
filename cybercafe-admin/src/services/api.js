@@ -61,6 +61,16 @@ export const adminLoginStep2 = async (tempToken, otp) => {
     return response.data;
 };
 
+export const adminForgotPassword = async (username) => {
+    const response = await api.post('/auth/admin/forgot-password', { username });
+    return response.data;
+};
+
+export const adminResetPassword = async (username, otp, newPassword) => {
+    const response = await api.post('/auth/admin/reset-password', { username, otp, newPassword });
+    return response.data;
+};
+
 export const adminLogout = async () => {
     try {
         await api.post('/auth/admin/logout');
@@ -597,6 +607,9 @@ export const removeFromBlocklist = async (id) => (await api.delete(`/admin/block
 // ==================== PASSWORD CHANGE ====================
 export const changeAdminPassword = async (currentPassword, newPassword) =>
     (await api.post('/admin/change-password', { currentPassword, newPassword })).data;
+
+export const getRecoverySettings = async () => (await api.get('/admin/recovery-settings')).data;
+export const saveRecoverySettings = async (email) => (await api.post('/admin/recovery-settings', { email })).data;
 
 export const getInventory = async () => (await api.get('/inventory')).data;
 export const addInventoryItem = async (data) => (await api.post('/admin/inventory', data)).data;

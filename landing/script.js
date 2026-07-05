@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HawkNine Landing Page - JavaScript
  * Handles document uploads, service loading, and form submission
  */
@@ -374,16 +374,13 @@ async function handleFormSubmit(e) {
     const customerPhone = document.getElementById('customerPhone').value.trim();
     const instructions = document.getElementById('instructions').value.trim();
 
-    if (!serviceType || !customerName || !customerPhone) {
-        alert('Please fill in all required fields.');
-        return;
-    }
-
-    // Phone validation (Kenya format)
-    const phoneRegex = /^(?:\+254|0)?[17]\d{8}$/;
-    if (!phoneRegex.test(customerPhone.replace(/\s/g, ''))) {
-        alert('Please enter a valid Kenyan phone number.');
-        return;
+    // Phone validation (Kenya format) — only if provided
+    if (customerPhone) {
+        const phoneRegex = /^(?:\+254|0)?[17]\d{8}$/;
+        if (!phoneRegex.test(customerPhone.replace(/\s/g, ''))) {
+            alert('Please enter a valid Kenyan phone number.');
+            return;
+        }
     }
 
     // Show loading state

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Table, Tag, Button, Modal, Space, Typography, Input, Select, Form, InputNumber, message, Popconfirm, Row, Col, Badge, Empty, Tooltip, DatePicker } from 'antd';
 import {
     PlusOutlined,
@@ -13,11 +13,17 @@ import {
     SendOutlined,
     ReloadOutlined,
     FileTextOutlined,
+    SearchOutlined,
+    BellOutlined,
+    MoreOutlined,
+    EyeOutlined,
+    CarryOutOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { getTasks, createTask, updateTask, deleteTask, assignTask, getServices, getComputers } from '../services/api';
+import './Tasks.css';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { TextArea } = Input;
 
 // Format KSH
@@ -32,6 +38,7 @@ function Tasks() {
     const [assignModalVisible, setAssignModalVisible] = useState(false);
     const [selectedTask, setSelectedTask] = useState(null);
     const [filterStatus, setFilterStatus] = useState('all');
+    const [searchQuery, setSearchQuery] = useState('');
     const [form] = Form.useForm();
     const [assignForm] = Form.useForm();
 
@@ -144,9 +151,11 @@ function Tasks() {
     };
 
     // Filter tasks
-    const filteredTasks = tasks.filter(t =>
-        filterStatus === 'all' || t.status === filterStatus
-    );
+    const filteredTasks = tasks.filter(t => {
+        const matchesStatus = filterStatus === 'all' || t.status === filterStatus;
+        const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase());
+        return matchesStatus && matchesSearch;
+    });
 
     // Stats
     const stats = {
@@ -159,204 +168,209 @@ function Tasks() {
 
     const columns = [
         {
-            title: 'Task',
+            title: 'TASK',
             dataIndex: 'title',
             key: 'title',
             render: (title, record) => (
-                <div>
-                    <Text strong>{title}</Text>
-                    {record.serviceName && (
-                        <Tag size="small" style={{ marginLeft: 8 }}>{record.serviceName}</Tag>
-                    )}
-                    {record.description && (
-                        <div><Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text></div>
-                    )}
+                <div className="task-name-cell">
+                    <span className="task-name">{title}</span>
+                    <span className="task-type">{record.serviceName || record.description || 'General'}</span>
                 </div>
-            ),
+            )
         },
         {
-            title: 'Price',
-            dataIndex: 'price',
-            key: 'price',
-            render: (price) => (
-                <Text strong style={{ color: '#00C853' }}>{formatKSH(price)}</Text>
-            ),
-        },
-        {
-            title: 'Priority',
-            dataIndex: 'priority',
-            key: 'priority',
-            render: (priority) => {
-                const colors = { low: 'default', normal: 'blue', high: 'orange', urgent: 'red' };
-                return <Tag color={colors[priority] || 'default'}>{priority?.toUpperCase()}</Tag>;
-            },
-        },
-        {
-            title: 'Status',
-            dataIndex: 'status',
-            key: 'status',
-            render: (status) => {
-                const config = {
-                    available: { color: 'default', icon: <ClockCircleOutlined /> },
-                    assigned: { color: 'blue', icon: <UserOutlined /> },
-                    'in-progress': { color: 'processing', icon: <SyncOutlined spin /> },
-                    completed: { color: 'success', icon: <CheckCircleOutlined /> },
-                    cancelled: { color: 'error', icon: null },
-                };
-                const c = config[status] || { color: 'default' };
-                return <Tag color={c.color} icon={c.icon}>{status?.toUpperCase()}</Tag>;
-            },
-        },
-        {
-            title: 'Assigned To',
+            title: 'ASSIGNED TO',
             dataIndex: 'assignedTo',
             key: 'assignedTo',
             render: (assignedTo) => assignedTo ? (
-                <Space>
+                <div className="assigned-cell">
                     <DesktopOutlined />
-                    <Text>{assignedTo.hostname || assignedTo.clientId}</Text>
-                </Space>
-            ) : <Text type="secondary">—</Text>,
+                    <span>{assignedTo.hostname || assignedTo.clientId}</span>
+                </div>
+            ) : <span style={{ color: '#64748b' }}>—</span>
         },
         {
-            title: 'Created',
+            title: 'PRIORITY',
+            dataIndex: 'priority',
+            key: 'priority',
+            render: (priority) => {
+                const p = priority?.toLowerCase() || 'normal';
+                let className = 'normal';
+                if (p === 'high' || p === 'urgent') className = 'high';
+                if (p === 'low') className = 'low';
+                return <span className={`priority-badge ${className}`}>{p.charAt(0).toUpperCase() + p.slice(1)}</span>;
+            }
+        },
+        {
+            title: 'STATUS',
+            dataIndex: 'status',
+            key: 'status',
+            render: (status) => {
+                const s = status?.toLowerCase() || 'available';
+                let className = 'available';
+                if (s === 'assigned') className = 'assigned';
+                if (s === 'in-progress') className = 'in-progress';
+                if (s === 'completed') className = 'completed';
+                if (s === 'cancelled') className = 'cancelled';
+                const formattedStatus = s === 'in-progress' ? 'In Progress' : s.charAt(0).toUpperCase() + s.slice(1);
+                return <span className={`status-badge ${className}`}>{formattedStatus}</span>;
+            }
+        },
+        {
+            title: 'CREATED',
             dataIndex: 'createdAt',
             key: 'createdAt',
-            render: (date) => <Text type="secondary">{dayjs(date).format('MMM D, HH:mm')}</Text>,
+            render: (date) => (
+                <div className="date-cell">
+                    <span className="date-text">{dayjs(date).format('MMM DD, YYYY')}</span>
+                    <span className="time-text">{dayjs(date).format('hh:mm A')}</span>
+                </div>
+            )
         },
         {
-            title: 'Actions',
+            title: 'ACTIONS',
             key: 'actions',
             render: (_, record) => (
-                <Space>
+                <div className="actions-cell">
+                    <Tooltip title="View/Edit">
+                        <button className="action-btn" onClick={() => openEditModal(record)}>
+                            <EyeOutlined />
+                        </button>
+                    </Tooltip>
                     {record.status === 'available' && (
-                        <Tooltip title="Assign to Computer">
-                            <Button
-                                type="primary"
-                                size="small"
-                                icon={<SendOutlined />}
-                                onClick={() => openAssignModal(record)}
-                            />
+                        <Tooltip title="Assign">
+                            <button className="action-btn" onClick={() => openAssignModal(record)}>
+                                <SendOutlined />
+                            </button>
                         </Tooltip>
                     )}
                     {(record.status === 'assigned' || record.status === 'in-progress') && (
-                        <Tooltip title="Mark Complete">
-                            <Button
-                                size="small"
-                                icon={<CheckCircleOutlined />}
-                                style={{ color: '#00C853' }}
-                                onClick={() => handleStatusChange(record.id, 'completed')}
-                            />
+                        <Tooltip title="Complete">
+                            <button className="action-btn" onClick={() => handleStatusChange(record.id, 'completed')}>
+                                <CheckCircleOutlined />
+                            </button>
                         </Tooltip>
                     )}
-                    <Tooltip title="Edit">
-                        <Button
-                            size="small"
-                            icon={<EditOutlined />}
-                            onClick={() => openEditModal(record)}
-                        />
-                    </Tooltip>
                     <Popconfirm
-                        title="Delete this task?"
-                        description="This action cannot be undone."
+                        title="Delete task?"
                         onConfirm={() => handleDeleteTask(record.id)}
-                        okText="Delete"
-                        okType="danger"
-                        cancelText="Cancel"
+                        okText="Yes"
+                        cancelText="No"
                     >
-                        <Button size="small" danger icon={<DeleteOutlined />} />
+                        <button className="action-btn">
+                            <DeleteOutlined />
+                        </button>
                     </Popconfirm>
-                </Space>
-            ),
-        },
+                </div>
+            )
+        }
     ];
 
     return (
-        <div>
-            {/* Page Header */}
-            <div className="page-header">
-                <div className="page-title">
-                    <FileTextOutlined className="icon" />
-                    <h1>Task Management</h1>
+        <div className="tasks-container">
+            {/* Header */}
+            <div className="tasks-header-wrapper">
+                <div className="tasks-title-section">
+                    <h1 className="tasks-title">Tasks</h1>
+                    <p className="tasks-subtitle">Manage and monitor all tasks</p>
                 </div>
-                <p className="page-subtitle">Create and assign tasks to users with pricing</p>
-            </div>
-
-            {/* Stats */}
-            <div className="stats-row">
-                <div className="stat-card blue">
-                    <div className="stat-header">
-                        <div className="stat-icon blue"><FileTextOutlined /></div>
-                    </div>
-                    <div className="stat-value">{stats.total}</div>
-                    <div className="stat-label">Total Tasks</div>
-                </div>
-
-                <div className="stat-card">
-                    <div className="stat-header">
-                        <div className="stat-icon" style={{ background: 'rgba(100, 100, 120, 0.15)', color: '#6b6b80' }}>
-                            <ClockCircleOutlined />
+                <div className="tasks-top-controls">
+                    <Input 
+                        className="tasks-search" 
+                        placeholder="Search tasks..." 
+                        prefix={<SearchOutlined />} 
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                    <button className="notification-btn">
+                        <BellOutlined />
+                    </button>
+                    <div className="user-profile">
+                        <div className="user-avatar">
+                            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Jose" alt="Jose" />
+                        </div>
+                        <div className="user-info">
+                            <span className="user-name">Jose</span>
+                            <span className="user-role">Super Admin</span>
                         </div>
                     </div>
-                    <div className="stat-value">{stats.available}</div>
-                    <div className="stat-label">Available</div>
-                </div>
-
-                <div className="stat-card orange">
-                    <div className="stat-header">
-                        <div className="stat-icon orange"><SyncOutlined /></div>
-                    </div>
-                    <div className="stat-value">{stats.assigned + stats.inProgress}</div>
-                    <div className="stat-label">In Progress</div>
-                </div>
-
-                <div className="stat-card green">
-                    <div className="stat-header">
-                        <div className="stat-icon green"><CheckCircleOutlined /></div>
-                    </div>
-                    <div className="stat-value">{stats.completed}</div>
-                    <div className="stat-label">Completed</div>
                 </div>
             </div>
 
-            {/* Filters and Actions */}
-            <Card style={{ marginBottom: 24 }}>
-                <Space size="large" wrap>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditModal()}>
-                        Create Task
-                    </Button>
-                    <Select
-                        value={filterStatus}
-                        onChange={setFilterStatus}
-                        style={{ width: 150 }}
-                        options={[
-                            { value: 'all', label: 'All Status' },
-                            { value: 'available', label: 'Available' },
-                            { value: 'assigned', label: 'Assigned' },
-                            { value: 'in-progress', label: 'In Progress' },
-                            { value: 'completed', label: 'Completed' },
-                        ]}
-                    />
-                    <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-                        Refresh
-                    </Button>
-                </Space>
-            </Card>
+            {/* Control Bar */}
+            <div className="tasks-control-bar">
+                <div className="tasks-segments">
+                    <button 
+                        className={`segment-btn ${filterStatus === 'all' ? 'active' : ''}`}
+                        onClick={() => setFilterStatus('all')}
+                    >All</button>
+                    <button 
+                        className={`segment-btn ${filterStatus === 'assigned' ? 'active' : ''}`}
+                        onClick={() => setFilterStatus('assigned')}
+                    >Assigned</button>
+                    <button 
+                        className={`segment-btn ${filterStatus === 'in-progress' ? 'active' : ''}`}
+                        onClick={() => setFilterStatus('in-progress')}
+                    >In Progress</button>
+                    <button 
+                        className={`segment-btn ${filterStatus === 'completed' ? 'active' : ''}`}
+                        onClick={() => setFilterStatus('completed')}
+                    >Completed</button>
+                </div>
+                <Button type="primary" icon={<PlusOutlined />} className="btn-new-task" onClick={() => openEditModal()}>
+                    New Task
+                </Button>
+            </div>
 
-            {/* Tasks Table */}
-            <Card>
-                {tasks.length === 0 && !loading ? (
-                    <Empty description="No tasks created yet. Click 'Create Task' to get started." />
-                ) : (
-                    <Table
-                        columns={columns}
-                        dataSource={filteredTasks}
+            {/* Metrics */}
+            <div className="tasks-metrics-grid">
+                <div className="task-metric-card">
+                    <div className="tm-icon tm-icon-blue"><FileTextOutlined /></div>
+                    <div className="tm-content">
+                        <span className="tm-title">Total Tasks</span>
+                        <span className="tm-value">{stats.total}</span>
+                        <span className="tm-subtitle">All tasks created</span>
+                    </div>
+                </div>
+                <div className="task-metric-card">
+                    <div className="tm-icon tm-icon-purple"><UserOutlined /></div>
+                    <div className="tm-content">
+                        <span className="tm-title">Assigned</span>
+                        <span className="tm-value">{stats.assigned}</span>
+                        <span className="tm-subtitle">Tasks assigned</span>
+                    </div>
+                </div>
+                <div className="task-metric-card">
+                    <div className="tm-icon tm-icon-orange"><SyncOutlined /></div>
+                    <div className="tm-content">
+                        <span className="tm-title">In Progress</span>
+                        <span className="tm-value">{stats.inProgress}</span>
+                        <span className="tm-subtitle">Tasks in progress</span>
+                    </div>
+                </div>
+                <div className="task-metric-card">
+                    <div className="tm-icon tm-icon-green"><CheckCircleOutlined /></div>
+                    <div className="tm-content">
+                        <span className="tm-title">Completed</span>
+                        <span className="tm-value">{stats.completed}</span>
+                        <span className="tm-subtitle">Tasks completed</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Table */}
+            <div className="tasks-table-section">
+                <div className="tasks-table">
+                    <Table 
+                        columns={columns} 
+                        dataSource={filteredTasks} 
                         rowKey="id"
                         loading={loading}
-                        pagination={{ pageSize: 10 }}
+                        pagination={{ position: ['bottomRight'], pageSize: 10 }} 
+                        locale={{ emptyText: <Empty description="No tasks found" /> }}
                     />
-                )}
-            </Card>
+                </div>
+            </div>
 
             {/* Create/Edit Task Modal */}
             <Modal

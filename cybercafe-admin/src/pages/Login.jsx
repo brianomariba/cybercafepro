@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import { Form, Input, Button, Card, Typography, Alert, message } from 'antd';
 import { UserOutlined, LockOutlined, SafetyCertificateOutlined, ArrowLeftOutlined, MailOutlined } from '@ant-design/icons';
-import { adminLoginStep1, adminLoginStep2 } from '../services/api';
+import { adminLoginStep1, adminLoginStep2, adminForgotPassword, adminResetPassword } from '../services/api';
 
 const { Title, Text } = Typography;
 
 function Login({ onLogin }) {
-    const [step, setStep] = useState(0); // 0: Credentials, 1: OTP
+    const [step, setStep] = useState(0); // 0: Credentials, 1: OTP, 2: Forgot Password, 3: Reset Password
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [tempToken, setTempToken] = useState(null);
     const [emailMask, setEmailMask] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
+    const [recoveryUsername, setRecoveryUsername] = useState('');
 
     const handleLoginStep1 = async (values) => {
         setLoading(true);
@@ -72,11 +73,55 @@ function Login({ onLogin }) {
         setLoading(false);
     };
 
+    const handleForgotPassword = async (values) => {
+        setLoading(true);
+        setError('');
+        setSuccessMsg('');
+
+        try {
+            const response = await adminForgotPassword(values.username);
+            if (response.success) {
+                setEmailMask(response.emailMask);
+                setRecoveryUsername(values.username);
+                setStep(3);
+                message.success('Recovery code sent to your email.');
+            }
+        } catch (err) {
+            console.error('Forgot Password Error:', err);
+            setError(err.response?.data?.error || 'Failed to send recovery code.');
+        }
+        setLoading(false);
+    };
+
+    const handleResetPassword = async (values) => {
+        if (values.newPassword !== values.confirmPassword) {
+            setError('Passwords do not match');
+            return;
+        }
+        setLoading(true);
+        setError('');
+
+        try {
+            const response = await adminResetPassword(recoveryUsername, values.otp, values.newPassword);
+            if (response.success) {
+                setSuccessMsg('Password reset successfully. You can now login.');
+                setTimeout(() => {
+                    handleBack();
+                }, 2000);
+            }
+        } catch (err) {
+            console.error('Reset Password Error:', err);
+            setError(err.response?.data?.error || 'Failed to reset password.');
+        }
+        setLoading(false);
+    };
+
     const handleBack = () => {
         setStep(0);
         setError('');
         setSuccessMsg('');
         setTempToken(null);
+        setRecoveryUsername('');
     };
 
     return (
@@ -201,6 +246,12 @@ function Login({ onLogin }) {
                                 Continue
                             </Button>
                         </Form.Item>
+
+                        <div style={{ textAlign: 'center', marginTop: 8 }}>
+                            <Button type="link" onClick={() => setStep(2)} style={{ color: '#94A3B8' }}>
+                                Forgot Password?
+                            </Button>
+                        </div>
                     </Form>
                 )}
 
@@ -278,6 +329,136 @@ function Login({ onLogin }) {
                                 onClick={handleBack}
                                 style={{ color: '#94A3B8' }}
                             >
+                                Back to Login
+                            </Button>
+                        </div>
+                    </Form>
+                )}
+
+                {/* Step 2: Forgot Password Request */}
+                {step === 2 && (
+                    <Form
+                        name="forgot-password"
+                        onFinish={handleForgotPassword}
+                        layout="vertical"
+                        size="large"
+                    >
+                        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Forgot Password</Title>
+                            <Text type="secondary">Enter your username to receive a recovery code.</Text>
+                        </div>
+
+                        <Form.Item
+                            name="username"
+                            rules={[{ required: true, message: 'Please enter your username' }]}
+                        >
+                            <Input
+                                prefix={<UserOutlined style={{ color: '#64748B' }} />}
+                                placeholder="Username"
+                                className="login-input"
+                                autoFocus
+                            />
+                        </Form.Item>
+
+                        <Form.Item>
+                            <Button
+                                type="primary"
+                                htmlType="submit"
+                                block
+                                loading={loading}
+                                className="login-button"
+                                style={{
+                                    background: 'linear-gradient(135deg, #00B4D8, #023047)',
+                                    border: 'none',
+                                    height: 48,
+                                    fontSize: 16,
+                                    fontWeight: 600,
+                                }}
+                            >
+                                Send Recovery Code
+                            </Button>
+                        </Form.Item>
+
+                        <div style={{ textAlign: 'center', marginTop: 16 }}>
+                            <Button type="link" icon={<ArrowLeftOutlined />} onClick={handleBack} style={{ color: '#94A3B8' }}>
+                                Back to Login
+                            </Button>
+                        </div>
+                    </Form>
+                )}
+
+                {/* Step 3: Reset Password */}
+                {step === 3 && (
+                    <Form
+                        name="reset-password"
+                        onFinish={handleResetPassword}
+                        layout="vertical"
+                        size="large"
+                    >
+                        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                            <Title level={4} style={{ color: '#fff', marginBottom: 8 }}>Reset Password</Title>
+                            <Text type="secondary">Enter the code sent to <br /><span style={{ color: '#00B4D8' }}>{emailMask}</span></Text>
+                        </div>
+
+                        <Form.Item
+                            name="otp"
+                            rules={[
+                                { required: true, message: 'Please enter the recovery code' },
+                                { len: 6, message: 'Code must be 6 digits' }
+                            ]}
+                        >
+                            <Input
+                                placeholder="123456"
+                                className="login-input"
+                                style={{ textAlign: 'center', letterSpacing: 8, fontSize: 24, fontWeight: 'bold', height: 56 }}
+                                maxLength={6}
+                                autoFocus
+                            />
+                        </Form.Item>
+
+                        <Form.Item
+                            name="newPassword"
+                            rules={[{ required: true, message: 'Please enter your new password' }, { min: 6, message: 'Password must be at least 6 characters' }]}
+                        >
+                            <Input.Password
+                                prefix={<LockOutlined style={{ color: '#64748B' }} />}
+                                placeholder="New Password"
+                                className="login-input"
+                            />
+                        </Form.Item>
+
+                        <Form.Item
+                            name="confirmPassword"
+                            rules={[{ required: true, message: 'Please confirm your new password' }]}
+                        >
+                            <Input.Password
+                                prefix={<LockOutlined style={{ color: '#64748B' }} />}
+                                placeholder="Confirm New Password"
+                                className="login-input"
+                            />
+                        </Form.Item>
+
+                        <Form.Item>
+                            <Button
+                                type="primary"
+                                htmlType="submit"
+                                block
+                                loading={loading}
+                                className="login-button"
+                                style={{
+                                    background: 'linear-gradient(135deg, #00B4D8, #023047)',
+                                    border: 'none',
+                                    height: 48,
+                                    fontSize: 16,
+                                    fontWeight: 600,
+                                }}
+                            >
+                                Reset Password
+                            </Button>
+                        </Form.Item>
+
+                        <div style={{ textAlign: 'center', marginTop: 16 }}>
+                            <Button type="link" icon={<ArrowLeftOutlined />} onClick={handleBack} style={{ color: '#94A3B8' }}>
                                 Back to Login
                             </Button>
                         </div>

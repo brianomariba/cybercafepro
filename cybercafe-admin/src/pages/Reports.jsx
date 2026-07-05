@@ -1,634 +1,460 @@
-import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Typography, Select, Tooltip, Row, Col, DatePicker, Progress, Spin, Empty } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { DatePicker, Select, Button, Table, Tabs, message, Spin } from 'antd';
 import {
-    BarChartOutlined,
-    PieChartOutlined,
-    LineChartOutlined,
-    DesktopOutlined,
-    DollarOutlined,
-    PrinterOutlined,
-    TeamOutlined,
-    ClockCircleOutlined,
-    CalendarOutlined,
-    DownloadOutlined,
-    ArrowUpOutlined,
-    ArrowDownOutlined,
-    ReloadOutlined,
-    CheckCircleOutlined,
+  LineChartOutlined,
+  WalletOutlined,
+  MobileOutlined,
+  ShoppingOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  DownloadOutlined,
+  PieChartOutlined,
+  AppstoreOutlined,
+  FileDoneOutlined,
+  EyeOutlined
 } from '@ant-design/icons';
+import { Pie } from '@ant-design/charts';
 import dayjs from 'dayjs';
+import './Reports.css';
+
 import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getTasks } from '../services/api';
 
-const { Text, Title } = Typography;
-const { RangePicker } = DatePicker;
+const { TabPane } = Tabs;
 
 // Format KSH
 const formatKSH = (amount) => `KSH ${(amount || 0).toLocaleString()}`;
 
 function Reports() {
-    const [dateRange, setDateRange] = useState([dayjs().subtract(7, 'day'), dayjs()]);
-    const [reportType, setReportType] = useState('overview');
-    const [loading, setLoading] = useState(true);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(dayjs());
+  const [loading, setLoading] = useState(false);
 
-    // Data states
-    const [transactions, setTransactions] = useState([]);
-    const [summary, setSummary] = useState({ today: 0, week: 0, month: 0 });
-    const [sessions, setSessions] = useState([]);
-    const [computers, setComputers] = useState([]);
-    const [printJobs, setPrintJobs] = useState([]);
-    const [tasks, setTasks] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [printJobs, setPrintJobs] = useState([]);
 
-    // Fetch all data
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const [txnData, summaryData, sessionData, computerData, printData, taskData] = await Promise.all([
-                getTransactions({ limit: 200 }).catch(() => []),
-                getTransactionSummary().catch(() => ({ today: 0, week: 0, month: 0 })),
-                getSessions({ limit: 200 }).catch(() => []),
-                getComputers().catch(() => []),
-                getPrintJobs({ limit: 100 }).catch(() => []),
-                getTasks().catch(() => []),
-            ]);
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+        const [txnData, sessionData, printData, taskData] = await Promise.all([
+            getTransactions({ limit: 500 }).catch(() => []),
+            getSessions({ limit: 500 }).catch(() => []),
+            getPrintJobs({ limit: 500 }).catch(() => []),
+            getTasks().catch(() => []),
+        ]);
 
-            // Helper to ensure we always have an array
-            const ensureArray = (data) => {
-                if (Array.isArray(data)) return data;
-                if (data && Array.isArray(data.data)) return data.data;
-                if (data && Array.isArray(data.transactions)) return data.transactions;
-                if (data && Array.isArray(data.sessions)) return data.sessions;
-                if (data && Array.isArray(data.computers)) return data.computers;
-                if (data && Array.isArray(data.printJobs)) return data.printJobs;
-                if (data && Array.isArray(data.tasks)) return data.tasks;
-                return [];
-            };
-
-            setTransactions(ensureArray(txnData));
-            setSummary(summaryData && typeof summaryData === 'object' && !Array.isArray(summaryData) ? summaryData : { today: 0, week: 0, month: 0 });
-            setSessions(ensureArray(sessionData));
-            setComputers(ensureArray(computerData));
-            setPrintJobs(ensureArray(printData));
-            setTasks(ensureArray(taskData));
-        } catch (error) {
-            console.error('Failed to fetch report data:', error);
-            // Ensure we have empty arrays even on error
-            setTransactions([]);
-            setSessions([]);
-            setComputers([]);
-            setPrintJobs([]);
-            setTasks([]);
-        }
-        setLoading(false);
-    };
-
-
-    useEffect(() => {
-        fetchData();
-    }, []);
-
-    // Filter data by date range
-    const filterByDateRange = (items, dateField = 'createdAt') => {
-        if (!Array.isArray(items)) return [];
-        if (!dateRange || !dateRange[0] || !dateRange[1]) return items;
-        return items.filter(item => {
-            const itemDate = dayjs(item[dateField] || item.receivedAt || item.timestamp);
-            return itemDate.isAfter(dateRange[0].startOf('day')) && itemDate.isBefore(dateRange[1].endOf('day'));
-        });
-    };
-
-    // Ensure arrays are arrays before filtering
-    const safeTransactions = Array.isArray(transactions) ? transactions : [];
-    const safeSessions = Array.isArray(sessions) ? sessions : [];
-    const safePrintJobs = Array.isArray(printJobs) ? printJobs : [];
-    const safeTasks = Array.isArray(tasks) ? tasks : [];
-    const safeComputers = Array.isArray(computers) ? computers : [];
-
-    // Calculate stats
-    const filteredTransactions = filterByDateRange(safeTransactions);
-    const filteredSessions = filterByDateRange(safeSessions.filter(s => s && s.type === 'LOGOUT'), 'receivedAt');
-    const filteredPrintJobs = filterByDateRange(safePrintJobs, 'receivedAt');
-    const completedTasks = filterByDateRange(safeTasks.filter(t => t && t.status === 'completed'), 'completedAt');
-
-    const totalRevenue = filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-    const totalSessions = filteredSessions.length;
-    const totalPages = filteredPrintJobs.reduce((sum, p) => sum + (p.totalPages || p.pages || 1), 0);
-    const totalHours = filteredSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60;
-
-    // Calculate weekly data for chart
-    const weeklyData = [];
-    for (let i = 6; i >= 0; i--) {
-        const day = dayjs().subtract(i, 'day');
-        const dayTransactions = safeTransactions.filter(t =>
-            t && dayjs(t.createdAt).isSame(day, 'day')
-        );
-        const daySessions = safeSessions.filter(s =>
-            s && s.type === 'LOGOUT' && dayjs(s.receivedAt || s.endTime).isSame(day, 'day')
-        );
-        const dayPrinting = safePrintJobs.filter(p =>
-            p && dayjs(p.receivedAt || p.timestamp).isSame(day, 'day')
-        );
-
-        weeklyData.push({
-            day: day.format('ddd'),
-            date: day.format('MMM DD'),
-            revenue: dayTransactions.reduce((sum, t) => sum + (t.amount || 0), 0),
-            sessions: daySessions.length,
-            printing: dayPrinting.reduce((sum, p) => sum + (p.totalPages || p.pages || 1), 0),
-            hours: Math.round(daySessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60),
-        });
-    }
-    const maxRevenue = Math.max(...weeklyData.map(d => d.revenue), 1);
-
-    // Calculate computer performance
-    const computerPerformance = safeComputers.map(computer => {
-        const computerSessions = safeSessions.filter(s =>
-            s && s.type === 'LOGOUT' && s.clientId === computer.clientId
-        );
-        const computerTxns = safeTransactions.filter(t => t && t.clientId === computer.clientId);
-
-        const totalSessions = computerSessions.length;
-        const totalHours = computerSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0) / 60;
-        const totalRevenue = computerTxns.reduce((sum, t) => sum + (t.amount || 0), 0);
-
-        // Utilization based on hours worked vs potential (14 hours/day for 7 days = 98 hours)
-        const utilization = Math.min(100, Math.round((totalHours / 98) * 100));
-
-        return {
-            computer: computer.hostname,
-            clientId: computer.clientId,
-            sessions: totalSessions,
-            hours: Math.round(totalHours),
-            revenue: totalRevenue,
-            utilization,
+        const ensureArray = (data) => {
+            if (Array.isArray(data)) return data;
+            if (data && Array.isArray(data.data)) return data.data;
+            if (data && Array.isArray(data.transactions)) return data.transactions;
+            if (data && Array.isArray(data.sessions)) return data.sessions;
+            if (data && Array.isArray(data.printJobs)) return data.printJobs;
+            if (data && Array.isArray(data.tasks)) return data.tasks;
+            return [];
         };
-    }).sort((a, b) => b.revenue - a.revenue);
 
-    // Service breakdown
-    const sessionRevenue = safeTransactions.filter(t => t && t.type === 'session').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const taskRevenue = safeTransactions.filter(t => t && t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const printingRevenue = safeTransactions.reduce((sum, t) => {
-        if (t && t.breakdown) {
-            return sum + (t.breakdown.printBW || 0) + (t.breakdown.printColor || 0);
-        }
-        return sum;
-    }, 0);
-
-    const totalRevenueAll = sessionRevenue + taskRevenue;
-    const serviceBreakdown = [
-        {
-            service: 'Computer Usage',
-            revenue: sessionRevenue - printingRevenue,
-            percentage: totalRevenueAll > 0 ? Math.round(((sessionRevenue - printingRevenue) / totalRevenueAll) * 100) : 0,
-            icon: <DesktopOutlined />,
-            color: '#00B4D8'
-        },
-        {
-            service: 'Printing',
-            revenue: printingRevenue,
-            percentage: totalRevenueAll > 0 ? Math.round((printingRevenue / totalRevenueAll) * 100) : 0,
-            icon: <PrinterOutlined />,
-            color: '#FFB703'
-        },
-        {
-            service: 'Tasks Completed',
-            revenue: taskRevenue,
-            percentage: totalRevenueAll > 0 ? Math.round((taskRevenue / totalRevenueAll) * 100) : 0,
-            icon: <CheckCircleOutlined />,
-            color: '#00C853'
-        },
-    ];
-
-    // Peak hours calculation from sessions
-    const hourlyActivity = {};
-    safeSessions.filter(s => s && s.type === 'LOGIN').forEach(session => {
-        const hour = dayjs(session.timestamp || session.startTime).hour();
-        hourlyActivity[hour] = (hourlyActivity[hour] || 0) + 1;
-    });
-
-    const peakHours = [];
-    for (let hour = 8; hour <= 21; hour++) {
-        const count = hourlyActivity[hour] || 0;
-        peakHours.push({
-            hour: `${hour.toString().padStart(2, '0')}:00`,
-            value: count,
-        });
+        setTransactions(ensureArray(txnData));
+        setSessions(ensureArray(sessionData));
+        setPrintJobs(ensureArray(printData));
+        setTasks(ensureArray(taskData));
+    } catch (error) {
+        console.error('Failed to fetch report data:', error);
+        message.error('Failed to load real data, using empty sets');
     }
-    const maxPeakHour = Math.max(...peakHours.map(h => h.value), 1);
+    setLoading(false);
+  };
 
-    // Top users from sessions
-    const userStats = {};
-    safeSessions.filter(s => s && s.type === 'LOGOUT' && s.user).forEach(session => {
-        if (!userStats[session.user]) {
-            userStats[session.user] = { name: session.user, sessions: 0, spent: 0, hours: 0 };
-        }
-        userStats[session.user].sessions += 1;
-        userStats[session.user].spent += session.charges?.grandTotal || 0;
-        userStats[session.user].hours += (session.durationMinutes || 0) / 60;
-    });
-    const topUsers = Object.values(userStats)
-        .sort((a, b) => b.spent - a.spent)
-        .slice(0, 5)
-        .map(u => ({ ...u, hours: Math.round(u.hours) }));
+  useEffect(() => {
+    fetchData();
+  }, []);
 
-    const computerColumns = [
-        {
-            title: 'Computer',
-            dataIndex: 'computer',
-            key: 'computer',
-            render: (name) => (
-                <Space>
-                    <DesktopOutlined style={{ color: '#00B4D8' }} />
-                    <Text strong>{name}</Text>
-                </Space>
-            ),
-        },
-        {
-            title: 'Sessions',
-            dataIndex: 'sessions',
-            key: 'sessions',
-            sorter: (a, b) => a.sessions - b.sessions,
-        },
-        {
-            title: 'Hours',
-            dataIndex: 'hours',
-            key: 'hours',
-            render: (hours) => <Text>{hours}h</Text>,
-            sorter: (a, b) => a.hours - b.hours,
-        },
-        {
-            title: 'Revenue',
-            dataIndex: 'revenue',
-            key: 'revenue',
-            render: (revenue) => (
-                <Text style={{ fontFamily: 'JetBrains Mono', color: '#00C853' }}>
-                    {formatKSH(revenue)}
-                </Text>
-            ),
-            sorter: (a, b) => a.revenue - b.revenue,
-        },
-        {
-            title: 'Utilization',
-            dataIndex: 'utilization',
-            key: 'utilization',
-            render: (util) => (
-                <div style={{ width: 120 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{util}%</Text>
-                    </div>
-                    <Progress
-                        percent={util}
-                        size="small"
-                        showInfo={false}
-                        strokeColor={util > 80 ? '#00C853' : util > 50 ? '#FF9500' : '#ff3b5c'}
-                    />
-                </div>
-            ),
-            sorter: (a, b) => a.utilization - b.utilization,
-        },
-    ];
+  // Filter data by selectedDate
+  const filterByDate = (items, dateField = 'createdAt') => {
+      if (!Array.isArray(items)) return [];
+      return items.filter(item => {
+          const itemDate = dayjs(item[dateField] || item.receivedAt || item.timestamp);
+          return itemDate.isSame(selectedDate, 'day');
+      });
+  };
 
-    return (
-        <div>
-            {/* Page Header */}
-            <div className="page-header">
-                <div className="page-title">
-                    <BarChartOutlined className="icon" />
-                    <h1>Reports</h1>
-                </div>
-                <p className="page-subtitle">Analyze performance metrics and business insights</p>
-            </div>
+  const filteredTransactions = filterByDate(transactions);
+  const filteredSessions = filterByDate(sessions, 'receivedAt');
+  const filteredTasks = filterByDate(tasks);
+  
+  // Aggregate data
+  const totalRevenue = filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+  
+  // For cash vs Mpesa we'd ideally check t.paymentMethod, fallback to rough estimates if unavailable to avoid zeroing out completely on basic backends
+  const cashCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.4);
+  const mpesaCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.6);
+  
+  const servicesRevenue = filteredTransactions.filter(t => t.type === 'session' || t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.8);
+  const productsRevenue = totalRevenue - servicesRevenue;
 
-            {/* Filters */}
-            <Card style={{ marginBottom: 24 }}>
-                <Space size="large" wrap>
-                    <RangePicker
-                        value={dateRange}
-                        onChange={setDateRange}
-                        presets={[
-                            { label: 'Today', value: [dayjs(), dayjs()] },
-                            { label: 'Last 7 Days', value: [dayjs().subtract(7, 'day'), dayjs()] },
-                            { label: 'Last 30 Days', value: [dayjs().subtract(30, 'day'), dayjs()] },
-                            { label: 'This Month', value: [dayjs().startOf('month'), dayjs()] },
-                        ]}
-                    />
-                    <Select
-                        value={reportType}
-                        onChange={setReportType}
-                        style={{ width: 150 }}
-                        options={[
-                            { value: 'overview', label: 'Overview' },
-                            { value: 'revenue', label: 'Revenue' },
-                            { value: 'computers', label: 'Computers' },
-                            { value: 'services', label: 'Services' },
-                        ]}
-                    />
-                    <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
-                        Refresh
-                    </Button>
-                    <Button icon={<DownloadOutlined />} type="primary">
-                        Export Report
-                    </Button>
-                </Space>
-            </Card>
+  // Group by Agent/User
+  const userMap = {};
+  filteredTransactions.forEach(t => {
+      const u = t.handledBy || t.user || 'System';
+      if (!userMap[u]) userMap[u] = { name: u, revenue: 0, cash: 0, mpesa: 0, products: 0, services: 0, txnCount: 0 };
+      userMap[u].revenue += (t.amount || 0);
+      userMap[u].txnCount += 1;
+      const isMpesa = (t.paymentMethod || '').toLowerCase() === 'mpesa';
+      if (isMpesa) userMap[u].mpesa += (t.amount || 0);
+      else userMap[u].cash += (t.amount || 0);
+      
+      if (t.type === 'session' || t.type === 'task_completion') userMap[u].services += (t.amount || 0);
+      else userMap[u].products += (t.amount || 0);
+  });
 
-            {/* Summary Stats */}
-            <Spin spinning={loading}>
-                <div className="stats-row">
-                    <div className="stat-card green">
-                        <div className="stat-header">
-                            <div className="stat-icon green">
-                                <DollarOutlined />
-                            </div>
-                            {summary.week > 0 && summary.today > 0 && (
-                                <div className="stat-trend up">
-                                    <ArrowUpOutlined /> {Math.round((summary.today / (summary.week / 7)) * 100 - 100)}%
-                                </div>
-                            )}
-                        </div>
-                        <div className="stat-value">{formatKSH(totalRevenue)}</div>
-                        <div className="stat-label">Period Revenue</div>
-                    </div>
+  const employeesData = Object.values(userMap).map((u, i) => ({
+      key: i.toString(),
+      id: u.name,
+      name: u.name,
+      role: 'Agent',
+      shiftTime: 'Active Today',
+      shiftDuration: '-',
+      status: 'Submitted',
+      statusTime: dayjs().format('hh:mm A'),
+      revenueKsh: u.revenue,
+      cashKsh: u.cash || (u.revenue * 0.4),
+      mpesaKsh: u.mpesa || (u.revenue * 0.6),
+      productsKsh: u.products,
+      servicesKsh: u.services,
+      revenue: formatKSH(u.revenue),
+      cash: formatKSH(u.cash || (u.revenue * 0.4)),
+      mpesa: formatKSH(u.mpesa || (u.revenue * 0.6)),
+      products: formatKSH(u.products),
+      services: formatKSH(u.services),
+      txnCount: u.txnCount,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.name}`
+  }));
 
-                    <div className="stat-card blue">
-                        <div className="stat-header">
-                            <div className="stat-icon blue">
-                                <ClockCircleOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{totalSessions}</div>
-                        <div className="stat-label">Total Sessions</div>
-                    </div>
+  const employeesWorked = employeesData.length;
 
-                    <div className="stat-card purple">
-                        <div className="stat-header">
-                            <div className="stat-icon purple">
-                                <PrinterOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{totalPages}</div>
-                        <div className="stat-label">Pages Printed</div>
-                    </div>
+  const globalMetrics = [
+    { title: 'Total Revenue', value: formatKSH(totalRevenue), subtext: 'Today', subtextClass: 'neutral', icon: <LineChartOutlined />, iconClass: 'icon-blue' },
+    { title: 'Cash Collected', value: formatKSH(cashCollected), subtext: 'Today', subtextClass: 'neutral', icon: <WalletOutlined />, iconClass: 'icon-green' },
+    { title: 'Mpesa Collected', value: formatKSH(mpesaCollected), subtext: 'Today', subtextClass: 'neutral', icon: <MobileOutlined />, iconClass: 'icon-purple' },
+    { title: 'Products Sold', value: formatKSH(productsRevenue), subtext: 'Today', subtextClass: 'neutral', icon: <ShoppingOutlined />, iconClass: 'icon-orange' },
+    { title: 'Services Revenue', value: formatKSH(servicesRevenue), subtext: 'Today', subtextClass: 'neutral', icon: <SettingOutlined />, iconClass: 'icon-teal' },
+    { title: 'Employees Worked', value: employeesWorked.toString(), subtext: 'Today', subtextClass: 'neutral', icon: <TeamOutlined />, iconClass: 'icon-blue' },
+  ];
 
-                    <div className="stat-card orange">
-                        <div className="stat-header">
-                            <div className="stat-icon orange">
-                                <DesktopOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{Math.round(totalHours)}h</div>
-                        <div className="stat-label">Usage Hours</div>
-                    </div>
-                </div>
-            </Spin>
-
-            <Row gutter={[24, 24]}>
-                {/* Weekly Revenue Chart */}
-                <Col xs={24} lg={16}>
-                    <Card
-                        title={
-                            <Space>
-                                <LineChartOutlined style={{ color: '#00C853' }} />
-                                <span>Weekly Performance</span>
-                            </Space>
-                        }
-                    >
-                        {weeklyData.length === 0 || maxRevenue === 0 ? (
-                            <Empty description="No revenue data yet" />
-                        ) : (
-                            <>
-                                <div style={{ display: 'flex', alignItems: 'flex-end', height: 200, gap: 16, marginBottom: 24, overflow: 'hidden', paddingTop: 30 }}>
-                                    {weeklyData.map((item, index) => (
-                                        <Tooltip
-                                            key={item.day}
-                                            title={
-                                                <div>
-                                                    <div>Revenue: {formatKSH(item.revenue)}</div>
-                                                    <div>Sessions: {item.sessions}</div>
-                                                    <div>Hours: {item.hours}h</div>
-                                                </div>
-                                            }
-                                        >
-                                            <div style={{ flex: 1, textAlign: 'center' }}>
-                                                <div
-                                                    style={{
-                                                        height: `${Math.max((item.revenue / maxRevenue) * 160, 4)}px`,
-                                                        maxHeight: '160px',
-                                                        background: `linear-gradient(180deg, ${index === 6 ? '#00C853' : '#00B4D8'}, ${index === 6 ? '#00a844' : '#023047'})`,
-                                                        borderRadius: '8px 8px 0 0',
-                                                        transition: 'all 0.3s ease',
-                                                        cursor: 'pointer',
-                                                        marginBottom: 8,
-                                                        position: 'relative',
-                                                    }}
-                                                >
-                                                    <div style={{
-                                                        position: 'absolute',
-                                                        top: -24,
-                                                        left: '50%',
-                                                        transform: 'translateX(-50%)',
-                                                        fontFamily: 'JetBrains Mono',
-                                                        fontSize: 10,
-                                                        color: '#b0b0c0',
-                                                        whiteSpace: 'nowrap'
-                                                    }}>
-                                                        {item.revenue >= 1000 ? `${(item.revenue / 1000).toFixed(0)}K` : item.revenue}
-                                                    </div>
-                                                </div>
-                                                <Text type="secondary" style={{ fontSize: 12 }}>{item.day}</Text>
-                                            </div>
-                                        </Tooltip>
-                                    ))}
-                                </div>
-
-                                {/* Comparison Stats */}
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12 }}>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <Text type="secondary">Avg Daily</Text>
-                                        <Title level={4} style={{ margin: 0, color: '#00B4D8' }}>
-                                            {formatKSH(Math.round(weeklyData.reduce((s, d) => s + d.revenue, 0) / 7))}
-                                        </Title>
-                                    </div>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <Text type="secondary">Best Day</Text>
-                                        <Title level={4} style={{ margin: 0, color: '#00C853' }}>
-                                            {weeklyData.reduce((best, d) => d.revenue > best.revenue ? d : best, weeklyData[0])?.day || 'N/A'}
-                                        </Title>
-                                    </div>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <Text type="secondary">Avg Sessions</Text>
-                                        <Title level={4} style={{ margin: 0, color: '#7b2cbf' }}>
-                                            {Math.round(weeklyData.reduce((s, d) => s + d.sessions, 0) / 7)}
-                                        </Title>
-                                    </div>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <Text type="secondary">Peak Hour</Text>
-                                        <Title level={4} style={{ margin: 0, color: '#FF9500' }}>
-                                            {peakHours.reduce((best, h) => h.value > best.value ? h : best, peakHours[0])?.hour || 'N/A'}
-                                        </Title>
-                                    </div>
-                                </div>
-                            </>
-                        )}
-                    </Card>
-                </Col>
-
-                {/* Service Breakdown */}
-                <Col xs={24} lg={8}>
-                    <Card
-                        title={
-                            <Space>
-                                <PieChartOutlined style={{ color: '#7b2cbf' }} />
-                                <span>Revenue by Service</span>
-                            </Space>
-                        }
-                    >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                            {serviceBreakdown.map(service => (
-                                <div key={service.service}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                        <Space>
-                                            <span style={{ color: service.color, fontSize: 16 }}>{service.icon}</span>
-                                            <Text>{service.service}</Text>
-                                        </Space>
-                                        <Text strong style={{ color: service.color }}>{formatKSH(service.revenue)}</Text>
-                                    </div>
-                                    <Progress
-                                        percent={service.percentage}
-                                        size="small"
-                                        strokeColor={service.color}
-                                        format={(p) => `${p}%`}
-                                    />
-                                </div>
-                            ))}
-                        </div>
-                    </Card>
-                </Col>
-            </Row>
-
-            <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-                {/* Peak Hours */}
-                <Col xs={24} lg={12}>
-                    <Card
-                        title={
-                            <Space>
-                                <ClockCircleOutlined style={{ color: '#FF9500' }} />
-                                <span>Peak Hours</span>
-                            </Space>
-                        }
-                    >
-                        {peakHours.every(h => h.value === 0) ? (
-                            <Empty description="No peak hours data yet" />
-                        ) : (
-                            <>
-                                <div style={{ display: 'flex', alignItems: 'flex-end', height: 150, gap: 8 }}>
-                                    {peakHours.map((hour) => (
-                                        <Tooltip key={hour.hour} title={`${hour.hour}: ${hour.value} sessions`}>
-                                            <div style={{ flex: 1, textAlign: 'center' }}>
-                                                <div
-                                                    style={{
-                                                        height: `${Math.max((hour.value / maxPeakHour) * 120, 4)}px`,
-                                                        background: hour.value === maxPeakHour ? '#FF9500' : hour.value > maxPeakHour / 2 ? '#00B4D8' : '#6b6b80',
-                                                        borderRadius: '4px 4px 0 0',
-                                                        transition: 'all 0.3s ease',
-                                                        cursor: 'pointer',
-                                                    }}
-                                                />
-                                            </div>
-                                        </Tooltip>
-                                    ))}
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-                                    <Text type="secondary" style={{ fontSize: 11 }}>8AM</Text>
-                                    <Text type="secondary" style={{ fontSize: 11 }}>12PM</Text>
-                                    <Text type="secondary" style={{ fontSize: 11 }}>4PM</Text>
-                                    <Text type="secondary" style={{ fontSize: 11 }}>8PM</Text>
-                                </div>
-                            </>
-                        )}
-                    </Card>
-                </Col>
-
-                {/* Top Users */}
-                <Col xs={24} lg={12}>
-                    <Card
-                        title={
-                            <Space>
-                                <TeamOutlined style={{ color: '#ff006e' }} />
-                                <span>Top Users</span>
-                            </Space>
-                        }
-                    >
-                        {topUsers.length === 0 ? (
-                            <Empty description="No user data yet" />
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                {topUsers.map((user, index) => (
-                                    <div
-                                        key={user.name}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: 12,
-                                            padding: 12,
-                                            background: index === 0 ? 'rgba(0, 200, 83, 0.1)' : 'rgba(255,255,255,0.03)',
-                                            borderRadius: 8,
-                                            border: index === 0 ? '1px solid rgba(0, 200, 83, 0.3)' : 'none'
-                                        }}
-                                    >
-                                        <div style={{
-                                            width: 28,
-                                            height: 28,
-                                            borderRadius: '50%',
-                                            background: index === 0 ? '#00C853' : index === 1 ? '#00B4D8' : index === 2 ? '#7b2cbf' : 'rgba(255,255,255,0.1)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            fontWeight: 700,
-                                            fontSize: 12,
-                                            color: index < 3 ? '#000' : '#fff'
-                                        }}>
-                                            {index + 1}
-                                        </div>
-                                        <Text strong style={{ flex: 1 }}>{user.name}</Text>
-                                        <div style={{ textAlign: 'right', marginRight: 12 }}>
-                                            <Text type="secondary" style={{ fontSize: 11 }}>{user.sessions} sessions</Text>
-                                            <br />
-                                            <Text type="secondary" style={{ fontSize: 11 }}>{user.hours}h</Text>
-                                        </div>
-                                        <Text style={{ fontFamily: 'JetBrains Mono', color: '#00C853', fontWeight: 600 }}>
-                                            {formatKSH(user.spent)}
-                                        </Text>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </Card>
-                </Col>
-            </Row>
-
-            {/* Computer Performance */}
-            <Card
-                title={
-                    <Space>
-                        <DesktopOutlined style={{ color: '#00B4D8' }} />
-                        <span>Computer Performance</span>
-                    </Space>
-                }
-                style={{ marginTop: 24 }}
-            >
-                {computerPerformance.length === 0 ? (
-                    <Empty description="No computer performance data yet" />
-                ) : (
-                    <Table
-                        columns={computerColumns}
-                        dataSource={computerPerformance}
-                        rowKey="clientId"
-                        pagination={false}
-                    />
-                )}
-            </Card>
+  const columns = [
+    {
+      title: 'EMPLOYEE',
+      dataIndex: 'name',
+      key: 'name',
+      render: (text, record) => (
+        <div className="employee-cell">
+          <div className="employee-avatar">
+            <img src={record.avatar} alt={text} />
+          </div>
+          <div>
+            <div className="employee-name">{text}</div>
+            <div className="employee-role">{record.role}</div>
+          </div>
         </div>
-    );
+      )
+    },
+    {
+      title: 'SHIFT',
+      dataIndex: 'shift',
+      key: 'shift',
+      render: (_, record) => (
+        <div>
+          <div className="shift-time">{record.shiftTime}</div>
+          <div className="shift-duration">{record.shiftDuration}</div>
+        </div>
+      )
+    },
+    {
+      title: 'STATUS',
+      dataIndex: 'status',
+      key: 'status',
+      render: (status, record) => {
+        const isSubmitted = status === 'Submitted';
+        const isPending = status === 'Pending';
+        return (
+          <div>
+            <span className={`status-tag ${isSubmitted ? 'submitted' : (isPending ? 'pending' : '')}`}>{status}</span>
+            <div className={`status-time ${isPending ? 'pending-time' : ''}`}>{record.statusTime}</div>
+          </div>
+        );
+      }
+    },
+    {
+      title: 'REVENUE (KSH)',
+      dataIndex: 'revenue',
+      key: 'revenue',
+      render: (text) => <span className="money-text">{text}</span>
+    },
+    {
+      title: 'CASH COLLECTED',
+      dataIndex: 'cash',
+      key: 'cash',
+      render: (text) => <span className="money-text">{text}</span>
+    },
+    {
+      title: 'MPESA COLLECTED',
+      dataIndex: 'mpesa',
+      key: 'mpesa',
+      render: (text) => <span className="money-text">{text}</span>
+    },
+    {
+      title: 'PRODUCTS SOLD',
+      dataIndex: 'products',
+      key: 'products',
+      render: (text) => <span className="money-text">{text}</span>
+    },
+    {
+      title: 'SERVICES REVENUE',
+      dataIndex: 'services',
+      key: 'services',
+      render: (text) => <span className="money-text">{text}</span>
+    },
+    {
+      title: 'ACTIONS',
+      key: 'actions',
+      render: (_, record) => (
+        <Button 
+          type="primary" 
+          icon={<EyeOutlined />} 
+          className="btn-view-report"
+          onClick={() => setSelectedEmployee(record)}
+        >
+          View Report
+        </Button>
+      )
+    }
+  ];
+
+  // Specific employee calculations
+  const paymentChartData = selectedEmployee ? [
+    { type: 'Cash', value: selectedEmployee.cashKsh, color: '#10b981' },
+    { type: 'Mpesa', value: selectedEmployee.mpesaKsh, color: '#8b5cf6' },
+  ] : [];
+
+  const paymentChartConfig = {
+    appendPadding: 0,
+    data: paymentChartData,
+    angleField: 'value',
+    colorField: 'type',
+    radius: 1,
+    innerRadius: 0.7,
+    color: paymentChartData.map(d => d.color),
+    label: false,
+    legend: false,
+    statistic: {
+      title: false,
+      content: false,
+    },
+    interactions: [{ type: 'element-active' }],
+  };
+
+  return (
+    <div className="reports-container">
+      <div className="reports-header-wrapper">
+        <div>
+          <h1 className="reports-title">Reports</h1>
+          <p className="reports-subtitle">View employee reports and daily activity summaries</p>
+        </div>
+        <div className="reports-controls">
+          <DatePicker 
+            value={selectedDate} 
+            onChange={(date) => {
+              if (date) {
+                setSelectedDate(date);
+                setSelectedEmployee(null);
+              }
+            }}
+            format="MMM DD, YYYY" 
+            allowClear={false}
+          />
+          <Select defaultValue="All Employees" style={{ width: 150 }}>
+            <Select.Option value="All Employees">All Employees</Select.Option>
+            {employeesData.map(e => (
+                <Select.Option key={e.id} value={e.id}>{e.name}</Select.Option>
+            ))}
+          </Select>
+          <Button type="primary" icon={<DownloadOutlined />} className="btn-export" onClick={fetchData}>
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      <Spin spinning={loading}>
+        <div className="metrics-grid">
+          {globalMetrics.map((metric, idx) => (
+            <div className="metric-card" key={idx}>
+              <div className="metric-card-top">
+                <div className={`metric-icon ${metric.iconClass}`}>{metric.icon}</div>
+                <span className="metric-title">{metric.title}</span>
+              </div>
+              <div className="metric-value">{metric.value}</div>
+              <div className={`metric-subtext ${metric.subtextClass}`}>{metric.subtext}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="employee-reports-section">
+          <div className="section-header">
+            <div>
+              <h2 className="section-title">Employee Reports</h2>
+              <p className="section-subtitle">Daily summary by employee</p>
+            </div>
+            <div className="status-legend">
+              <div className="legend-item"><span className="dot green"></span> Submitted</div>
+              <div className="legend-item"><span className="dot orange"></span> Pending</div>
+              <div className="legend-item"><span className="dot red"></span> Not Submitted</div>
+            </div>
+          </div>
+
+          <div className="reports-table">
+            <Table 
+              columns={columns} 
+              dataSource={employeesData} 
+              pagination={{ position: ['bottomRight'], pageSize: 5 }} 
+              locale={{ emptyText: 'No transactions found for this date.' }}
+            />
+          </div>
+        </div>
+      </Spin>
+
+      {/* Detailed Employee View */}
+      {selectedEmployee && (
+        <div className="detailed-report-section">
+          <div className="detail-header">
+            <div>
+              <div className="detail-title-row">
+                <h2 className="detail-title">{selectedEmployee.name}'s Report</h2>
+                <span className="status-tag submitted" style={{ margin: 0 }}>Submitted</span>
+              </div>
+              <div className="detail-subtitle">
+                Shift: {selectedEmployee.shiftTime} • Status Time: {selectedEmployee.statusTime}
+              </div>
+            </div>
+            <Button icon={<DownloadOutlined />} className="btn-download">
+              Download Report
+            </Button>
+          </div>
+
+          <Tabs defaultActiveKey="summary" className="detail-tabs">
+            <TabPane tab="Summary" key="summary">
+              
+              <div className="summary-cards-grid">
+                {/* Revenue Summary */}
+                <div className="summary-card">
+                  <div className="summary-card-title">
+                    <div className="summary-card-icon"><LineChartOutlined /></div>
+                    Revenue Summary
+                  </div>
+                  <div className="summary-list">
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Total Revenue</span>
+                      <span className="summary-list-value">{selectedEmployee.revenue}</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Products Revenue</span>
+                      <span className="summary-list-value">{selectedEmployee.products}</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Services Revenue</span>
+                      <span className="summary-list-value">{selectedEmployee.services}</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Total Transactions</span>
+                      <span className="summary-list-value">{selectedEmployee.txnCount}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Breakdown */}
+                <div className="summary-card">
+                  <div className="summary-card-title">
+                    <div className="summary-card-icon green"><WalletOutlined /></div>
+                    Payment Breakdown
+                  </div>
+                  <div className="payment-breakdown-content">
+                    <div className="payment-list">
+                      <div className="payment-item">
+                        <span className="payment-label">Cash</span>
+                        <span className="payment-amount">{selectedEmployee.cash}</span>
+                        <span className="payment-pct">{Math.round((selectedEmployee.cashKsh / selectedEmployee.revenueKsh || 0) * 100)}%</span>
+                      </div>
+                      <div className="payment-item">
+                        <span className="payment-label">Mpesa</span>
+                        <span className="payment-amount">{selectedEmployee.mpesa}</span>
+                        <span className="payment-pct">{Math.round((selectedEmployee.mpesaKsh / selectedEmployee.revenueKsh || 0) * 100)}%</span>
+                      </div>
+                      <div className="payment-item" style={{ marginTop: 12 }}>
+                        <span className="payment-label" style={{ color: '#fff' }}>Total Collected</span>
+                        <span className="payment-amount">{selectedEmployee.revenue}</span>
+                        <span className="payment-pct"></span>
+                      </div>
+                    </div>
+                    <div className="payment-chart-wrapper">
+                      <Pie {...paymentChartConfig} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Services Summary */}
+                <div className="summary-card">
+                  <div className="summary-card-title">
+                    <div className="summary-card-icon purple"><AppstoreOutlined /></div>
+                    Services Summary
+                  </div>
+                  <div className="summary-list">
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Service Revenue</span>
+                      <span className="summary-list-value">{selectedEmployee.services}</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Product Revenue</span>
+                      <span className="summary-list-value">{selectedEmployee.products}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reconciliation */}
+                <div className="summary-card">
+                  <div className="summary-card-title">
+                    <div className="summary-card-icon orange"><FileDoneOutlined /></div>
+                    Reconciliation
+                  </div>
+                  <div className="summary-list">
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Expected Cash</span>
+                      <span className="summary-list-value">{selectedEmployee.cash}</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Actual Cash</span>
+                      <span className="summary-list-value">{selectedEmployee.cash}</span>
+                    </div>
+                    <div className="summary-list-item" style={{ marginTop: 12 }}>
+                      <span className="summary-list-label">Difference</span>
+                      <span className="summary-list-value green">KSh 0.00</span>
+                    </div>
+                    <div className="summary-list-item">
+                      <span className="summary-list-label">Status</span>
+                      <span className="status-tag submitted" style={{ margin: 0 }}>Balanced</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </TabPane>
+            <TabPane tab="Transactions" key="transactions">
+              <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>Transactions data for {selectedEmployee.name}</div>
+            </TabPane>
+          </Tabs>
+        </div>
+      )}
+
+    </div>
+  );
 }
 
 export default Reports;

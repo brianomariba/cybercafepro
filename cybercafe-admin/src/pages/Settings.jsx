@@ -39,6 +39,7 @@ import {
 import dayjs from 'dayjs';
 import TillsSettings from './TillsSettings';
 import PaymentSettings from './PaymentSettings';
+import DataManagement from './DataManagement';
 import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp } from '../services/api';
 
 const { Text, Title } = Typography;
@@ -87,11 +88,33 @@ function Settings() {
     });
     const [updatingPortalAuth, setUpdatingPortalAuth] = useState(false);
 
+    // Security state
+    const [recoveryEmail, setRecoveryEmail] = useState('');
+    const [savingRecovery, setSavingRecovery] = useState(false);
+    const handleSaveRecoveryEmail = async () => {
+        setSavingRecovery(true);
+        try {
+            await saveRecoverySettings(recoveryEmail);
+            message.success('Recovery email updated successfully');
+        } catch (error) {
+            console.error('Failed to save recovery email', error);
+            message.error('Failed to save recovery email');
+        } finally {
+            setSavingRecovery(false);
+        }
+    };
+
     // WhatsApp Reports state
     const [whatsappSettings, setWhatsappSettings] = useState({
         enabled: false,
         phone: '',
-        time: '18:00'
+        time: '18:00',
+        includeShopName: true,
+        includeTotalRevenue: true,
+        includeAgentSubmissions: true,
+        includeRevenueBreakdown: true,
+        includeMachineRevenue: true,
+        includeStatusDiscrepancy: true
     });
     const [savingWhatsapp, setSavingWhatsapp] = useState(false);
     const [testingWhatsapp, setTestingWhatsapp] = useState(false);
@@ -121,19 +144,21 @@ function Settings() {
     const loadData = async () => {
         setLoadingServices(true);
         try {
-            const [servicesData, computersData, settingsData, categoriesData, portalAuthData, whatsappData] = await Promise.all([
+            const [servicesData, computersData, settingsData, categoriesData, portalAuthData, whatsappData, recoveryData] = await Promise.all([
                 getServices(),
                 getComputers(),
                 getSettings().catch(() => ({})),
                 getServiceCategories().catch(() => []),
                 getPortalAuthSettings().catch(() => ({ otpEnabled: true, sessionDurationHours: 24 })),
-                getWhatsAppReportSettings().catch(() => ({ enabled: false, phone: '', apikey: '', time: '18:00' }))
+                getWhatsAppReportSettings().catch(() => ({ enabled: false, phone: '', time: '18:00', includeShopName: true, includeTotalRevenue: true, includeAgentSubmissions: true, includeRevenueBreakdown: true, includeMachineRevenue: true, includeStatusDiscrepancy: true })),
+                getRecoverySettings().catch(() => ({ email: '' }))
             ]);
             setServices(servicesData || []);
             setComputers(computersData || []);
             setCategories(categoriesData || []);
             setPortalAuthSettings(portalAuthData);
             if (whatsappData) setWhatsappSettings(whatsappData);
+            if (recoveryData) setRecoveryEmail(recoveryData.email || '');
 
             // Load saved settings
             if (settingsData.generalSettings) {
@@ -1121,6 +1146,64 @@ function Settings() {
                                         </Row>
 
                                         <Divider />
+                                        
+                                        <div style={{ marginBottom: 16 }}>
+                                            <Title level={5} style={{ color: 'rgba(255, 255, 255, 0.85)' }}>Report Customization</Title>
+                                            <Text type="secondary">Select which sections to include in the daily report.</Text>
+                                        </div>
+                                        
+                                        <Row gutter={[16, 16]}>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Shop Name</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeShopName !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeShopName: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Total Revenue</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeTotalRevenue !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeTotalRevenue: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Agent Submissions</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeAgentSubmissions !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeAgentSubmissions: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Revenue Breakdown</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeRevenueBreakdown !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeRevenueBreakdown: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Machine Revenue</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeMachineRevenue !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeMachineRevenue: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Discrepancy Status</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeStatusDiscrepancy !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeStatusDiscrepancy: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                        </Row>
+
+                                        <Divider />
 
                                         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                                             <Button
@@ -1347,302 +1430,7 @@ function Settings() {
                     <span>Data Management</span>
                 </Space>
             ),
-            children: (
-                <Row gutter={24}>
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <PrinterOutlined style={{ color: '#ff3b5c' }} />
-                                    <span>Printer Data Cleanup</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{
-                                padding: 24,
-                                background: 'rgba(255, 59, 92, 0.06)',
-                                border: '1px solid rgba(255, 59, 92, 0.15)',
-                                borderRadius: 12,
-                                marginBottom: 16
-                            }}>
-                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
-                                        <Text strong>Delete All Printer Data</Text>
-                                    </div>
-                                    <Text type="secondary" style={{ fontSize: 13 }}>
-                                        This will permanently remove all print job records and printer discovery logs
-                                        from every computer in the system. This includes:
-                                    </Text>
-                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
-                                        <li>All print job history (B&W and color)</li>
-                                        <li>Printer discovery and status records</li>
-                                        <li>Page count statistics</li>
-                                    </ul>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        ⚠️ This action cannot be undone. New printer data will be collected
-                                        automatically when agents report activity.
-                                    </Text>
-                                    <Divider style={{ margin: '8px 0' }} />
-                                    <Popconfirm
-                                        title="Delete all printer data?"
-                                        description="This will permanently remove ALL print jobs and printer records from every computer. This cannot be undone."
-                                        onConfirm={handleDeleteAllPrinterData}
-                                        okText="Yes, Delete All"
-                                        cancelText="Cancel"
-                                        okButtonProps={{ danger: true }}
-                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
-                                    >
-                                        <Button
-                                            danger
-                                            type="primary"
-                                            icon={<DeleteOutlined />}
-                                            loading={cleaningPrinterData}
-                                            block
-                                        >
-                                            Delete All Printer Data
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
-                            </div>
-                        </Card>
-                    </Col>
-
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <GlobalOutlined style={{ color: '#ff3b5c' }} />
-                                    <span>Browser Data Cleanup</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{
-                                padding: 24,
-                                background: 'rgba(255, 59, 92, 0.06)',
-                                border: '1px solid rgba(255, 59, 92, 0.15)',
-                                borderRadius: 12,
-                                marginBottom: 16
-                            }}>
-                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
-                                        <Text strong>Delete All Browser Data</Text>
-                                    </div>
-                                    <Text type="secondary" style={{ fontSize: 13 }}>
-                                        This will permanently remove all browser history records
-                                        from every computer in the system. This includes:
-                                    </Text>
-                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
-                                        <li>All browsing history URLs and titles</li>
-                                        <li>Time spent tracking data per URL</li>
-                                        <li>Category and source metadata</li>
-                                    </ul>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        ⚠️ This action cannot be undone. New browser data will be collected
-                                        automatically when agents report activity.
-                                    </Text>
-                                    <Divider style={{ margin: '8px 0' }} />
-                                    <Popconfirm
-                                        title="Delete all browser data?"
-                                        description="This will permanently remove ALL browser history from every computer. This cannot be undone."
-                                        onConfirm={handleDeleteAllBrowserData}
-                                        okText="Yes, Delete All"
-                                        cancelText="Cancel"
-                                        okButtonProps={{ danger: true }}
-                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
-                                    >
-                                        <Button
-                                            danger
-                                            type="primary"
-                                            icon={<DeleteOutlined />}
-                                            loading={cleaningBrowserData}
-                                            block
-                                        >
-                                            Delete All Browser Data
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
-                            </div>
-                        </Card>
-                    </Col>
-
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <DollarOutlined style={{ color: '#ff3b5c' }} />
-                                    <span>Finance Data Cleanup</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{
-                                padding: 24,
-                                background: 'rgba(255, 59, 92, 0.06)',
-                                border: '1px solid rgba(255, 59, 92, 0.15)',
-                                borderRadius: 12,
-                                marginBottom: 16
-                            }}>
-                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
-                                        <Text strong>Delete All Finance Data</Text>
-                                    </div>
-                                    <Text type="secondary" style={{ fontSize: 13 }}>
-                                        This will permanently remove all financial records
-                                        from the system. This includes:
-                                    </Text>
-                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
-                                        <li>All transaction records (sessions, tasks, inventory sales)</li>
-                                        <li>Session billing and revenue logs</li>
-                                        <li>Revenue summaries and history</li>
-                                    </ul>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        ⚠️ This action cannot be undone. The finance dashboard will reset to
-                                        zero and new transactions will be recorded automatically going forward.
-                                    </Text>
-                                    <Divider style={{ margin: '8px 0' }} />
-                                    <Popconfirm
-                                        title="Delete all finance data?"
-                                        description="This will permanently remove ALL transactions, revenue records, and billing history. This cannot be undone."
-                                        onConfirm={handleDeleteAllFinanceData}
-                                        okText="Yes, Delete All"
-                                        cancelText="Cancel"
-                                        okButtonProps={{ danger: true }}
-                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
-                                    >
-                                        <Button
-                                            danger
-                                            type="primary"
-                                            icon={<DeleteOutlined />}
-                                            loading={cleaningFinanceData}
-                                            block
-                                        >
-                                            Delete All Finance Data
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
-                            </div>
-                        </Card>
-                    </Col>
-
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <BarChartOutlined style={{ color: '#ff3b5c' }} />
-                                    <span>Reports Data Cleanup</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{
-                                padding: 24,
-                                background: 'rgba(255, 59, 92, 0.06)',
-                                border: '1px solid rgba(255, 59, 92, 0.15)',
-                                borderRadius: 12,
-                                marginBottom: 16
-                            }}>
-                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
-                                        <Text strong>Delete All Reports Data</Text>
-                                    </div>
-                                    <Text type="secondary" style={{ fontSize: 13 }}>
-                                        This will permanently remove all monitoring and reporting
-                                        records from the system. This includes:
-                                    </Text>
-                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
-                                        <li>Activity logs (logins, actions, system events)</li>
-                                        <li>Session tracking logs</li>
-                                        <li>File activity records (access, transfers)</li>
-                                        <li>USB device event logs</li>
-                                    </ul>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        ⚠️ This action cannot be undone. New activity will be
-                                        recorded automatically as agents report.
-                                    </Text>
-                                    <Divider style={{ margin: '8px 0' }} />
-                                    <Popconfirm
-                                        title="Delete all reports data?"
-                                        description="This will permanently remove ALL activity, session, file, and USB logs. This cannot be undone."
-                                        onConfirm={handleDeleteAllReportsData}
-                                        okText="Yes, Delete All"
-                                        cancelText="Cancel"
-                                        okButtonProps={{ danger: true }}
-                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
-                                    >
-                                        <Button
-                                            danger
-                                            type="primary"
-                                            icon={<DeleteOutlined />}
-                                            loading={cleaningReportsData}
-                                            block
-                                        >
-                                            Delete All Reports Data
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
-                            </div>
-                        </Card>
-                    </Col>
-
-                    <Col xs={24} lg={12}>
-                        <Card
-                            title={
-                                <Space>
-                                    <FileTextOutlined style={{ color: '#ff3b5c' }} />
-                                    <span>Landing & Document Data Cleanup</span>
-                                </Space>
-                            }
-                        >
-                            <div style={{
-                                padding: 24,
-                                background: 'rgba(255, 59, 92, 0.06)',
-                                border: '1px solid rgba(255, 59, 92, 0.15)',
-                                borderRadius: 12,
-                                marginBottom: 16
-                            }}>
-                                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <ExclamationCircleOutlined style={{ color: '#ff3b5c', fontSize: 18 }} />
-                                        <Text strong>Delete Landing & Document Data</Text>
-                                    </div>
-                                    <Text type="secondary" style={{ fontSize: 13 }}>
-                                        This will permanently remove all document requests from the landing page and all shared document data.
-                                    </Text>
-                                    <ul style={{ margin: '4px 0', paddingLeft: 20, color: 'rgba(255,255,255,0.65)' }}>
-                                        <li>Remote printing and task document requests via landing page</li>
-                                        <li>Shared documents in the admin dashboard</li>
-                                    </ul>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                        ⚠️ This action cannot be undone.
-                                    </Text>
-                                    <Divider style={{ margin: '8px 0' }} />
-                                    <Popconfirm
-                                        title="Delete landing & document data?"
-                                        description="This will permanently remove ALL landing page document requests and shared documents. This cannot be undone."
-                                        onConfirm={handleDeleteAllLandingDocumentData}
-                                        okText="Yes, Delete All"
-                                        cancelText="Cancel"
-                                        okButtonProps={{ danger: true }}
-                                        icon={<ExclamationCircleOutlined style={{ color: '#ff3b5c' }} />}
-                                    >
-                                        <Button
-                                            danger
-                                            type="primary"
-                                            icon={<DeleteOutlined />}
-                                            loading={cleaningLandingData}
-                                            block
-                                        >
-                                            Delete Landing & Document Data
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
-                            </div>
-                        </Card>
-                    </Col>
-                </Row>
-            ),
+            children: <DataManagement />,
         },
         {
             key: 'tills',
@@ -1654,6 +1442,46 @@ function Settings() {
             label: <span><DollarOutlined /> Payment Management</span>,
             children: <PaymentSettings />,
         },
+        {
+            key: 'security',
+            label: <span><SafetyOutlined /> Security</span>,
+            children: (
+                <Card title={<><SafetyOutlined /> Security & Recovery</>} bordered={false} className="settings-card shadow-sm">
+                    <Row gutter={24}>
+                        <Col span={24} md={12}>
+                            <Title level={5} style={{ marginBottom: 16 }}>Administrator Password Recovery</Title>
+                            <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+                                Set an email address to receive recovery codes in case you forget your administrator password. This provides a secure way to regain access to the system.
+                            </Text>
+
+                            <Form layout="vertical">
+                                <Form.Item label="Recovery Email Address">
+                                    <Input
+                                        prefix={<MailOutlined style={{ color: '#64748B' }} />}
+                                        placeholder="admin@example.com"
+                                        value={recoveryEmail}
+                                        onChange={(e) => setRecoveryEmail(e.target.value)}
+                                        size="large"
+                                    />
+                                </Form.Item>
+                                <Button
+                                    type="primary"
+                                    onClick={handleSaveRecoveryEmail}
+                                    loading={savingRecovery}
+                                    icon={<SaveOutlined />}
+                                    style={{
+                                        background: 'linear-gradient(135deg, #00B4D8, #023047)',
+                                        border: 'none',
+                                    }}
+                                >
+                                    Save Recovery Settings
+                                </Button>
+                            </Form>
+                        </Col>
+                    </Row>
+                </Card>
+            ),
+        }
     ];
 
     return (
