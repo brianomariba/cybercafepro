@@ -66,8 +66,8 @@ const { Text } = Typography;
 // HawkNine Dark theme configuration
 const darkTheme = {
   token: {
-    colorPrimary: '#00B4D8',
-    colorBgBase: '#011627',
+    colorPrimary: '#FFB703',
+    colorBgBase: '#0b1121',
     colorTextBase: '#ffffff',
     borderRadius: 10,
     fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
@@ -76,7 +76,7 @@ const darkTheme = {
     Layout: {
       siderBg: 'transparent',
       headerBg: 'transparent',
-      bodyBg: '#011627',
+      bodyBg: '#0b1121',
     },
     Menu: {
       darkItemBg: 'transparent',
@@ -589,8 +589,8 @@ function App() {
             top: 0,
             bottom: 0,
             zIndex: 100,
-            background: isDarkMode ? 'linear-gradient(180deg, #011627 0%, #023047 50%, #011627 100%)' : '#ffffff',
-            borderRight: `1px solid ${isDarkMode ? 'rgba(0, 180, 216, 0.15)' : '#e2e8f0'}`,
+            background: isDarkMode ? 'var(--gradient-sidebar)' : '#ffffff',
+            borderRight: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : '#e2e8f0'}`,
           }}
         >
           {/* HawkNine Logo */}
@@ -661,8 +661,8 @@ function App() {
           <Header
             className={`main-header ${isDarkMode ? '' : 'header-light'}`}
             style={{
-              background: isDarkMode ? 'rgba(1, 22, 39, 0.85)' : '#ffffff',
-              borderBottom: `1px solid ${isDarkMode ? 'rgba(0, 180, 216, 0.15)' : '#e2e8f0'}`,
+              background: isDarkMode ? 'var(--gradient-header)' : '#ffffff',
+              borderBottom: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.05)' : '#e2e8f0'}`,
             }}
           >
             <div className="header-left">
