@@ -175,15 +175,6 @@ function Sessions() {
                 <Text type="secondary">{dayjs(time || record.receivedAt).format('MMM DD, HH:mm')}</Text>
             ),
         },
-        {
-            title: 'Amount',
-            key: 'amount',
-            render: (_, record) => (
-                <Text style={{ fontFamily: 'JetBrains Mono', color: '#00C853', fontWeight: 600 }}>
-                    {formatKSH(record.charges?.grandTotal || 0)}
-                </Text>
-            ),
-        },
     ];
 
     return (
@@ -215,16 +206,6 @@ function Sessions() {
                         </div>
                         <div className="stat-value">{stats.activeSessions}</div>
                         <div className="stat-label">Active Sessions</div>
-                    </div>
-
-                    <div className="stat-card green">
-                        <div className="stat-header">
-                            <div className="stat-icon green">
-                                <DollarOutlined />
-                            </div>
-                        </div>
-                        <div className="stat-value">{formatKSH(stats.totalRevenue)}</div>
-                        <div className="stat-label">Today's Revenue</div>
                     </div>
 
                     <div className="stat-card purple">
@@ -384,9 +365,6 @@ function Sessions() {
                                             {session.hostname} • {session.durationMinutes || 0}m
                                         </Text>
                                     </div>
-                                    <Text style={{ fontFamily: 'JetBrains Mono', color: '#00C853', fontWeight: 600 }}>
-                                        {formatKSH(session.charges?.grandTotal || 0)}
-                                    </Text>
                                 </div>
                             ))}
                             {completedSessions.length === 0 && (
@@ -419,10 +397,6 @@ function Sessions() {
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <Text type="secondary">Avg Duration</Text>
                                 <Text strong>{stats.avgDuration}m</Text>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: 12, background: 'rgba(0, 200, 83, 0.1)', borderRadius: 8, marginTop: 8 }}>
-                                <Text type="secondary">Session Revenue</Text>
-                                <Text strong style={{ color: '#00C853', fontSize: 18 }}>{formatKSH(stats.totalRevenue)}</Text>
                             </div>
                         </div>
                     </Card>

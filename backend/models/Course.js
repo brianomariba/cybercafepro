@@ -13,10 +13,18 @@ const CourseSchema = new mongoose.Schema({
     color: { type: String, default: '#00B4D8' }, // UI Color
     featured: { type: Boolean, default: false },
     // File attachment fields
+    // Backward compatibility
     fileUrl: { type: String }, // Path to uploaded file
     fileOriginalName: { type: String }, // Original filename
     fileMimeType: { type: String }, // File MIME type (application/pdf, etc.)
     fileSize: { type: Number }, // File size in bytes
+    // New array for multiple files
+    files: [{
+        fileUrl: { type: String },
+        fileOriginalName: { type: String },
+        fileMimeType: { type: String },
+        fileSize: { type: Number }
+    }],
     createdAt: { type: Date, default: Date.now }
 });
 

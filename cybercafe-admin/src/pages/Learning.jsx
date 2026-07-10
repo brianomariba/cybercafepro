@@ -38,9 +38,11 @@ function Learning() {
             if (values.lessons) formData.append('lessons', values.lessons);
             if (values.featured) formData.append('featured', 'true');
 
-            // Add file if selected
+            // Add files if selected
             if (fileList.length > 0) {
-                formData.append('file', fileList[0].originFileObj);
+                fileList.forEach(f => {
+                    formData.append('files', f.originFileObj);
+                });
             }
 
             await createCourse(formData);
@@ -67,7 +69,7 @@ function Learning() {
     };
 
     const handleFileChange = ({ fileList: newFileList }) => {
-        setFileList(newFileList.slice(-1));
+        setFileList(newFileList);
     };
 
     const columns = [
@@ -76,18 +78,41 @@ function Learning() {
         { title: 'Level', dataIndex: 'level', key: 'level' },
         { title: 'Duration', dataIndex: 'duration', key: 'duration' },
         {
-            title: 'Resource File',
-            key: 'file',
-            render: (_, record) => record.fileUrl ? (
-                <Button
-                    type="link"
-                    icon={<DownloadOutlined />}
-                    href={downloadCourseUrl(record._id)}
-                    target="_blank"
-                >
-                    {record.fileOriginalName || 'Download'}
-                </Button>
-            ) : <Tag color="default">No file</Tag>
+            title: 'Resource Files',
+            key: 'files',
+            render: (_, record) => {
+                if (record.files && record.files.length > 0) {
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {record.files.map((file, index) => (
+                                <Button
+                                    key={index}
+                                    type="link"
+                                    icon={<DownloadOutlined />}
+                                    href={downloadCourseUrl(record._id, index)}
+                                    target="_blank"
+                                    size="small"
+                                >
+                                    {file.fileOriginalName || `File ${index + 1}`}
+                                </Button>
+                            ))}
+                        </div>
+                    );
+                } else if (record.fileUrl) {
+                    // Backward compatibility
+                    return (
+                        <Button
+                            type="link"
+                            icon={<DownloadOutlined />}
+                            href={downloadCourseUrl(record._id, 0)}
+                            target="_blank"
+                        >
+                            {record.fileOriginalName || 'Download'}
+                        </Button>
+                    );
+                }
+                return <Tag color="default">No file</Tag>;
+            }
         },
         {
             title: 'Action',
@@ -162,7 +187,7 @@ function Learning() {
                             beforeUpload={() => false}
                             fileList={fileList}
                             onChange={handleFileChange}
-                            maxCount={1}
+                            multiple={true}
                             accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                         >
                             <Button icon={<UploadOutlined />}>Select File</Button>

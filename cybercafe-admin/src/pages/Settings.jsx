@@ -809,7 +809,15 @@ function Settings() {
                             <span>Computer Configuration</span>
                         </Space>
                     }
-                    extra={<Button type="primary" icon={<PlusOutlined />}>Add Computer</Button>}
+                    extra={
+                        <Button 
+                            type="primary" 
+                            icon={<PlusOutlined />}
+                            onClick={() => window.open(`${import.meta.env.VITE_API_URL || 'https://api.hawkninegroup.com/api/v1'}/admin/download-agent`, '_blank')}
+                        >
+                            Add Computer
+                        </Button>
+                    }
                 >
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
                         {computers.length === 0 ? (

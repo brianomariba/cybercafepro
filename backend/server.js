@@ -2029,7 +2029,7 @@ app.get('/api/v1/templates', async (req, res) => {
  * POST /api/v1/admin/templates
  * Create a new template with optional file upload (admin only)
  */
-app.post('/api/v1/admin/templates', requireAdminAuth, upload.single('file'), async (req, res) => {
+app.post('/api/v1/admin/templates', requireAdminAuth, upload.array('files', 10), async (req, res) => {
     try {
         const { title, description, category, type, previewUrl, featured } = req.body;
 
@@ -2043,15 +2043,25 @@ app.post('/api/v1/admin/templates', requireAdminAuth, upload.single('file'), asy
             category,
             type,
             previewUrl,
-            featured: featured === 'true' || featured === true
+            featured: featured === 'true' || featured === true,
+            files: []
         };
 
-        // Handle file upload
-        if (req.file) {
-            templateData.fileUrl = `/uploads/${req.file.filename}`;
-            templateData.fileOriginalName = req.file.originalname;
-            templateData.fileMimeType = req.file.mimetype;
-            templateData.fileSize = req.file.size;
+        // Handle file uploads
+        if (req.files && req.files.length > 0) {
+            templateData.files = req.files.map(file => ({
+                fileUrl: `/uploads/${file.filename}`,
+                fileOriginalName: file.originalname,
+                fileMimeType: file.mimetype,
+                fileSize: file.size
+            }));
+            
+            // For backward compatibility, populate the old single-file fields with the first file
+            const firstFile = req.files[0];
+            templateData.fileUrl = `/uploads/${firstFile.filename}`;
+            templateData.fileOriginalName = firstFile.originalname;
+            templateData.fileMimeType = firstFile.mimetype;
+            templateData.fileSize = firstFile.size;
         }
 
         const template = await Template.create(templateData);
@@ -2074,13 +2084,23 @@ app.delete('/api/v1/admin/templates/:id', requireAdminAuth, async (req, res) => 
             return res.status(404).json({ error: 'Template not found' });
         }
 
-        // Delete associated file if exists
-        if (template.fileUrl) {
-            const filePath = path.join(__dirname, template.fileUrl);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
+        // Delete associated files if they exist
+        const allFiles = [];
+        if (template.files && template.files.length > 0) {
+            allFiles.push(...template.files);
+        } else if (template.fileUrl) {
+            // Backward compatibility
+            allFiles.push({ fileUrl: template.fileUrl });
         }
+
+        allFiles.forEach(f => {
+            if (f.fileUrl) {
+                const filePath = path.join(__dirname, f.fileUrl);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+        });
 
         console.log(`[TEMPLATES] Deleted: ${template.title}`);
         res.json({ success: true, message: 'Template deleted' });
@@ -2101,11 +2121,21 @@ app.get('/api/v1/templates/:id/download', async (req, res) => {
             return res.status(404).json({ error: 'Template not found' });
         }
 
-        if (!template.fileUrl) {
+        const fileIndex = parseInt(req.query.index) || 0;
+        let fileObj = null;
+
+        if (template.files && template.files.length > fileIndex) {
+            fileObj = template.files[fileIndex];
+        } else if (template.fileUrl && fileIndex === 0) {
+            // Backward compatibility
+            fileObj = template;
+        }
+
+        if (!fileObj || !fileObj.fileUrl) {
             return res.status(404).json({ error: 'No file attached to this template' });
         }
 
-        const filePath = path.join(__dirname, template.fileUrl);
+        const filePath = path.join(__dirname, fileObj.fileUrl);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found on server' });
         }
@@ -2113,7 +2143,7 @@ app.get('/api/v1/templates/:id/download', async (req, res) => {
         // Increment download count
         await Template.findByIdAndUpdate(req.params.id, { $inc: { downloads: 1 } });
 
-        res.download(filePath, template.fileOriginalName || 'template');
+        res.download(filePath, fileObj.fileOriginalName || 'template');
     } catch (error) {
         console.error('[TEMPLATES] Download failed:', error);
         res.status(500).json({ error: 'Failed to download template' });
@@ -2179,7 +2209,7 @@ app.get('/api/v1/courses', async (req, res) => {
  * POST /api/v1/admin/courses
  * Create a new course with optional file upload (admin only)
  */
-app.post('/api/v1/admin/courses', requireAdminAuth, upload.single('file'), async (req, res) => {
+app.post('/api/v1/admin/courses', requireAdminAuth, upload.array('files', 10), async (req, res) => {
     try {
         const { title, description, category, duration, lessons, level, content, featured } = req.body;
 
@@ -2195,15 +2225,25 @@ app.post('/api/v1/admin/courses', requireAdminAuth, upload.single('file'), async
             lessons: parseInt(lessons) || 0,
             level: level || 'Beginner',
             content,
-            featured: featured === 'true' || featured === true
+            featured: featured === 'true' || featured === true,
+            files: []
         };
 
-        // Handle file upload
-        if (req.file) {
-            courseData.fileUrl = `/uploads/${req.file.filename}`;
-            courseData.fileOriginalName = req.file.originalname;
-            courseData.fileMimeType = req.file.mimetype;
-            courseData.fileSize = req.file.size;
+        // Handle file uploads
+        if (req.files && req.files.length > 0) {
+            courseData.files = req.files.map(file => ({
+                fileUrl: `/uploads/${file.filename}`,
+                fileOriginalName: file.originalname,
+                fileMimeType: file.mimetype,
+                fileSize: file.size
+            }));
+
+            // Backward compatibility
+            const firstFile = req.files[0];
+            courseData.fileUrl = `/uploads/${firstFile.filename}`;
+            courseData.fileOriginalName = firstFile.originalname;
+            courseData.fileMimeType = firstFile.mimetype;
+            courseData.fileSize = firstFile.size;
         }
 
         const course = await Course.create(courseData);
@@ -2226,13 +2266,22 @@ app.delete('/api/v1/admin/courses/:id', requireAdminAuth, async (req, res) => {
             return res.status(404).json({ error: 'Course not found' });
         }
 
-        // Delete associated file if exists
-        if (course.fileUrl) {
-            const filePath = path.join(__dirname, course.fileUrl);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
+        // Delete associated files if they exist
+        const allFiles = [];
+        if (course.files && course.files.length > 0) {
+            allFiles.push(...course.files);
+        } else if (course.fileUrl) {
+            allFiles.push({ fileUrl: course.fileUrl });
         }
+
+        allFiles.forEach(f => {
+            if (f.fileUrl) {
+                const filePath = path.join(__dirname, f.fileUrl);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+        });
 
         console.log(`[COURSES] Deleted: ${course.title}`);
         res.json({ success: true, message: 'Course deleted' });
@@ -2253,16 +2302,25 @@ app.get('/api/v1/courses/:id/download', async (req, res) => {
             return res.status(404).json({ error: 'Course not found' });
         }
 
-        if (!course.fileUrl) {
+        const fileIndex = parseInt(req.query.index) || 0;
+        let fileObj = null;
+
+        if (course.files && course.files.length > fileIndex) {
+            fileObj = course.files[fileIndex];
+        } else if (course.fileUrl && fileIndex === 0) {
+            fileObj = course;
+        }
+
+        if (!fileObj || !fileObj.fileUrl) {
             return res.status(404).json({ error: 'No file attached to this course' });
         }
 
-        const filePath = path.join(__dirname, course.fileUrl);
+        const filePath = path.join(__dirname, fileObj.fileUrl);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found on server' });
         }
 
-        res.download(filePath, course.fileOriginalName || 'course-material');
+        res.download(filePath, fileObj.fileOriginalName || 'course-material');
     } catch (error) {
         console.error('[COURSES] Download failed:', error);
         res.status(500).json({ error: 'Failed to download course' });
@@ -2290,7 +2348,7 @@ app.get('/api/v1/guides', async (req, res) => {
  * POST /api/v1/admin/guides
  * Create a new guide with optional file upload (admin only)
  */
-app.post('/api/v1/admin/guides', requireAdminAuth, upload.single('file'), async (req, res) => {
+app.post('/api/v1/admin/guides', requireAdminAuth, upload.array('files', 10), async (req, res) => {
     try {
         const { title, description, objective, type, duration, content, popular } = req.body;
 
@@ -2305,15 +2363,25 @@ app.post('/api/v1/admin/guides', requireAdminAuth, upload.single('file'), async 
             type: type || 'Guide',
             duration,
             content,
-            popular: popular === 'true' || popular === true
+            popular: popular === 'true' || popular === true,
+            files: []
         };
 
-        // Handle file upload
-        if (req.file) {
-            guideData.fileUrl = `/uploads/${req.file.filename}`;
-            guideData.fileOriginalName = req.file.originalname;
-            guideData.fileMimeType = req.file.mimetype;
-            guideData.fileSize = req.file.size;
+        // Handle file uploads
+        if (req.files && req.files.length > 0) {
+            guideData.files = req.files.map(file => ({
+                fileUrl: `/uploads/${file.filename}`,
+                fileOriginalName: file.originalname,
+                fileMimeType: file.mimetype,
+                fileSize: file.size
+            }));
+
+            // Backward compatibility
+            const firstFile = req.files[0];
+            guideData.fileUrl = `/uploads/${firstFile.filename}`;
+            guideData.fileOriginalName = firstFile.originalname;
+            guideData.fileMimeType = firstFile.mimetype;
+            guideData.fileSize = firstFile.size;
         }
 
         const guide = await Guide.create(guideData);
@@ -2336,13 +2404,22 @@ app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
             return res.status(404).json({ error: 'Guide not found' });
         }
 
-        // Delete associated file if exists
-        if (guide.fileUrl) {
-            const filePath = path.join(__dirname, guide.fileUrl);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
+        // Delete associated files if they exist
+        const allFiles = [];
+        if (guide.files && guide.files.length > 0) {
+            allFiles.push(...guide.files);
+        } else if (guide.fileUrl) {
+            allFiles.push({ fileUrl: guide.fileUrl });
         }
+
+        allFiles.forEach(f => {
+            if (f.fileUrl) {
+                const filePath = path.join(__dirname, f.fileUrl);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+        });
 
         console.log(`[GUIDES] Deleted: ${guide.title}`);
         res.json({ success: true, message: 'Guide deleted' });
@@ -2354,42 +2431,34 @@ app.delete('/api/v1/admin/guides/:id', requireAdminAuth, async (req, res) => {
 
 /**
  * GET /api/v1/guides/:id/download
- * Download a guide file (public)
- */
-/**
- * GET /api/v1/guides/:id/download
  * Download a guide file (secure)
  */
 app.get('/api/v1/guides/:id/download', async (req, res) => {
     try {
-        // Security check: Ensure user is logged in (Agent or Portal User)
-        /*
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            // Check for temporary download token query param if needed for browser direct links
-            // For now, require auth header
-             return res.status(401).json({ error: 'Unauthorized' });
-        }
-        */
-        // For simple browser downloads, we might need a query param token or cookie.
-        // For now, let's assume public access until full user portal auth is improved
-        // OR check for a valid session ID in query params
-
         const guide = await Guide.findById(req.params.id);
         if (!guide) {
             return res.status(404).json({ error: 'Guide not found' });
         }
 
-        if (!guide.fileUrl) {
+        const fileIndex = parseInt(req.query.index) || 0;
+        let fileObj = null;
+
+        if (guide.files && guide.files.length > fileIndex) {
+            fileObj = guide.files[fileIndex];
+        } else if (guide.fileUrl && fileIndex === 0) {
+            fileObj = guide;
+        }
+
+        if (!fileObj || !fileObj.fileUrl) {
             return res.status(404).json({ error: 'No file attached to this guide' });
         }
 
-        const filePath = path.join(__dirname, guide.fileUrl);
+        const filePath = path.join(__dirname, fileObj.fileUrl);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: 'File not found on server' });
         }
 
-        res.download(filePath, guide.fileOriginalName || 'guide');
+        res.download(filePath, fileObj.fileOriginalName || 'guide');
     } catch (error) {
         console.error('[GUIDES] Download failed:', error);
         res.status(500).json({ error: 'Failed to download guide' });
@@ -4283,8 +4352,8 @@ app.get('/api/v1/admin/activity', async (req, res) => {
  */
 app.get('/api/v1/admin/stats', async (req, res) => {
     try {
-        // Fetch real-time count from DB for reliability
-        const computerDocs = await Computer.find();
+        // Fetch real-time count from DB for reliability (excluding deleted ones)
+        const computerDocs = await Computer.find({ isDeleted: { $ne: true } });
         const now = new Date();
         const allComputers = computerDocs.map(c => ({
             ...c.toObject(),

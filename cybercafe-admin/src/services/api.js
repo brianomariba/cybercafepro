@@ -563,7 +563,7 @@ export const createTemplate = async (formData) => {
     return response.data;
 };
 export const deleteTemplate = async (id) => (await api.delete(`/admin/templates/${id}`)).data;
-export const downloadTemplateUrl = (id) => `${API_BASE_URL}/templates/${id}/download`;
+export const downloadTemplateUrl = (id, index = 0) => `${API_BASE_URL}/templates/${id}/download?index=${index}`;
 
 // Content Management - Courses (Learning)
 export const getCourses = async () => (await api.get('/courses')).data;
@@ -578,7 +578,7 @@ export const createCourse = async (formData) => {
     return response.data;
 };
 export const deleteCourse = async (id) => (await api.delete(`/admin/courses/${id}`)).data;
-export const downloadCourseUrl = (id) => `${API_BASE_URL}/courses/${id}/download`;
+export const downloadCourseUrl = (id, index = 0) => `${API_BASE_URL}/courses/${id}/download?index=${index}`;
 
 // Content Management - Guides (Guidance)
 export const getGuides = async () => (await api.get('/guides')).data;
@@ -593,7 +593,7 @@ export const createGuide = async (formData) => {
     return response.data;
 };
 export const deleteGuide = async (id) => (await api.delete(`/admin/guides/${id}`)).data;
-export const downloadGuideUrl = (id) => `${API_BASE_URL}/guides/${id}/download`;
+export const downloadGuideUrl = (id, index = 0) => `${API_BASE_URL}/guides/${id}/download?index=${index}`;
 
 // ==================== SETTINGS ====================
 

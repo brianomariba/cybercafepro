@@ -574,7 +574,7 @@ function Users() {
 
                     <Form.Item
                         name="password"
-                        label={editingUser ? "New Password (leave blank to keep current)" : "Password"}
+                        label={editingUser ? "New Password" : "Password"}
                         rules={editingUser ? [] : [
                             { required: true, message: 'Password is required' },
                             { min: 6, message: 'Password must be at least 6 characters' },
@@ -582,7 +582,7 @@ function Users() {
                     >
                         <Input.Password
                             prefix={<KeyOutlined />}
-                            placeholder={editingUser ? "••••••••" : "Enter password"}
+                            placeholder={editingUser ? "Leave blank to keep current password" : "Enter new password"}
                         />
                     </Form.Item>
 

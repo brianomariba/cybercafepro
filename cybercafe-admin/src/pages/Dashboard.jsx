@@ -168,13 +168,18 @@ function Dashboard() {
                                         <div className="ref-panel-title" style={{margin: 0}}>{shop.name.toUpperCase()}</div>
                                         <div className="ref-online-count"><strong>{shop.computers.online} Online</strong><br/>out of {shop.computers.total}</div>
                                     </div>
-                                    <div className="ref-pc-grid" style={{ gridTemplateColumns: `repeat(${Math.max(3, Math.min(5, shop.computers.total))}, 1fr)` }}>
-                                        {shop.computers.list.map(pc => (
+                                    <div className="ref-pc-grid" style={{ gridTemplateColumns: `repeat(${Math.max(3, Math.min(5, shop.computers.online))}, 1fr)` }}>
+                                        {shop.computers.list.filter(pc => pc.isOnline).map(pc => (
                                             <div key={pc.clientId} className="ref-pc-item">
                                                 <div className={`ref-pc-icon ${pc.isOnline ? 'online' : ''}`}><DesktopOutlined /></div>
                                                 <div className="ref-pc-label">{pc.hostname || pc.clientId}</div>
                                             </div>
                                         ))}
+                                        {shop.computers.online === 0 && (
+                                            <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: '#6b7280', padding: '20px 0', fontSize: 13 }}>
+                                                No computers online
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             ))}

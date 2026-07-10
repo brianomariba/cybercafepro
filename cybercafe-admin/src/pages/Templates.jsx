@@ -35,9 +35,11 @@ function Templates() {
             formData.append('type', values.type);
             if (values.featured) formData.append('featured', 'true');
 
-            // Add file if selected
+            // Add files if selected
             if (fileList.length > 0) {
-                formData.append('file', fileList[0].originFileObj);
+                fileList.forEach(f => {
+                    formData.append('files', f.originFileObj);
+                });
             }
 
             await createTemplate(formData);
@@ -64,7 +66,7 @@ function Templates() {
     };
 
     const handleFileChange = ({ fileList: newFileList }) => {
-        setFileList(newFileList.slice(-1)); // Only keep last file
+        setFileList(newFileList);
     };
 
     const columns = [
@@ -73,18 +75,41 @@ function Templates() {
         { title: 'Type', dataIndex: 'type', key: 'type' },
         { title: 'Downloads', dataIndex: 'downloads', key: 'downloads' },
         {
-            title: 'File',
-            key: 'file',
-            render: (_, record) => record.fileUrl ? (
-                <Button
-                    type="link"
-                    icon={<DownloadOutlined />}
-                    href={downloadTemplateUrl(record._id)}
-                    target="_blank"
-                >
-                    {record.fileOriginalName || 'Download'}
-                </Button>
-            ) : <Tag color="default">No file</Tag>
+            title: 'Files',
+            key: 'files',
+            render: (_, record) => {
+                if (record.files && record.files.length > 0) {
+                    return (
+                        <Space direction="vertical" size="small">
+                            {record.files.map((file, index) => (
+                                <Button
+                                    key={index}
+                                    type="link"
+                                    icon={<DownloadOutlined />}
+                                    href={downloadTemplateUrl(record._id, index)}
+                                    target="_blank"
+                                    size="small"
+                                >
+                                    {file.fileOriginalName || `File ${index + 1}`}
+                                </Button>
+                            ))}
+                        </Space>
+                    );
+                } else if (record.fileUrl) {
+                    // Backward compatibility
+                    return (
+                        <Button
+                            type="link"
+                            icon={<DownloadOutlined />}
+                            href={downloadTemplateUrl(record._id, 0)}
+                            target="_blank"
+                        >
+                            {record.fileOriginalName || 'Download'}
+                        </Button>
+                    );
+                }
+                return <Tag color="default">No file</Tag>;
+            }
         },
         {
             title: 'Action',
@@ -152,7 +177,7 @@ function Templates() {
                             beforeUpload={() => false}
                             fileList={fileList}
                             onChange={handleFileChange}
-                            maxCount={1}
+                            multiple={true}
                             accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                         >
                             <Button icon={<UploadOutlined />}>Select File</Button>
