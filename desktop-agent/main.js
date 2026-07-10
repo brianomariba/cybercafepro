@@ -853,6 +853,40 @@ ipcMain.on('record-sale', async (event, saleData) => {
     }
 });
 
+// Initiate STK Push
+ipcMain.on('initiate-stk-push', async (event, { phoneNumber, amount, accountReference, transactionDesc }) => {
+    try {
+        if (!currentSession || !currentSession.user) {
+            throw new Error('No active session.');
+        }
+
+        const response = await axios.post(`${config.server.baseUrl}/api/v1/mpesa/stkpush`, {
+            phoneNumber,
+            amount,
+            accountReference,
+            transactionDesc,
+            agentUsername: currentSession.user
+        });
+
+        event.reply('stk-push-result', {
+            success: true,
+            data: response.data
+        });
+    } catch (error) {
+        let errorMessage = 'Failed to initiate STK push.';
+        if (error.response && error.response.data && error.response.data.error) {
+            errorMessage = error.response.data.error;
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
+        console.error('[M-Pesa] STK Push Error:', errorMessage);
+        event.reply('stk-push-result', {
+            success: false,
+            message: errorMessage
+        });
+    }
+});
+
 // Get sales history for the current agent/user
 ipcMain.on('get-sales-history', async (event) => {
     try {
@@ -1304,6 +1338,10 @@ async function startSession(username) {
         printJobs: [],
         usbDevices: []
     };
+
+    if (socket && socket.connected) {
+        socket.emit('agent-join-till', { username: currentSession.user });
+    }
 
     // Notify Backend
     await sendToServer(SESSION_API_URL, {
@@ -2687,6 +2725,9 @@ function setupSocket() {
     socket.on('connect', () => {
         console.log('Connected to HawkNine Socket Server');
         socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+        if (currentSession) {
+            socket.emit('agent-join-till', { username: currentSession.user });
+        }
     });
 
     socket.on('connect_error', (err) => {
@@ -2700,6 +2741,9 @@ function setupSocket() {
     socket.on('reconnect', (attemptNumber) => {
         console.log(`[SOCKET] Reconnected after ${attemptNumber} attempts`);
         socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+        if (currentSession) {
+            socket.emit('agent-join-till', { username: currentSession.user });
+        }
     });
 
     socket.on('agent-command', (data) => {
@@ -2719,6 +2763,27 @@ function setupSocket() {
     socket.on('agent-public-document-notification', (data) => {
         console.log(`Received Public Document Upload: ${data.orderId}`);
         handlePublicDocument(data);
+    });
+
+    socket.on('payment-completed', (data) => {
+        console.log(`[SOCKET] Payment completed received: ${data.receiptNumber}`);
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('payment-completed', data);
+        }
+    });
+
+    socket.on('payment-name-updated', (data) => {
+        console.log(`[SOCKET] Payment name updated: ${data.receiptNumber}`);
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('payment-name-updated', data);
+        }
+    });
+
+    socket.on('payment-failed', (data) => {
+        console.log(`[SOCKET] Payment failed: ${data.checkoutRequestId}`);
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('payment-failed', data);
+        }
     });
 
     // Listen for user status changes (admin disable/enable)

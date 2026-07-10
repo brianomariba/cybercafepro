@@ -267,13 +267,19 @@ module.exports = function(app, io) {
                     const amountMatch = callbackMetadata.find(item => item.Name === 'Amount');
                     const phoneMatch = callbackMetadata.find(item => item.Name === 'PhoneNumber');
                     
-                    io.emit('payment-completed', await maskPaymentPayload({
+                    const maskedPayload = await maskPaymentPayload({
                         checkoutRequestId: checkoutRequestId,
                         receiptNumber: receiptMatch ? receiptMatch.Value : 'N/A',
                         amount: amountMatch ? amountMatch.Value : 0,
                         reference: phoneMatch ? phoneMatch.Value : 'Unknown',
                         phoneNumber: phoneMatch ? phoneMatch.Value : 'Unknown'
-                    }));
+                    });
+                    
+                    if (transaction && transaction.businessShortCode) {
+                        io.to('till_' + transaction.businessShortCode).emit('payment-completed', maskedPayload);
+                    } else {
+                        io.emit('payment-completed', maskedPayload);
+                    }
                 }
                 
                 return res.json({ ResultCode: 0, ResultDesc: "Accepted but not found" });
@@ -289,8 +295,7 @@ module.exports = function(app, io) {
                 transaction.completedAt = new Date();
                 await transaction.save();
 
-                // Notify agents/dashboard that this payment is complete
-                io.emit('payment-completed', await maskPaymentPayload({
+                const maskedPayload = await maskPaymentPayload({
                     checkoutRequestId: transaction.mpesaCheckoutRequestId,
                     receiptNumber: transaction.mpesaReceiptNumber,
                     amount: transaction.amount,
@@ -299,7 +304,13 @@ module.exports = function(app, io) {
                     description: transaction.description,
                     fullDescription: transaction.fullDescription,
                     payerName: transaction.payerName
-                }));
+                });
+
+                if (transaction.businessShortCode) {
+                    io.to('till_' + transaction.businessShortCode).emit('payment-completed', maskedPayload);
+                } else {
+                    io.emit('payment-completed', maskedPayload);
+                }
 
                 console.log(`Payment successful for request ${checkoutRequestId}`);
 
@@ -326,10 +337,15 @@ module.exports = function(app, io) {
                 transaction.failureReason = callbackData.ResultDesc;
                 await transaction.save();
 
-                io.emit('payment-failed', {
+                const failPayload = {
                     checkoutRequestId: transaction.mpesaCheckoutRequestId,
                     reason: callbackData.ResultDesc
-                });
+                };
+                if (transaction.businessShortCode) {
+                    io.to('till_' + transaction.businessShortCode).emit('payment-failed', failPayload);
+                } else {
+                    io.emit('payment-failed', failPayload);
+                }
 
                 console.log(`Payment failed for request ${checkoutRequestId}: ${callbackData.ResultDesc}`);
             }
@@ -445,10 +461,17 @@ module.exports = function(app, io) {
 
                         if (updateResult.modifiedCount > 0) {
                             // Notify desktop agents of the updated name
-                            io.emit('payment-name-updated', await maskPaymentPayload({
+                            const maskedPayload = await maskPaymentPayload({
                                 receiptNumber: receiptNumber,
                                 payerName: payerName
-                            }));
+                            });
+                            // Fetch the transaction to know its shortcode for routing
+                            const txForRoute = await Transaction.findOne({ mpesaReceiptNumber: receiptNumber });
+                            if (txForRoute && txForRoute.businessShortCode) {
+                                io.to('till_' + txForRoute.businessShortCode).emit('payment-name-updated', maskedPayload);
+                            } else {
+                                io.emit('payment-name-updated', maskedPayload);
+                            }
                         }
                     }
                 }
@@ -534,10 +557,15 @@ module.exports = function(app, io) {
                         { $set: { payerName: payerName } }
                     );
                     console.log(`[C2B] Payer name updated: ${payerName} for receipt ${TransID}`);
-                    io.emit('payment-name-updated', await maskPaymentPayload({
+                    const maskedPayload = await maskPaymentPayload({
                         receiptNumber: TransID,
                         payerName: payerName
-                    }));
+                    });
+                    if (existing.businessShortCode) {
+                        io.to('till_' + existing.businessShortCode).emit('payment-name-updated', maskedPayload);
+                    } else {
+                        io.emit('payment-name-updated', maskedPayload);
+                    }
                 }
                 return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
             }
@@ -572,7 +600,7 @@ module.exports = function(app, io) {
             console.log(`[C2B] Manual payment saved: KSH ${amount} from ${phoneNumber} (${payerName}) — Receipt: ${TransID}`);
 
             // Notify desktop agents
-            io.emit('payment-completed', await maskPaymentPayload({
+            const maskedPayload = await maskPaymentPayload({
                 receiptNumber: TransID,
                 amount: amount,
                 phoneNumber: phoneNumber,
@@ -581,7 +609,12 @@ module.exports = function(app, io) {
                 fullDescription: transaction.fullDescription,
                 reference: transaction.accountReference,
                 isManualPayment: true
-            }));
+            });
+            if (BusinessShortCode) {
+                io.to('till_' + BusinessShortCode).emit('payment-completed', maskedPayload);
+            } else {
+                io.emit('payment-completed', maskedPayload);
+            }
 
             res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
         } catch (error) {

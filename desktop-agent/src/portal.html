@@ -1861,6 +1861,11 @@
                     </div>
                 </div>
 
+                <div class="form-group" id="mpesaPhoneGroup" style="display: none;">
+                    <label class="form-label">M-Pesa Phone Number (for STK Push)</label>
+                    <input type="text" class="form-input" id="mpesaPhone" placeholder="07XXXXXXXX">
+                </div>
+
                 <div class="form-group">
                     <label class="form-label">Note (optional)</label>
                     <input type="text" class="form-input" id="saleNote" placeholder="e.g. Client name, PC number...">
@@ -2635,6 +2640,7 @@
         function selectPaymentMethod(method) {
             const cashBtn = document.getElementById('pmCash');
             const mpesaBtn = document.getElementById('pmMpesa');
+            const mpesaPhoneGroup = document.getElementById('mpesaPhoneGroup');
             if (method === 'mpesa') {
                 mpesaBtn.classList.add('active');
                 mpesaBtn.style.border = '2px solid #108ee9';
@@ -2644,6 +2650,7 @@
                 cashBtn.style.border = '2px solid rgba(255,255,255,0.15)';
                 cashBtn.style.background = 'transparent';
                 cashBtn.style.color = 'var(--text-secondary)';
+                if (mpesaPhoneGroup) mpesaPhoneGroup.style.display = 'block';
             } else {
                 cashBtn.classList.add('active');
                 cashBtn.style.border = '2px solid var(--success)';
@@ -2653,6 +2660,7 @@
                 mpesaBtn.style.border = '2px solid rgba(255,255,255,0.15)';
                 mpesaBtn.style.background = 'transparent';
                 mpesaBtn.style.color = 'var(--text-secondary)';
+                if (mpesaPhoneGroup) mpesaPhoneGroup.style.display = 'none';
             }
         }
 
@@ -2843,6 +2851,62 @@
             let successCount = 0;
             let failCount = 0;
             const totalItems = cart.length;
+            const mpesaPhone = document.getElementById('mpesaPhone')?.value;
+
+            // If M-Pesa is selected and phone is provided, trigger STK Push
+            if (paymentMethod === 'mpesa' && mpesaPhone) {
+                btn.textContent = '📱 Sending STK Push...';
+                try {
+                    await new Promise((resolve, reject) => {
+                        const onResult = (event, result) => {
+                            ipcRenderer.removeListener('stk-push-result', onResult);
+                            if (result.success) resolve(result);
+                            else reject(new Error(result.message));
+                        };
+                        ipcRenderer.on('stk-push-result', onResult);
+                        ipcRenderer.send('initiate-stk-push', {
+                            phoneNumber: mpesaPhone,
+                            amount: cartTotal,
+                            accountReference: 'Cart Checkout',
+                            transactionDesc: note || 'Services Payment'
+                        });
+                        
+                        // We timeout after 50s just in case
+                        setTimeout(() => {
+                            ipcRenderer.removeListener('stk-push-result', onResult);
+                            reject(new Error("STK Push request timed out"));
+                        }, 50000);
+                    });
+                    
+                    // Show a toast that push was sent, now we wait for payment-completed
+                    showToast('STK Push sent! Waiting for customer to enter PIN...', 'success');
+                    btn.textContent = '⏳ Waiting for PIN...';
+                    
+                    // We wait for the 'payment-completed' event before saving the sale records
+                    await new Promise((resolve, reject) => {
+                        const onPayment = (event, data) => {
+                            // Can add checkoutRequestId check if we want, but for now any completed payment is fine
+                            ipcRenderer.removeListener('payment-completed', onPayment);
+                            ipcRenderer.removeListener('payment-failed', onFailed);
+                            showToast('Payment received! Saving sale records...', 'success');
+                            resolve(data);
+                        };
+                        const onFailed = (event, data) => {
+                            ipcRenderer.removeListener('payment-completed', onPayment);
+                            ipcRenderer.removeListener('payment-failed', onFailed);
+                            reject(new Error(data.reason || 'Payment failed or cancelled'));
+                        };
+                        ipcRenderer.on('payment-completed', onPayment);
+                        ipcRenderer.on('payment-failed', onFailed);
+                    });
+                } catch (e) {
+                    showToast('Payment Failed: ' + e.message, 'error');
+                    btn.disabled = false;
+                    btn.textContent = '💰 Confirm Sale';
+                    progressContainer.style.display = 'none';
+                    return; // abort checkout
+                }
+            }
 
             for (let i = 0; i < totalItems; i++) {
                 const item = cart[i];

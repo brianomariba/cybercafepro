@@ -98,6 +98,35 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Agent join specific till room
+    socket.on('agent-join-till', async (data) => {
+        if (data.username) {
+            try {
+                const assignedTill = await Till.findOne({ agents: data.username, isActive: true });
+                if (assignedTill) {
+                    const roomName = 'till_' + assignedTill.tillNumber;
+                    socket.join(roomName);
+                    socket.assignedTill = assignedTill.tillNumber;
+                    console.log(`[SOCKET] Agent ${data.username} joined room ${roomName}`);
+                } else {
+                    console.log(`[SOCKET] Agent ${data.username} has no assigned active till.`);
+                }
+            } catch (err) {
+                console.error(`[SOCKET] Error joining till room for ${data.username}:`, err);
+            }
+        }
+    });
+
+    // Agent leave specific till room
+    socket.on('agent-leave-till', () => {
+        if (socket.assignedTill) {
+            const roomName = 'till_' + socket.assignedTill;
+            socket.leave(roomName);
+            console.log(`[SOCKET] Socket left room ${roomName}`);
+            delete socket.assignedTill;
+        }
+    });
+
     // Agent response (screenshots, errors, etc.)
     socket.on('agent-response', (data) => {
         // Use explicit clientId from data if available, otherwise use socket property
