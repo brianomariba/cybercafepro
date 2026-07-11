@@ -6,3 +6,8 @@ node_modules/
 dist/
 build/
 *.log
+
+# Large installer files
+backend/downloads/*.exe
+backend/downloads/*.dmg
+*.exe
