@@ -1060,7 +1060,12 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
                     <br />This happens when a user directly cancels a job from the printer physical display mid-printing, or a paper jam aborts the job <em>after</em> the computer sent it successfully. 
                     Calculated automatically by finding periods where <strong>Tracked Spooler Prints &gt; Physical Hardware Sheet Δ</strong>.
                 </Text>
-           // ==================== CONSUMABLE PRINT REPORTS ====================
+            </Card>
+        </div>
+    );
+}
+
+// ==================== CONSUMABLE PRINT REPORTS ====================
 function ConsumablePrintReports({ printers, refreshTrigger }) {
     const [loading, setLoading] = useState(false);
     const [dateRange, setDateRange] = useState([dayjs().startOf('month'), dayjs().endOf('month')]);
