@@ -5,7 +5,7 @@ const os = require('os');
 
 // Track processed jobs to avoid duplicates
 let processedJobIds = new Set();
-// Cache printer capabilities — invalidated every 30 minutes to pick up
+// Cache printer capabilities â€” invalidated every 30 minutes to pick up
 // hardware changes (e.g., color cartridge removed, new printer installed)
 let printerCache = new Map();
 const PRINTER_CACHE_INVALIDATION_MS = 30 * 60 * 1000; // 30 minutes
@@ -26,14 +26,21 @@ const PAGE_COUNTER_CACHE_TTL = 30000; // 30 seconds
  * Format: "PrinterName-JobId" (same across all sources)
  */
 function generatePrintJobKey(printerName, jobId, documentName, timestamp) {
-    // Primary key: printer + job ID (always unique per printer per job)
+    // Daily date bucket to prevent job ID recycling collisions
+    // Windows printer job IDs are sequential and RECYCLE (1,2,3...1,2,3).
+    // Without a date, "EPSON-2" from last week collides with today's job ID 2.
+    const ts = timestamp ? new Date(timestamp) : new Date();
+    const dateBucket = ts.getFullYear().toString() +
+        String(ts.getMonth() + 1).padStart(2, '0') +
+        String(ts.getDate()).padStart(2, '0');
+
+    // Primary key: printer + job ID + date (unique per printer per day)
     if (printerName && jobId && jobId !== 0 && jobId !== '0') {
-        return `${printerName}-${jobId}`;
+        return `${printerName}-${jobId}-${dateBucket}`;
     }
     // Fallback: printer + document name + rough timestamp (within 60s window)
     if (printerName && documentName) {
-        const ts = timestamp ? new Date(timestamp).getTime() : Date.now();
-        const timeBucket = Math.floor(ts / 60000); // 1-minute buckets
+        const timeBucket = Math.floor(ts.getTime() / 60000); // 1-minute buckets
         return `${printerName}-${documentName}-${timeBucket}`;
     }
     return null;
@@ -92,8 +99,8 @@ function extractDocNameFromTitle(windowTitle) {
     const extPattern = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|odt|ods|odp|csv|html|htm|xml|jpg|jpeg|png|gif|bmp|tiff|tif|svg|webp|eml|msg)/i;
 
     // Strategy 1: Find a segment that contains a file extension
-    // Split by common delimiters: " - ", " â€” ", " | ", " Â· "
-    const segments = title.split(/\s+[-â€“â€”|Â·]\s+/);
+    // Split by common delimiters: " - ", " Ã¢â‚¬â€ ", " | ", " Ã‚Â· "
+    const segments = title.split(/\s+[-Ã¢â‚¬â€œÃ¢â‚¬â€|Ã‚Â·]\s+/);
     for (const seg of segments) {
         const trimSeg = seg.trim();
         if (extPattern.test(trimSeg)) {
@@ -132,7 +139,7 @@ function extractDocNameFromTitle(windowTitle) {
         if (suffix.test(title)) {
             let docPart = title.replace(suffix, '').trim();
             // Remove common prefixes
-            docPart = docPart.replace(/^(print\s+preview\s*[-â€“â€”:]\s*)/i, '');
+            docPart = docPart.replace(/^(print\s+preview\s*[-Ã¢â‚¬â€œÃ¢â‚¬â€:]\s*)/i, '');
             if (docPart.length >= 2 && docPart.length < 200 && !/^(untitled|new\s+document|document\s*\d*|sheet\s*\d*|presentation\s*\d*)$/i.test(docPart)) {
                 return docPart;
             }
@@ -243,7 +250,7 @@ try {
 
 /**
  * Detect if a printer supports color based on name and driver keywords.
- * This is a universal heuristic fallback â€” no model-specific hardcoding.
+ * This is a universal heuristic fallback Ã¢â‚¬â€ no model-specific hardcoding.
  * The primary detection is via Windows PrintConfiguration (see getPrinterCapabilities & getInstalledPrinters).
  */
 function detectColorCapability(nameLower, driverLower) {
@@ -279,7 +286,7 @@ function detectColorCapability(nameLower, driverLower) {
 
 /**
  * Fallback paper size when no Windows data is available.
- * ZERO GUESSWORK â€” no document name analysis.
+ * ZERO GUESSWORK Ã¢â‚¬â€ no document name analysis.
  * The actual paper size is captured from PrintTicket (psk:PageMediaSize)
  * or Get-PrintConfiguration by the SpoolerWatcher. This function is only
  * called when all Windows sources failed (should be very rare).
@@ -290,7 +297,7 @@ function inferPaperSize(documentName, sizeBytes) {
 
 /**
  * Resolve media/paper type from Windows-reported driver media type string.
- * ZERO GUESSWORK â€” only trusts what the printer driver / PrintTicket reports.
+ * ZERO GUESSWORK Ã¢â‚¬â€ only trusts what the printer driver / PrintTicket reports.
  * Handles both human-readable names AND raw DEVMODE/PrintTicket values.
  * Returns 'Plain Paper' when no data (the most common real-world default).
  */
@@ -303,7 +310,7 @@ function inferMediaType(mediaTypeStr, documentName) {
         media === 'unknown' || media === 'unspecified';
 
     if (!isGenericDefault) {
-        // Driver/PrintTicket reported media types â€” trust these
+        // Driver/PrintTicket reported media types Ã¢â‚¬â€ trust these
         if (media.includes('glossy')) return 'Glossy';
         if (media.includes('matte')) return 'Matte';
         if (media.includes('photo')) return 'Photo Paper';
@@ -324,12 +331,12 @@ function inferMediaType(mediaTypeStr, documentName) {
         if (media.includes('preprinted')) return 'Pre-printed';
     }
 
-    // No guessing from document names â€” default to Plain Paper
+    // No guessing from document names Ã¢â‚¬â€ default to Plain Paper
     return 'Plain Paper';
 }
 
 /**
- * Fallback print quality â€” defaults to Normal.
+ * Fallback print quality Ã¢â‚¬â€ defaults to Normal.
  * Actual quality is captured from PrintTicket when available.
  */
 function inferPrintQuality(documentName, driverName) {
@@ -339,22 +346,22 @@ function inferPrintQuality(documentName, driverName) {
 /**
  * Detect if the print job is color or B&W.
  * 
- * ZERO GUESSWORK â€” only trusts Windows-reported per-job color settings.
+ * ZERO GUESSWORK Ã¢â‚¬â€ only trusts Windows-reported per-job color settings.
  * No filename heuristics, no document name guessing.
  * 
  * Data sources (in priority order):
- *   1. job.JobColor â€” per-job DEVMODE/PrintTicket (from SpoolerWatcher or WMI)
+ *   1. job.JobColor Ã¢â‚¬â€ per-job DEVMODE/PrintTicket (from SpoolerWatcher or WMI)
  *      Values: 'Color', 'Monochrome', 'Grayscale', 1 (mono), 2 (color)
- *   2. job.Color â€” printer-level config (ONLY used to check if printer can do color)
- *      Values: true/false, 'True'/'False' â€” this is NOT per-job!
+ *   2. job.Color Ã¢â‚¬â€ printer-level config (ONLY used to check if printer can do color)
+ *      Values: true/false, 'True'/'False' Ã¢â‚¬â€ this is NOT per-job!
  * 
  * Logic:
- *   - If we have per-job color data â†’ use it (definitive, no guessing)
- *   - If printer is NOT color-capable â†’ B&W (can't print color regardless)
- *   - If no per-job data available â†’ B&W (safe default for billing)
+ *   - If we have per-job color data Ã¢â€ â€™ use it (definitive, no guessing)
+ *   - If printer is NOT color-capable Ã¢â€ â€™ B&W (can't print color regardless)
+ *   - If no per-job data available Ã¢â€ â€™ B&W (safe default for billing)
  */
 function detectPrintType(job) {
-    // 1. Per-job color setting â€” the DEFINITIVE answer
+    // 1. Per-job color setting Ã¢â‚¬â€ the DEFINITIVE answer
     // Comes from: PrintTicket XML (psk:PageOutputColor), WMI Win32_PrintJob.Color,
     //             Get-PrintJob per-job Color, or DEVMODE dmColor
     if (job.JobColor !== undefined && job.JobColor !== null && job.JobColor !== 'Unknown' && job.JobColor !== '') {
@@ -393,7 +400,7 @@ function detectPrintType(job) {
     if (!isColorPrinter) return 'bw';
 
     // 3. Printer CAN do color, but we have NO per-job color data.
-    // Default to B&W â€” without proof from Windows that the user selected color,
+    // Default to B&W Ã¢â‚¬â€ without proof from Windows that the user selected color,
     // we don't assume it. The SpoolerWatcher should capture this for every job;
     // if it didn't, B&W is the safe billing default.
     return 'bw';
@@ -677,7 +684,7 @@ function enablePrintLogging() {
     execFile('wevtutil', ['sl', 'Microsoft-Windows-PrintService/Operational', '/e:true'], (err) => {
         if (err) {
             console.log('[PrintMonitor] Direct enable failed, trying with elevation...');
-            // Try with PowerShell elevation — this shows a UAC prompt if needed
+            // Try with PowerShell elevation â€” this shows a UAC prompt if needed
             const { exec } = require('child_process');
             exec('powershell -NoProfile -Command "Start-Process wevtutil -ArgumentList \'sl\',\'Microsoft-Windows-PrintService/Operational\',\'/e:true\' -Verb RunAs -Wait -WindowStyle Hidden"',
                 { timeout: 15000 },
@@ -703,19 +710,19 @@ function enablePrintLogging() {
 async function verifyPrintLogging() {
     const checkScript = `
 try {
-    $log = Get-WinEvent -ListLog 'Microsoft-Windows-PrintService/Operational' -ErrorAction Stop
-    if ($log.IsEnabled) { 'ENABLED' } else { 'DISABLED' }
+    $val = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-PrintService/Operational' -ErrorAction Stop).Enabled
+    if ($val -eq 1) { 'ENABLED' } else { 'DISABLED' }
 } catch { 'ERROR' }
 `;
     const result = await runPS(checkScript, 10000);
     const status = result.trim();
 
     if (status === 'ENABLED') {
-        console.log('[PrintMonitor] ✅ Print Service Operational log is ENABLED');
+        console.log('[PrintMonitor] âœ… Print Service Operational log is ENABLED');
         return true;
     }
 
-    console.error('[PrintMonitor] ⚠️ Print Service Operational log is NOT enabled! Print tracking will NOT work.');
+    console.error('[PrintMonitor] âš ï¸ Print Service Operational log is NOT enabled! Print tracking will NOT work.');
 
     // Retry enabling
     enablePrintLogging();
@@ -726,13 +733,13 @@ try {
         retryCount++;
         if (retryCount > 10) {
             clearInterval(retryInterval);
-            console.error('[PrintMonitor] ❌ Failed to enable print logging after 10 retries. Print tracking is DISABLED.');
+            console.error('[PrintMonitor] âŒ Failed to enable print logging after 10 retries. Print tracking is DISABLED.');
             return;
         }
 
         const retryResult = await runPS(checkScript, 10000);
         if (retryResult.trim() === 'ENABLED') {
-            console.log('[PrintMonitor] ✅ Print Service Operational log is now ENABLED (after retry)');
+            console.log('[PrintMonitor] âœ… Print Service Operational log is now ENABLED (after retry)');
             clearInterval(retryInterval);
         } else {
             console.log(`[PrintMonitor] Retry ${retryCount}/10: Still not enabled, retrying...`);
@@ -751,6 +758,24 @@ async function getPrintHistory(hoursBack = 24) {
     const script = `
 $results = @()
 try {
+    # Build canceled job IDs set for the same time window
+    $canceledJobIds = @{}
+    try {
+        $cancelEvents = Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-PrintService/Operational'
+            ID = 312, 314
+            StartTime = (Get-Date).AddHours(-${hoursBack})
+        } -ErrorAction SilentlyContinue
+        foreach ($ce in $cancelEvents) {
+            try {
+                $cjobId = $null
+                if ($ce.Properties -and $ce.Properties.Count -ge 1) { $cjobId = $ce.Properties[0].Value }
+                if (-not $cjobId -and $ce.Message -match 'Document\s+(\d+)') { $cjobId = [int]$Matches[1] }
+                if ($cjobId) { $canceledJobIds[[string]$cjobId] = $true }
+            } catch {}
+        }
+    } catch {}
+
     $events = Get-WinEvent -FilterHashtable @{
         LogName = 'Microsoft-Windows-PrintService/Operational'
         ID = 307
@@ -790,7 +815,10 @@ try {
             } catch {}
         }
 
-        # ALWAYS parse message text â€” some EPSON drivers (L3250, L3210) report Param8=1
+        # CANCELED JOB CHECK: Skip this job if it appears in the canceled/deleted set
+        if ($id -and $canceledJobIds.ContainsKey([string]$id)) { continue }
+
+        # ALWAYS parse message text Ã¢â‚¬â€ some EPSON drivers (L3250, L3210) report Param8=1
         # for ALL jobs, but the formatted message text may contain the real page count.
         $msg = $evt.Message
         if ($msg) {
@@ -905,6 +933,36 @@ async function getRecentCompletedJobs(secondsBack = 30) {
     const script = `
 $results = @()
 try {
+    # STEP 1: Build a set of CANCELED/DELETED job IDs from a wider time window.
+    # Event 312 = document deleted, Event 314 = job canceled.
+    # Any job ID appearing here was NOT successfully printed.
+    $canceledJobIds = @{}
+    try {
+        $cancelEvents = Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-PrintService/Operational'
+            ID = 312, 314
+            StartTime = (Get-Date).AddSeconds(-${secondsBack * 2})
+        } -ErrorAction SilentlyContinue
+        foreach ($ce in $cancelEvents) {
+            try {
+                $cjobId = $null
+                try {
+                    $cx = [xml]$ce.ToXml()
+                    if ($cx.Event.UserData.DocumentPrinted) { $cjobId = $cx.Event.UserData.DocumentPrinted.Param1 }
+                    elseif ($cx.Event.UserData.DocumentDeleted) { $cjobId = $cx.Event.UserData.DocumentDeleted.Param1 }
+                } catch {}
+                if (-not $cjobId -and $ce.Properties -and $ce.Properties.Count -ge 1) {
+                    $cjobId = $ce.Properties[0].Value
+                }
+                if (-not $cjobId -and $ce.Message -match 'Document\s+(\d+)') {
+                    $cjobId = [int]$Matches[1]
+                }
+                if ($cjobId) { $canceledJobIds[[string]$cjobId] = $true }
+            } catch {}
+        }
+    } catch {}
+
+    # STEP 2: Get completed print events (Event 307)
     $events = Get-WinEvent -FilterHashtable @{
         LogName = 'Microsoft-Windows-PrintService/Operational'
         ID = 307
@@ -946,12 +1004,15 @@ try {
             } catch {}
         }
 
-        # ALWAYS parse message text â€” some EPSON drivers (L3250, L3210) report Param8=1
+        # CANCELED JOB CHECK: Skip this job if it appears in the canceled/deleted set
+        if ($id -and $canceledJobIds.ContainsKey([string]$id)) { continue }
+
+        # ALWAYS parse message text Ã¢â‚¬â€ some EPSON drivers (L3250, L3210) report Param8=1
         # for ALL jobs, but the formatted message text may contain the real page count.
         # We take the MAX of Param8 and message-parsed count to ensure accuracy.
         $msg = $evt.Message
         if ($msg) {
-            # Parse page count from message â€” try multiple patterns
+            # Parse page count from message Ã¢â‚¬â€ try multiple patterns
             $msgPages = 0
             if ($msg -match 'printed\s+(\d+)\s+page') { $msgPages = [int]$Matches[1] }
             elseif ($msg -match '(\d+)\s+page') { $msgPages = [int]$Matches[1] }
@@ -989,7 +1050,7 @@ try {
             }
         } catch {}
 
-        # 2. Try WMI for this specific job â€” get DEVMODE-level per-job settings
+        # 2. Try WMI for this specific job Ã¢â‚¬â€ get DEVMODE-level per-job settings
         # This is KEY: per-job DEVMODE has the actual paper size, media type, and page count
         $wmiTotalPages = 0
         $wmiMediaType = ""
@@ -1042,7 +1103,7 @@ try {
             $wmiJobName2 = "$printer, $id"
             $wmiJob2 = Get-CimInstance Win32_PrintJob -Filter "Name='$wmiJobName2'" -ErrorAction Stop
             if ($wmiJob2) {
-                # CRITICAL: Get per-job Color from WMI â€” this is the DEVMODE dmColor
+                # CRITICAL: Get per-job Color from WMI Ã¢â‚¬â€ this is the DEVMODE dmColor
                 # NOT the printer default. Values: 'Color' or 'Monochrome'
                 if ($wmiJob2.Color) { $jobColorMode = [string]$wmiJob2.Color }
                 # Check for paper size in Parameters string
@@ -1812,7 +1873,7 @@ if ($bestPages -gt 0 -or $bestCopies -gt 1) {
 
 
 /**
- * AGGRESSIVE page count query â€” used when Event 307 fires but we have
+ * AGGRESSIVE page count query Ã¢â‚¬â€ used when Event 307 fires but we have
  * a suspicious page count (0 or 1) from both the cache and Event Log.
  * 
  * This function tries EVERY available source with retries.
@@ -1822,7 +1883,7 @@ if ($bestPages -gt 0 -or $bestCopies -gt 1) {
  * Returns: { totalPages, pagesPrinted, copies } or null
  */
 async function queryJobPageCountAggressive(printerName, jobId) {
-    // Try up to 3 rapid queries â€” the job may still be briefly in spooler
+    // Try up to 3 rapid queries Ã¢â‚¬â€ the job may still be briefly in spooler
     for (let attempt = 0; attempt < 3; attempt++) {
         const script = `
 $totalPages = 0
@@ -1969,7 +2030,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     (!existing.duplexMode && job.duplexMode) ||
                     (!existing.colorMode && job.colorMode)
                 )) {
-                    // Found a higher page count â€” update the cache
+                    // Found a higher page count Ã¢â‚¬â€ update the cache
                     existing.totalPages = Math.max(job.totalPages || 0, existing.totalPages || 0);
                     if (job.pagesPrinted > (existing.pagesPrinted || 0)) {
                         existing.pagesPrinted = job.pagesPrinted;
@@ -1991,13 +2052,13 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                     existing.cachedAt = Date.now();
                     spoolerCache.set(job.jobKey, existing);
 
-                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} â€” now ${existing.totalPages} pages`);
+                    console.log(`[PrintUpdater] Updated: "${existing.document}" @ ${existing.printer} Ã¢â‚¬â€ now ${existing.totalPages} pages`);
 
                     if (typeof onUpdate === 'function') {
                         onUpdate(job.jobKey, existing);
                     }
                 } else if (!existing && job.totalPages > 0) {
-                    // Job wasn't in cache â€” add it (watcher might have missed it)
+                    // Job wasn't in cache Ã¢â‚¬â€ add it (watcher might have missed it)
                     spoolerCache.set(job.jobKey, {
                         totalPages: job.totalPages,
                         pagesPrinted: job.pagesPrinted || 0,
@@ -2012,7 +2073,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                         cachedAt: Date.now()
                     });
 
-                    console.log(`[PrintUpdater] New job cached: "${job.document}" @ ${job.printer} â€” ${job.totalPages} pages`);
+                    console.log(`[PrintUpdater] New job cached: "${job.document}" @ ${job.printer} Ã¢â‚¬â€ ${job.totalPages} pages`);
 
                     if (typeof onUpdate === 'function') {
                         onUpdate(job.jobKey, spoolerCache.get(job.jobKey));
@@ -2020,7 +2081,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
                 }
             }
         } catch (e) {
-            // Silently fail â€” this is a best-effort background updater
+            // Silently fail Ã¢â‚¬â€ this is a best-effort background updater
         }
 
         running = false;
@@ -2049,7 +2110,7 @@ function startPageCountUpdater(spoolerCache, onUpdate) {
  * to get INSTANT notification when a print job enters the spooler.
  * 
  * Unlike polling (which checks every 1.5s), this fires within milliseconds
- * of the job appearing â€” giving us time to read the full DEVMODE before
+ * of the job appearing Ã¢â‚¬â€ giving us time to read the full DEVMODE before
  * the job completes and the settings are lost.
  * 
  * The watcher emits JSON lines to stdout, one per detected job.
@@ -2963,6 +3024,19 @@ public class DlgReader {
 \$dialogWasOpen = \$false
 \$lastResult = \$null
 
+# CACHED element references for fast polling (avoid expensive tree re-scans)
+\$cachedCopiesEl = \$null
+\$cachedPrinterEl = \$null
+\$cachedDuplexEl = \$null
+\$cachedPaperEl = \$null
+\$cachedOrientEl = \$null
+\$cachedColorEl = \$null
+\$cachedPagesEl = \$null
+\$cachedAppWin = \$null
+\$cachedPid = 0
+\$lastFullScan = [DateTime]::MinValue
+\$FULL_SCAN_INTERVAL_MS = 2000
+
 function Find-UIValue(\$parent, \$name) {
     try {
         \$cond = New-Object System.Windows.Automation.PropertyCondition(
@@ -2971,73 +3045,10 @@ function Find-UIValue(\$parent, \$name) {
         foreach (\$el in \$els) {
             \$ct = \$el.Current.ControlType.ProgrammaticName
             if (\$ct -eq 'ControlType.Text') { continue }
-            # 1. Try ValuePattern (works for text inputs, web controls)
             try {
                 \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                \$val = \$vp.Current.Value
-                if (\$val -and \$val -ne '') { return \$val }
+                return \$vp.Current.Value
             } catch {}
-            # 2. Try SelectionPattern (works for ComboBoxes, ListBoxes - EPSON Paper Type dropdown)
-            try {
-                \$sp = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-                \$sel = \$sp.Current.GetSelection()
-                if (\$sel -and \$sel.Length -gt 0) {
-                    return \$sel[0].Current.Name
-                }
-            } catch {}
-            # 3. For ComboBox: find selected ListItem inside
-            if (\$ct -eq 'ControlType.ComboBox') {
-                try {
-                    \$liCond = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                        [System.Windows.Automation.ControlType]::ListItem)
-                    \$items = \$el.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$liCond)
-                    foreach (\$item in \$items) {
-                        try {
-                            \$si = \$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                            if (\$si.Current.IsSelected) {
-                                return \$item.Current.Name
-                            }
-                        } catch {}
-                    }
-                } catch {}
-                # 3b. Fallback: first child text element often shows the selected value
-                try {
-                    \$firstChild = \$el.FindFirst([System.Windows.Automation.TreeScope]::Children,
-                        [System.Windows.Automation.Condition]::TrueCondition)
-                    if (\$firstChild -and \$firstChild.Current.Name -and \$firstChild.Current.Name -ne \$name -and \$firstChild.Current.Name -ne '') {
-                        return \$firstChild.Current.Name
-                    }
-                } catch {}
-            }
-        }
-    } catch {}
-    # 4. Fallback: search for label text followed by a sibling value control
-    try {
-        \$all = \$parent.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.Condition]::TrueCondition)
-        \$foundLabel = \$false
-        foreach (\$el in \$all) {
-            if (\$el.Current.Name -eq \$name -and \$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Text') {
-                \$foundLabel = \$true
-                continue
-            }
-            if (\$foundLabel) {
-                \$sct = \$el.Current.ControlType.ProgrammaticName
-                if (\$sct -eq 'ControlType.ComboBox' -or \$sct -eq 'ControlType.List' -or \$sct -eq 'ControlType.Edit') {
-                    try {
-                        \$vp2 = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-                        \$v2 = \$vp2.Current.Value
-                        if (\$v2 -and \$v2 -ne '') { return \$v2 }
-                    } catch {}
-                    try {
-                        \$sp2 = \$el.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
-                        \$sel2 = \$sp2.Current.GetSelection()
-                        if (\$sel2 -and \$sel2.Length -gt 0) { return \$sel2[0].Current.Name }
-                    } catch {}
-                }
-                \$foundLabel = \$false
-            }
         }
     } catch {}
     return \$null
@@ -3057,9 +3068,54 @@ function Find-UIText(\$parent, \$pattern) {
     return \$null
 }
 
+function Read-CachedValue(\$el) {
+    if (-not \$el) { return "" }
+    try {
+        \$vp = \$el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        \$val = \$vp.Current.Value
+        if (\$val -and \$val -ne '') { return \$val }
+    } catch {}
+    try {
+        \$rvp = \$el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+        \$val = [string](\$rvp.Current.Value)
+        if (\$val -and \$val -ne '' -and \$val -ne '0') { return \$val }
+    } catch {}
+    try {
+        \$nm = \$el.Current.Name
+        if (\$nm -match '^\d+\$') { return \$nm }
+    } catch {}
+    return ""
+}
+
 while (\$true) {
-    Start-Sleep -Milliseconds 700
+    # Dynamic sleep: 50ms when dialog is open (fast copies polling), 150ms otherwise
+    if (\$dialogWasOpen) { Start-Sleep -Milliseconds 50 } else { Start-Sleep -Milliseconds 150 }
     \$result = \$null
+    \$now = [DateTime]::Now
+    \$needFullScan = (\$now - \$lastFullScan).TotalMilliseconds -gt \$FULL_SCAN_INTERVAL_MS
+
+    # === FAST PATH: Re-read cached elements without tree scan ===
+    if (\$cachedCopiesEl -and -not \$needFullScan) {
+        try {
+            \$fastCopies = Read-CachedValue \$cachedCopiesEl
+            if (\$fastCopies -and \$fastCopies -ne '') {
+                \$copiesInt = [int]\$fastCopies
+                if (\$copiesInt -le 0) { \$copiesInt = 1 }
+                if (\$lastResult) {
+                    \$lastResult.c = \$copiesInt
+                    \$lastResult.t = (Get-Date -Format o)
+                }
+                continue  # Skip the expensive full scan
+            } else {
+                # Cached element went stale, force full scan
+                \$needFullScan = \$true
+                \$cachedCopiesEl = \$null
+            }
+        } catch {
+            \$needFullScan = \$true
+            \$cachedCopiesEl = \$null
+        }
+    }
 
     # === METHOD 1: Office Backstage (Word, Excel, PowerPoint) ===
     \$officeProcs = Get-Process WINWORD,EXCEL,POWERPNT -ErrorAction SilentlyContinue
@@ -3070,65 +3126,192 @@ while (\$true) {
             \$appWin = \$root.FindFirst([System.Windows.Automation.TreeScope]::Children, \$pidCond)
             if (-not \$appWin) { continue }
 
-            \$nameCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::NameProperty, "Copies:")
-            \$typeCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                [System.Windows.Automation.ControlType]::Edit)
-            \$andCond = New-Object System.Windows.Automation.AndCondition(\$nameCond, \$typeCond)
-            \$copiesEdit = \$appWin.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants, \$andCond)
+            \$tcEdit = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+            \$tcSpin = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Spinner)
+            \$tcCombo = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ComboBox)
+            \$condArr = [System.Windows.Automation.Condition[]]@(\$tcEdit, \$tcSpin, \$tcCombo)
+            \$orCond = New-Object System.Windows.Automation.OrCondition(\$condArr)
+
+            \$allControls = \$appWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, \$orCond)
+
+            \$copiesEdit = \$null
+            \$printerEl = \$null
+            \$duplexCombo = \$null
+            \$paperCombo = \$null
+            \$orientCombo = \$null
+            \$colorCombo = \$null
+            \$pagesCombo = \$null
+            
+            foreach (\$el in \$allControls) {
+                \$nm = \$el.Current.Name
+                \$ct = \$el.Current.ControlType.ProgrammaticName
+                
+                # Copies
+                if (-not \$copiesEdit -and \$nm -match '^(Copies|Copies:|Number of copies|Number of Copies:|Number of copies:)\$') {
+                    \$copiesEdit = \$el
+                }
+                # Printer
+                if (-not \$printerEl -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Which Printer|Printer|Active Printer|Printer:)\$') {
+                    \$printerEl = \$el
+                }
+                # Duplex
+                if (-not \$duplexCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Two-Sided Printing|Print on Both Sides|Duplex|2-Sided Printing)\$') {
+                    \$duplexCombo = \$el
+                }
+                # Paper/Page Size
+                if (-not \$paperCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Paper Size|Page Size|Document Size)\$') {
+                    \$paperCombo = \$el
+                }
+                # Orientation
+                if (-not \$orientCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Orientation|Page Orientation)\$') {
+                    \$orientCombo = \$el
+                }
+                # Color / Grayscale
+                if (-not \$colorCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Color|Color Mode|Output Color|Colour|Color/Grayscale)\$') {
+                    \$colorCombo = \$el
+                }
+                # Pages to print
+                if (-not \$pagesCombo -and \$ct -eq 'ControlType.ComboBox' -and \$nm -match '^(Print All Pages|Pages|Which pages|Pages:)\$') {
+                    \$pagesCombo = \$el
+                }
+            }
+            
+            # Fallback for plain number named edits (copies)
+            if (-not \$copiesEdit) {
+                foreach (\$el in \$allControls) {
+                    if (\$el.Current.ControlType.ProgrammaticName -eq 'ControlType.Edit' -and \$el.Current.Name -match '^\d{1,3}\$') {
+                        \$copiesEdit = \$el
+                        break
+                    }
+                }
+            }
 
             if (\$copiesEdit) {
-                \$valP = \$copiesEdit.GetCurrentPattern(
-                    [System.Windows.Automation.ValuePattern]::Pattern)
-                \$copies = [int]\$valP.Current.Value
+                \$copies = 1
+                \$valStr = ""
+                try {
+                    \$valP = \$copiesEdit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                    \$valStr = \$valP.Current.Value
+                } catch {}
+                
+                if ([string]::IsNullOrWhiteSpace(\$valStr) -or \$valStr -eq '0') {
+                    try {
+                        \$rvp = \$copiesEdit.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern)
+                        \$valStr = [string](\$rvp.Current.Value)
+                    } catch {}
+                }
+                
+                if ([string]::IsNullOrWhiteSpace(\$valStr) -or \$valStr -eq '0') {
+                    try {
+                        \$nmVal = \$copiesEdit.Current.Name
+                        if (\$nmVal -match '^\d+\$') {
+                            \$valStr = \$nmVal
+                        }
+                    } catch {}
+                }
 
+                if (-not [string]::IsNullOrWhiteSpace(\$valStr)) {
+                    \$valStr = \$valStr.Replace(',', '.')
+                    try { \$copies = [int][Math]::Round([double]\$valStr) } catch {}
+                }
+                if (\$copies -le 0) { \$copies = 1 }
+
+                # Printer Name
                 \$printer = ""
-                try {
-                    \$pc = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, "Which Printer")
-                    \$pCombo = \$appWin.FindFirst(
-                        [System.Windows.Automation.TreeScope]::Descendants, \$pc)
-                    if (\$pCombo) {
-                        \$pv = \$pCombo.GetCurrentPattern(
-                            [System.Windows.Automation.ValuePattern]::Pattern)
+                if (\$printerEl) {
+                    try {
+                        \$pv = \$printerEl.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
                         \$printer = \$pv.Current.Value
+                    } catch {
+                        try {
+                            \$sp = \$printerEl.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern)
+                            \$sel = \$sp.Current.GetSelection()
+                            if (\$sel -and \$sel.Length -gt 0) { \$printer = \$sel[0].Current.Name }
+                        } catch {}
                     }
-                } catch {}
+                }
+                
+                # Fallback: scan tree for printer brands if ComboBox wasn't found
+                if (-not \$printer) {
+                    try {
+                        \$allEls2 = \$appWin.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+                        foreach (\$el2 in \$allEls2) {
+                            \$n2 = \$el2.Current.Name
+                            if (\$n2 -and \$n2.Length -gt 4 -and \$n2 -match '(?i)(EPSON|Canon|HP\s|Brother|Xerox|Ricoh|Samsung|Lexmark).*Series') {
+                                \$printer = \$n2
+                                break
+                            }
+                        }
+                    } catch {}
+                }
 
+                # Duplex
                 \$duplex = ""
-                try {
-                    \$dc = New-Object System.Windows.Automation.PropertyCondition(
-                        [System.Windows.Automation.AutomationElement]::NameProperty, "Two-Sided Printing")
-                    \$dCombo = \$appWin.FindFirst(
-                        [System.Windows.Automation.TreeScope]::Descendants, \$dc)
-                    if (\$dCombo) {
-                        \$dv = \$dCombo.GetCurrentPattern(
-                            [System.Windows.Automation.ValuePattern]::Pattern)
+                if (\$duplexCombo) {
+                    try {
+                        \$dv = \$duplexCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
                         \$duplex = \$dv.Current.Value
-                    }
-                } catch {}
-
-                # Try to capture paper/media type from Office settings area
+                    } catch {}
+                }
+                
+                # Paper
                 \$officePaper = ""
-                \$officeMedia = ""
-                try {
-                    \$officePaper = Find-UIValue \$appWin "Paper Size"
-                    if (-not \$officePaper) { \$officePaper = Find-UIValue \$appWin "Page Size" }
-                    \$officeMedia = Find-UIValue \$appWin "Paper Type"
-                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media Type" }
-                    if (-not \$officeMedia) { \$officeMedia = Find-UIValue \$appWin "Media type" }
-                } catch {}
-
+                if (\$paperCombo) {
+                    try {
+                        \$pv = \$paperCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officePaper = \$pv.Current.Value
+                    } catch {}
+                }
+                
+                # Orientation
+                \$officeOrient = ""
+                if (\$orientCombo) {
+                    try {
+                        \$ov = \$orientCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officeOrient = \$ov.Current.Value
+                    } catch {}
+                }
+                
+                # Color
+                \$officeColor = ""
+                if (\$colorCombo) {
+                    try {
+                        \$cv = \$colorCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officeColor = \$cv.Current.Value
+                    } catch {}
+                }
+                
+                # Pages
+                \$officePages = ""
+                if (\$pagesCombo) {
+                    try {
+                        \$pgv = \$pagesCombo.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+                        \$officePages = \$pgv.Current.Value
+                    } catch {}
+                }
+                
                 \$result = @{
                     c = \$copies; p = \$printer; d = \$appWin.Current.Name
-                    s = "office"; color = ""; pages = ""
+                    s = "office"
+                    color = if (\$officeColor) { \$officeColor } else { "" }
+                    pages = if (\$officePages) { \$officePages } else { "" }
                     paper = if (\$officePaper) { \$officePaper } else { "" }
-                    media = if (\$officeMedia) { \$officeMedia } else { "" }
-                    orient = ""; duplex = \$duplex; sheets = 0
+                    media = ""
+                    orient = if (\$officeOrient) { \$officeOrient } else { "" }
+                    duplex = \$duplex; sheets = 0
                     final = 0; t = (Get-Date -Format o)
                 }
+                # Cache element references for fast polling
+                \$cachedCopiesEl = \$copiesEdit
+                \$cachedPrinterEl = \$printerEl
+                \$cachedDuplexEl = \$duplexCombo
+                \$cachedPaperEl = \$paperCombo
+                \$cachedOrientEl = \$orientCombo
+                \$cachedColorEl = \$colorCombo
+                \$cachedPagesEl = \$pagesCombo
+                \$cachedAppWin = \$appWin
+                \$cachedPid = \$p.Id
+                \$lastFullScan = \$now
             }
         } catch {}
     }
@@ -3269,16 +3452,8 @@ while (\$true) {
                 \$wName = \$win.Current.Name
                 if (\$wName -match '(Properties|Preferences)' -and \$wName -match '(Printer|EPSON|Canon|HP|Brother|Xerox|Ricoh|Samsung|Lexmark|Series)') {
                     # Found a printer properties dialog
-                    # Search all common label variants for paper/media type
                     \$media = Find-UIValue \$win "Paper Type"
                     if (-not \$media) { \$media = Find-UIValue \$win "Media Type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Paper type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Type" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media" }
-                    # EPSON-specific: some dialogs use "Paper Type:" with colon
-                    if (-not \$media) { \$media = Find-UIValue \$win "Paper Type:" }
-                    if (-not \$media) { \$media = Find-UIValue \$win "Media Type:" }
                     \$color = ""
                     \$copies = ""
                     \$paper = ""
@@ -3344,7 +3519,7 @@ while (\$true) {
                     } catch {}
 
                     # Extract printer name from dialog title (e.g. "EPSON L3150 Series Properties" -> "EPSON L3150 Series")
-                    \$printerFromTitle = \$wName -replace '\\s*(Properties|Preferences).*\$', ''
+                    \$printerFromTitle = \$wName -replace '\s*(Properties|Preferences).*\$', ''
 
                     if (\$media -or \$color -or \$copies) {
                         \$copiesInt = 1
@@ -3377,13 +3552,11 @@ while (\$true) {
         \$dialogWasOpen = \$true
         \$lastResult = \$result
 
-        # Output update (only if values changed to reduce noise)
+        # Output update (continuously)
         \$json = \$result | ConvertTo-Json -Compress
-        if (\$json -ne \$lastJson) {
-            Write-Output \$json
-            [Console]::Out.Flush()
-            \$lastJson = \$json
-        }
+        Write-Output \$json
+        [Console]::Out.Flush()
+        \$lastJson = \$json
     } else {
         # Dialog is NOT open (or not found)
         if (\$dialogWasOpen -and \$lastResult) {
@@ -3398,6 +3571,17 @@ while (\$true) {
             \$dialogWasOpen = \$false
             \$lastResult = \$null
             \$lastJson = ""
+            # Reset cached elements
+            \$cachedCopiesEl = \$null
+            \$cachedPrinterEl = \$null
+            \$cachedDuplexEl = \$null
+            \$cachedPaperEl = \$null
+            \$cachedOrientEl = \$null
+            \$cachedColorEl = \$null
+            \$cachedPagesEl = \$null
+            \$cachedAppWin = \$null
+            \$cachedPid = 0
+            \$lastFullScan = [DateTime]::MinValue
         }
     }
 }
@@ -3466,7 +3650,7 @@ while (\$true) {
             }
         });
 
-        console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 700ms)');
+        console.log('[PRINT-DIALOG] UI monitor started - Office/Chrome/Edge/Adobe/Win32 (polling 150ms)');
         console.log('[PRINT-DIALOG] NOTE: Data is only USED when Event 307 confirms actual printing');
     } catch (e) {
         console.error('[PRINT-DIALOG] Failed to start monitor:', e.message);
@@ -3480,14 +3664,7 @@ while (\$true) {
     return { stop, isRunning: () => running };
 }
 
-/**
- * Get page counters from all installed printers.
- * For Epson printers: reads "Total Sheets" from "Printer and Option Information" dialog
- * (Maintenance tab) which is the hardware sheet counter of ALL physical sheets fed through.
- * Also reads STM3 registry for color/BW breakdown.
- * For network printers: attempts SNMP query.
- * Returns an array of { printerName, totalPages, totalSheets, colorPages, bwPages, ... }
- */
+
 async function getPrinterPageCounters() {
     const script = `
 Add-Type -AssemblyName UIAutomationClient -ErrorAction SilentlyContinue
@@ -3578,14 +3755,6 @@ public class W32POI {
     public const uint DESKTOP_READOBJECTS = 0x0001;
     public const uint DESKTOP_ALL = 0x01FF;
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
-    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
-    [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
-    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
-    [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint a, bool i, int pid);
-    [DllImport("kernel32.dll")] public static extern IntPtr VirtualAllocEx(IntPtr hp, IntPtr a, uint sz, uint t, uint p);
-    [DllImport("kernel32.dll")] public static extern bool VirtualFreeEx(IntPtr hp, IntPtr a, uint sz, uint t);
-    [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr hp, IntPtr a, byte[] b, uint sz, out int r);
-    public const uint TCM_GETITEMCOUNT = 0x1304;
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
     public struct STARTUPINFO {
         public int cb;
@@ -3610,26 +3779,6 @@ public class W32POI {
         SetCursorPos(x, y); Thread.Sleep(200);
         mouse_event(0x0002, 0, 0, 0, 0); Thread.Sleep(100);
         mouse_event(0x0004, 0, 0, 0, 0); Thread.Sleep(300);
-    }
-    public static bool ClickTab(IntPtr tc, int idx) {
-        int pid; GetWindowThreadProcessId(tc, out pid);
-        IntPtr hp = OpenProcess(0x001F0FFF, false, pid);
-        if (hp == IntPtr.Zero) return false;
-        try {
-            IntPtr rb = VirtualAllocEx(hp, IntPtr.Zero, 16, 0x1000, 0x04);
-            if (rb == IntPtr.Zero) return false;
-            try {
-                int ok = SendMessage(tc, 0x130A, (IntPtr)idx, rb);
-                if (ok == 0) return false;
-                byte[] buf = new byte[16]; int rd;
-                ReadProcessMemory(hp, rb, buf, 16, out rd);
-                POINT tl = new POINT(); tl.X = BitConverter.ToInt32(buf,0); tl.Y = BitConverter.ToInt32(buf,4);
-                POINT br = new POINT(); br.X = BitConverter.ToInt32(buf,8); br.Y = BitConverter.ToInt32(buf,12);
-                ClientToScreen(tc, ref tl); ClientToScreen(tc, ref br);
-                DoClick((tl.X+br.X)/2, (tl.Y+br.Y)/2);
-                return true;
-            } finally { VirtualFreeEx(hp, rb, 0, 0x8000); }
-        } finally { CloseHandle(hp); }
     }
     public static string GetText(IntPtr h) {
         StringBuilder sb = new StringBuilder(256);
@@ -3676,38 +3825,9 @@ public class W {
     [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern IntPtr FindWindowEx(IntPtr p, IntPtr a, string c, string t);
     [DllImport("user32.dll", CharSet=CharSet.Auto, EntryPoint="SendMessageW")] public static extern int SendMsg(IntPtr h, uint m, int w, StringBuilder l);
     [DllImport("user32.dll")] public static extern int SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
-    [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
-    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
-    [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint a, bool i, int pid);
-    [DllImport("kernel32.dll")] public static extern IntPtr VirtualAllocEx(IntPtr hp, IntPtr a, uint sz, uint t, uint p);
-    [DllImport("kernel32.dll")] public static extern bool VirtualFreeEx(IntPtr hp, IntPtr a, uint sz, uint t);
-    [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr hp, IntPtr a, byte[] b, uint sz, out int r);
-    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
-    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
-    public const uint TCM_GETITEMCOUNT = 0x1304;
     public static void DoClick(int x, int y) { SetCursorPos(x,y); Thread.Sleep(200); mouse_event(2,0,0,0,0); Thread.Sleep(100); mouse_event(4,0,0,0,0); Thread.Sleep(300); }
     public static string GetText(IntPtr h) { StringBuilder sb = new StringBuilder(256); SendMsg(h, 0x000D, 256, sb); return sb.ToString(); }
-    public static bool ClickTab(IntPtr tc, int idx) {
-        int pid; GetWindowThreadProcessId(tc, out pid);
-        IntPtr hp = OpenProcess(0x001F0FFF, false, pid);
-        if (hp == IntPtr.Zero) return false;
-        try {
-            IntPtr rb = VirtualAllocEx(hp, IntPtr.Zero, 16, 0x1000, 0x04);
-            if (rb == IntPtr.Zero) return false;
-            try {
-                int ok = SendMessage(tc, 0x130A, (IntPtr)idx, rb);
-                if (ok == 0) return false;
-                byte[] buf = new byte[16]; int rd;
-                ReadProcessMemory(hp, rb, buf, 16, out rd);
-                POINT tl = new POINT(); tl.X = BitConverter.ToInt32(buf,0); tl.Y = BitConverter.ToInt32(buf,4);
-                POINT br = new POINT(); br.X = BitConverter.ToInt32(buf,8); br.Y = BitConverter.ToInt32(buf,12);
-                ClientToScreen(tc, ref tl); ClientToScreen(tc, ref br);
-                DoClick((tl.X+br.X)/2, (tl.Y+br.Y)/2);
-                return true;
-            } finally { VirtualFreeEx(hp, rb, 0, 0x8000); }
-        } finally { CloseHandle(hp); }
-    }
 }
 '@
 
@@ -3726,35 +3846,20 @@ try {
     [W]::SetForegroundWindow(\`$hwnd) | Out-Null
     Start-Sleep -Seconds 1
     
-    # Switch to Maintenance tab via cross-process physical tab click
-    \`$tc = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'SysTabControl32', \`$null)
-    if (\`$tc -ne [IntPtr]::Zero) {
-        \`$tabCount = [int][W]::SendMessage(\`$tc, [W]::TCM_GETITEMCOUNT, [IntPtr]::Zero, [IntPtr]::Zero)
-        if (\`$tabCount -gt 0) {
-            [W]::SetForegroundWindow(\`$hwnd) | Out-Null
-            Start-Sleep -Milliseconds 300
-            [W]::ClickTab(\`$tc, \`$tabCount - 1) | Out-Null
-        }
-    }
-    Start-Sleep -Seconds 3
+    # Switch to Maintenance tab (same as working run_sheets.ps1)
+    [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+    Start-Sleep -Seconds 2
     
-    # Find Maintenance tab page - search multiple parents
+    # Find Maintenance tab page
     \`$maintPage = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-    if (\`$maintPage -eq [IntPtr]::Zero -and \`$tc -ne [IntPtr]::Zero) {
-        \`$maintPage = [W]::FindWindowEx(\`$tc, [IntPtr]::Zero, '#32770', 'Maintenance')
-    }
-    if (\`$maintPage -eq [IntPtr]::Zero) {
-        \`$maintPage = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', \`$null)
-    }
     if (\`$maintPage -eq [IntPtr]::Zero) { \`$maintPage = \`$hwnd }
     
     # Find "Printer and Option Information" label
     \`$poiLabel = [W]::FindWindowEx(\`$maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
     if (\`$poiLabel -eq [IntPtr]::Zero) {
         \`$poiLabel = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-    }
-    if (\`$poiLabel -eq [IntPtr]::Zero -and \`$tc -ne [IntPtr]::Zero) {
-        \`$poiLabel = [W]::FindWindowEx(\`$tc, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
     }
     if (\`$poiLabel -eq [IntPtr]::Zero) {
         \`$childDlg = [W]::FindWindowEx(\`$hwnd, [IntPtr]::Zero, '#32770', \`$null)
@@ -3806,7 +3911,31 @@ try {
         \`$editH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Edit', \`$null)
         while (\`$editH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$editH)
-            if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+            if (\`$val -match '^\d+\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
             \`$editH = [W]::FindWindowEx(\`$poiDlg, \`$editH, 'Edit', \`$null)
         }
         
@@ -3814,7 +3943,31 @@ try {
         \`$staticH = [W]::FindWindowEx(\`$poiDlg, [IntPtr]::Zero, 'Static', \`$null)
         while (\`$staticH -ne [IntPtr]::Zero) {
             \`$val = [W]::GetText(\`$staticH)
-            if (\`$val -match '^\d{3,}\`$') { \`$numbers += [int]\`$val }
+            if (\`$val -match '^\d{3,}\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) { \`$numbers += [int]\`$val }
             \`$staticH = [W]::FindWindowEx(\`$poiDlg, \`$staticH, 'Static', \`$null)
         }
         
@@ -3824,7 +3977,31 @@ try {
             \`$subEdit = [W]::FindWindowEx(\`$subDlg, [IntPtr]::Zero, 'Edit', \`$null)
             while (\`$subEdit -ne [IntPtr]::Zero) {
                 \`$val = [W]::GetText(\`$subEdit)
-                if (\`$val -match '^\d+\`$' -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
+                if (\`$val -match '^\d+\`
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]\`$val -gt 0) { \`$numbers += [int]\`$val }
                 \`$subEdit = [W]::FindWindowEx(\`$subDlg, \`$subEdit, 'Edit', \`$null)
             }
             \`$subDlg = [W]::FindWindowEx(\`$poiDlg, \`$subDlg, '#32770', \`$null)
@@ -3883,7 +4060,31 @@ try {
                 # Read results from temp file
                 if (Test-Path $tempFile) {
                     $content = (Get-Content $tempFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-                    if ($content -match '^(-?\d+)\|(-?\d+)$') {
+                    if ($content -match '^(-?\d+)\|(-?\d+)
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) {
                         $sheetResult.TotalSheets = [int]$Matches[1]
                         $sheetResult.BorderlessSheets = [int]$Matches[2]
                     }
@@ -3905,28 +4106,14 @@ try {
             if ($hwnd -ne [IntPtr]::Zero) {
                 [W32POI]::SetForegroundWindow($hwnd) | Out-Null
                 Start-Sleep -Seconds 1
-                # Switch to Maintenance tab via cross-process physical click
-                $tabCtrl = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'SysTabControl32', $null)
-                if ($tabCtrl -ne [IntPtr]::Zero) {
-                    $tabN = [int][W32POI]::SendMessage($tabCtrl, [W32POI]::TCM_GETITEMCOUNT, [IntPtr]::Zero, [IntPtr]::Zero)
-                    if ($tabN -gt 0) {
-                        [W32POI]::SetForegroundWindow($hwnd) | Out-Null
-                        Start-Sleep -Milliseconds 300
-                        [W32POI]::ClickTab($tabCtrl, $tabN - 1) | Out-Null
-                    }
-                }
-                Start-Sleep -Seconds 3
+                [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+                Start-Sleep -Milliseconds 500
+                [System.Windows.Forms.SendKeys]::SendWait("^{TAB}")
+                Start-Sleep -Seconds 2
                 $poiLabel = [IntPtr]::Zero
                 $maintPage = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', 'Maintenance')
-                if ($maintPage -eq [IntPtr]::Zero -and $tabCtrl -ne [IntPtr]::Zero) {
-                    $maintPage = [W32POI]::FindWindowEx($tabCtrl, [IntPtr]::Zero, '#32770', 'Maintenance')
-                }
-                if ($maintPage -eq [IntPtr]::Zero) { $maintPage = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, '#32770', $null) }
                 if ($maintPage -ne [IntPtr]::Zero) { $poiLabel = [W32POI]::FindWindowEx($maintPage, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
                 if ($poiLabel -eq [IntPtr]::Zero) { $poiLabel = [W32POI]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Static', 'Printer and Option Information') }
-                if ($poiLabel -eq [IntPtr]::Zero -and $tabCtrl -ne [IntPtr]::Zero) {
-                    $poiLabel = [W32POI]::FindWindowEx($tabCtrl, [IntPtr]::Zero, 'Static', 'Printer and Option Information')
-                }
                 if ($poiLabel -ne [IntPtr]::Zero) {
                     $rect = New-Object W32POI+RECT
                     [W32POI]::GetWindowRect($poiLabel, [ref]$rect) | Out-Null
@@ -3952,13 +4139,61 @@ try {
                         $editH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Edit', $null)
                         while ($editH -ne [IntPtr]::Zero) {
                             $val = [W32POI]::GetText($editH)
-                            if ($val -match '^\\d+$' -and [int]$val -gt 0) { $numbers += [int]$val }
+                            if ($val -match '^\\d+
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+ -and [int]$val -gt 0) { $numbers += [int]$val }
                             $editH = [W32POI]::FindWindowEx($poiDlg, $editH, 'Edit', $null)
                         }
                         $staticH = [W32POI]::FindWindowEx($poiDlg, [IntPtr]::Zero, 'Static', $null)
                         while ($staticH -ne [IntPtr]::Zero) {
                             $val = [W32POI]::GetText($staticH)
-                            if ($val -match '^\\d{3,}$') { $numbers += [int]$val }
+                            if ($val -match '^\\d{3,}
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+) { $numbers += [int]$val }
                             $staticH = [W32POI]::FindWindowEx($poiDlg, $staticH, 'Static', $null)
                         }
                         $numbers = $numbers | Sort-Object -Descending | Where-Object { $_ -gt 1 } | Select-Object -Unique
@@ -4098,7 +4333,31 @@ try {
         if ($nameLower -match 'microsoft print|onenote|fax|xps|pdf') { continue }
         $isEpson = $printer.DriverName -match 'EPSON' -or $printer.Name -match 'EPSON'
         if ($isEpson) {
-            $baseName = $printer.Name -replace '\\s*\\(Copy\\s*\\d+\\)\\s*$', ''
+            $baseName = $printer.Name -replace '\\s*\\(Copy\\s*\\d+\\)\\s*
+    getRecentPrintJobs,
+    getRecentCompletedJobs,
+    getPrintHistory,
+    getInstalledPrinters,
+    getPrinterCapabilities,
+    getAllPrinterData,
+    clearPrinterCache,
+    enablePrintLogging,
+    verifyPrintLogging,
+    detectPrintType,
+    detectColorCapability,
+    generatePrintJobKey,
+    computeTotalSheets,
+    getSpoolerJobsFast,
+    getJobPageCount,
+    queryJobPageCountAggressive,
+    startPageCountUpdater,
+    startSpoolerWatcher,
+    getRenderedPageCount,
+    startPrintDialogMonitor,
+    getPrinterPageCounters
+};
+
+, ''
             if (-not $epsonGroups.ContainsKey($baseName)) { $epsonGroups[$baseName] = @() }
             $epsonGroups[$baseName] += $printer
         } else {
@@ -4252,6 +4511,7 @@ else { @($results) | ConvertTo-Json -Depth 3 }
         return [];
     }
 }
+
 
 
 module.exports = {

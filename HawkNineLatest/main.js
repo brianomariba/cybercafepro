@@ -547,24 +547,16 @@ function setupTray() {
 }
 
 function setupAutoLaunch() {
-    try {
-        const AutoLaunch = require('auto-launch');
-        const hawkNineLauncher = new AutoLaunch({
-            name: 'HawkNine Agent',
-            path: process.execPath,
-        });
-        hawkNineLauncher.isEnabled().then((isEnabled) => {
-            if (!isEnabled) hawkNineLauncher.enable();
-        });
-    } catch (e) {
-        if (process.platform === 'win32') {
-            const regPath = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-            const appPath = process.execPath;
-            exec(`reg add "${regPath}" /v "HawkNineAgent" /t REG_SZ /d "${appPath}" /f`, (err) => {
-                if (err) console.error('Manual auto-launch failed:', err);
-            });
-        }
-    }
+    const AutoLaunch = require('auto-launch');
+    const autoLauncher = new AutoLaunch({
+        name: 'HawkNine Agent',
+        path: process.execPath,
+    });
+    autoLauncher.isEnabled().then((isEnabled) => {
+        if (!isEnabled) autoLauncher.enable();
+    }).catch((err) => {
+        console.error('AutoLaunch setup failed:', err);
+    });
 }
 
 function sendUpdateInfo() {
@@ -863,7 +855,8 @@ ipcMain.handle('initiate-mpesa-push', async (event, data) => {
             amount: data.amount,
             accountReference: data.accountReference || 'HawkNine',
             transactionDesc: (data.transactionDesc || 'Payment').substring(0, 12),
-            payerName: data.payerName || ''
+            payerName: data.payerName || '',
+            agentUsername: currentSession?.user || ''
         };
 
         const pushRes = await axios.post(`${config.server.baseUrl}/api/v1/mpesa/stkpush`, payload, {
@@ -871,7 +864,7 @@ ipcMain.handle('initiate-mpesa-push', async (event, data) => {
         });
         
         isOnline = true;
-        return { success: true, checkoutRequestId: pushRes.data.checkoutRequestId, message: pushRes.data.message };
+        return { success: true, checkoutRequestId: pushRes.data.checkoutRequestId, message: pushRes.data.message || 'STK push initiated' };
     } catch (error) {
         console.error('[M-Pesa] Backend STK Push failed:', error.message);
         if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
@@ -913,13 +906,13 @@ ipcMain.handle('check-mpesa-status', async (event, checkoutRequestId) => {
 ipcMain.handle('fetch-mpesa-history', async () => {
     try {
         const response = await axios.get(`${config.server.baseUrl}/api/v1/mpesa/transactions`, {
-            params: { limit: 50, till: '5693938' },
+            params: { limit: 50, agentUsername: currentSession?.user || '' },
             timeout: 15000
         });
         return response.data;
     } catch (error) {
         console.error('[M-Pesa] History fetch failed:', error.message);
-        return { success: false, message: error.response?.data?.error || 'Failed to fetch history' };
+        return { success: false, message: error.response?.data?.error || 'Failed to fetch M-Pesa history' };
     }
 });
 
@@ -954,6 +947,13 @@ ipcMain.on('get-sales-history', async (event) => {
 
 // Correct a sale within the 5-minute window
 ipcMain.on('correct-sale', async (event, { transactionId, correctionReason }) => {
+    if (!isOnline) {
+        event.reply('correct-sale-result', {
+            success: false,
+            message: 'Cannot correct sales while offline. Please wait for connection.'
+        });
+        return;
+    }
 
     try {
         const response = await axios.post(
@@ -1378,6 +1378,10 @@ async function startSession(username) {
         user: username,
         timestamp: currentSession.startTime
     });
+
+    if (socket && socket.connected) {
+        socket.emit('agent-join-till', { username });
+    }
 
     // Start File Monitoring
     if (!fileMonitor) {
@@ -2403,25 +2407,20 @@ async function startDataCollection() {
             // Use dialog-captured data if finalized within last 5 minutes
             if (age < 300000) {
                 dialogDataValid = true;
-                
-                // Identify MS Word documents (Word UI scraping is known to be perfectly accurate)
-                const docStr = ((job.document || '') + ' ' + (dialogData.document || '')).toLowerCase();
-                const isWordDoc = docStr.includes('.doc') || docStr.includes('word');
-
-                // For Word documents, ALWAYS trust UI copies. For others, use >= to override safely
-                if (isWordDoc || dialogData.copies >= copies) {
+                // Use >= so that dialog copies=2 correctly overrides a detected copies=2 from DEVMODE/grouping
+                if (dialogData.copies >= copies) {
                     try {
                         const fs = require('fs');
                         const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
-                        fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (finalized). Copies becomes ${dialogData.copies} (isWord: ${isWordDoc})\n`);
+                        fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (finalized). Copies becomes ${dialogData.copies}\n`);
                     } catch (err) {}
-                    console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (finalized ' + Math.round(age/1000) + 's ago) [WordDoc: ' + isWordDoc + ']');
+                    console.log('[PRINT] UI Dialog override: copies ' + copies + ' -> ' + dialogData.copies + ' (finalized ' + Math.round(age/1000) + 's ago)');
                     copies = dialogData.copies;
                     dataSource += '+ui_dialog';
                 }
-                // Use total sheets from browser dialog (e.g. "5 sheets of paper") or always trust for Word
-                if (dialogData.totalSheets > 0 && (isWordDoc || dialogData.totalSheets > totalPages)) {
-                    console.log('[PRINT] UI Dialog override: totalPages ' + totalPages + ' -> ' + dialogData.totalSheets + ' (from dialog sheets count) [WordDoc: ' + isWordDoc + ']');
+                // Use total sheets from browser dialog (e.g. "5 sheets of paper")
+                if (dialogData.totalSheets > 0 && dialogData.totalSheets > totalPages) {
+                    console.log('[PRINT] UI Dialog override: totalPages ' + totalPages + ' -> ' + dialogData.totalSheets + ' (from browser sheets count)');
                     totalPages = dialogData.totalSheets;
                     dataSource += '+ui_sheets';
                 }
@@ -2444,25 +2443,17 @@ async function startDataCollection() {
             // FALLBACK: Race condition fix — Event 307 fired before the dialog monitor
             // had a chance to emit final=1. Trust recently captured (within 300s) dialog values.
             const age = Date.now() - dialogData.timestamp;
-            const docStr = ((job.document || '') + ' ' + (dialogData.document || '')).toLowerCase();
-            const isWordDoc = docStr.includes('.doc') || docStr.includes('word');
-
-            if (age < 300000 && (isWordDoc || dialogData.copies >= copies)) {
+            if (age < 300000 && dialogData.copies >= copies) {
                 try {
                     const fs = require('fs');
                     const debugLogPath = require('path').join(AGENT_STORE_PATH, '.agent_debug.log');
-                    fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (recent non-finalized, ${age}ms). Copies ${copies} -> ${dialogData.copies} (isWord: ${isWordDoc})\n`);
+                    fs.appendFileSync(debugLogPath, `[${new Date().toISOString()}] -> Override SUCCESS (recent non-finalized, ${age}ms). Copies ${copies} -> ${dialogData.copies}\n`);
                 } catch (err) {}
-                console.log('[PRINT] UI Dialog fallback (non-finalized, ' + Math.round(age/1000) + 's old): copies ' + copies + ' -> ' + dialogData.copies + ' [WordDoc: ' + isWordDoc + ']');
+                console.log('[PRINT] UI Dialog fallback (non-finalized, ' + Math.round(age/1000) + 's old): copies ' + copies + ' -> ' + dialogData.copies);
                 copies = dialogData.copies;
                 dataSource += '+ui_dialog_recent';
                 dialogDataValid = true;
                 if (dialogData.color) dialogColorOverride = dialogData.color;
-                
-                // Also apply sheets override for Word docs if available
-                if (isWordDoc && dialogData.totalSheets > 0) {
-                    totalPages = dialogData.totalSheets;
-                }
             } else {
                 try {
                     const fs = require('fs');
@@ -2763,6 +2754,9 @@ function setupSocket() {
     socket.on('connect', () => {
         console.log('Connected to HawkNine Socket Server');
         socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+        if (currentSession && currentSession.user) {
+            socket.emit('agent-join-till', { username: currentSession.user });
+        }
     });
 
     socket.on('connect_error', (err) => {
@@ -2776,6 +2770,9 @@ function setupSocket() {
     socket.on('reconnect', (attemptNumber) => {
         console.log(`[SOCKET] Reconnected after ${attemptNumber} attempts`);
         socket.emit('agent-register', { clientId: CLIENT_ID, hostname: os.hostname() });
+        if (currentSession && currentSession.user) {
+            socket.emit('agent-join-till', { username: currentSession.user });
+        }
     });
 
     socket.on('agent-command', (data) => {
@@ -2795,28 +2792,6 @@ function setupSocket() {
     socket.on('agent-public-document-notification', (data) => {
         console.log(`Received Public Document Upload: ${data.orderId}`);
         handlePublicDocument(data);
-    });
-
-    // M-Pesa payment notifications
-    socket.on('payment-completed', (data) => {
-        console.log(`[SOCKET] M-Pesa Payment Completed: ${data.receiptNumber} (${data.amount})`);
-        if (portalWindow && !portalWindow.isDestroyed()) {
-            portalWindow.webContents.send('mpesa-payment-completed', data);
-        }
-    });
-
-    socket.on('payment-failed', (data) => {
-        console.log(`[SOCKET] M-Pesa Payment Failed: ${data.checkoutRequestId}`);
-        if (portalWindow && !portalWindow.isDestroyed()) {
-            portalWindow.webContents.send('mpesa-payment-failed', data);
-        }
-    });
-
-    socket.on('payment-name-updated', (data) => {
-        console.log(`[SOCKET] M-Pesa Payer Name Updated: ${data.payerName} for ${data.receiptNumber}`);
-        if (portalWindow && !portalWindow.isDestroyed()) {
-            portalWindow.webContents.send('mpesa-name-updated', data);
-        }
     });
 
     // Listen for user status changes (admin disable/enable)
@@ -2861,6 +2836,28 @@ function setupSocket() {
     // Listen for activity records submitted acknowledgement
     socket.on('activity-records-submitted', (data) => {
         console.log(`[SOCKET] Activity records submitted: ${data.count} records, total: ${data.total}`);
+    });
+
+    // M-Pesa Real-time Notifications
+    socket.on('payment-completed', (data) => {
+        console.log('[SOCKET] M-Pesa Payment Completed received:', data.transactionId);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('mpesa-payment-completed', data);
+        }
+    });
+
+    socket.on('payment-failed', (data) => {
+        console.warn('[SOCKET] M-Pesa Payment Failed received:', data.transactionId);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('mpesa-payment-failed', data);
+        }
+    });
+
+    socket.on('payment-name-updated', (data) => {
+        console.log('[SOCKET] M-Pesa Payment Name Updated received:', data.transactionId);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('mpesa-payment-name-updated', data);
+        }
     });
 }
 
@@ -3175,8 +3172,7 @@ async function sendToServer(url, data) {
             } else {
                 console.log(`[SYNC] Queued for retry — ${reason}`);
             }
-            // Don't set isOnline = false here — let only the health check control it.
-            // Setting it here caused cascading false-offline for STK push and other critical ops.
+            isOnline = false;
         } else if (isClientError && isPrintData) {
             // SAFETY NET: Queue print data even on 4xx errors.
             // Print data is irreplaceable — a 4xx could be a temporary API mismatch
