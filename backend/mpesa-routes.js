@@ -170,11 +170,16 @@ module.exports = function(app, io) {
                 if (assignedTill) {
                     tillNumber = assignedTill.tillNumber;
                     console.log(`[M-Pesa] Using dynamically assigned till ${tillNumber} for agent ${agentUsername}`);
+                } else {
+                    console.log(`[M-Pesa] Agent ${agentUsername} is not assigned to any active till.`);
+                    return res.status(403).json({ error: `Agent '${agentUsername}' is not assigned to any active M-Pesa Till. Please assign a till in Admin Settings.` });
                 }
             } catch (err) {
                 console.error('[M-Pesa] Error fetching assigned till:', err);
+                return res.status(500).json({ error: 'Failed to verify agent till assignment' });
             }
         }
+
         const passkey = process.env.MPESA_PASSKEY;
         
         if (!passkey) {
