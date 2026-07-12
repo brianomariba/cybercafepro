@@ -40,7 +40,7 @@ import dayjs from 'dayjs';
 import TillsSettings from './TillsSettings';
 import PaymentSettings from './PaymentSettings';
 import DataManagement from './DataManagement';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp, getRecoverySettings, saveRecoverySettings } from '../services/api';
 
 const { Text, Title } = Typography;
 

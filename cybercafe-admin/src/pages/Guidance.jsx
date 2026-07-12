@@ -28,30 +28,45 @@ function Guidance() {
     const handleCreate = async (values) => {
         setUploading(true);
         try {
-            const formData = new FormData();
-            formData.append('title', values.title);
-            formData.append('description', values.description);
-            formData.append('objective', values.objective);
-            formData.append('type', values.type);
-            formData.append('duration', values.duration);
-            if (values.content) formData.append('content', values.content);
-            if (values.popular) formData.append('popular', 'true');
-
-            // Add files if selected
-            if (fileList.length > 0) {
-                fileList.forEach(f => {
+            if (values.batchMode && fileList.length > 0) {
+                for (const f of fileList) {
+                    const formData = new FormData();
+                    const fileName = f.name ? f.name.replace(/\.[^/.]+$/, "") : values.title;
+                    formData.append('title', fileName || values.title);
+                    formData.append('description', values.description || '');
+                    formData.append('objective', values.objective);
+                    formData.append('type', values.type);
+                    formData.append('duration', values.duration);
+                    if (values.content) formData.append('content', values.content);
+                    if (values.popular) formData.append('popular', 'true');
                     formData.append('files', f.originFileObj);
-                });
+                    await createGuide(formData);
+                }
+            } else {
+                const formData = new FormData();
+                formData.append('title', values.title);
+                formData.append('description', values.description || '');
+                formData.append('objective', values.objective);
+                formData.append('type', values.type);
+                formData.append('duration', values.duration);
+                if (values.content) formData.append('content', values.content);
+                if (values.popular) formData.append('popular', 'true');
+
+                if (fileList.length > 0) {
+                    fileList.forEach(f => {
+                        formData.append('files', f.originFileObj);
+                    });
+                }
+                await createGuide(formData);
             }
 
-            await createGuide(formData);
-            message.success('Guide created successfully');
+            message.success(values.batchMode ? 'Guides batch created successfully' : 'Guide created successfully');
             setModalVisible(false);
             form.resetFields();
             setFileList([]);
             loadData();
         } catch (e) {
-            message.error('Failed to create guide');
+            message.error('Failed to create guide(s)');
         } finally {
             setUploading(false);
         }
@@ -180,7 +195,13 @@ function Guidance() {
                             { value: true, label: 'Yes' }
                         ]} defaultValue={false} />
                     </Form.Item>
-                    <Form.Item label="Upload Resource File (PDF, Word, etc.)">
+                    <Form.Item name="batchMode" label="Upload Mode" tooltip="If batch mode is Yes, each selected file will be created as a separate entry using its filename as the title.">
+                        <Select options={[
+                            { value: false, label: 'Single Entry (Group all files)' },
+                            { value: true, label: 'Batch Mode (One entry per file)' }
+                        ]} defaultValue={false} />
+                    </Form.Item>
+                    <Form.Item label="Upload Resource File(s) (PDF, Word, etc.)">
                         <Upload
                             beforeUpload={() => false}
                             fileList={fileList}
@@ -188,7 +209,7 @@ function Guidance() {
                             multiple={true}
                             accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                         >
-                            <Button icon={<UploadOutlined />}>Select File</Button>
+                            <Button icon={<UploadOutlined />}>Select Files</Button>
                         </Upload>
                     </Form.Item>
                     <Button type="primary" htmlType="submit" block loading={uploading}>Create Guide</Button>

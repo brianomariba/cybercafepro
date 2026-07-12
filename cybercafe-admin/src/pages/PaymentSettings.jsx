@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Select, Button, message, Space, Typography } from 'antd';
+import { Card, Form, Select, Button, message, Space, Typography, InputNumber } from 'antd';
 import { SaveOutlined, DollarOutlined } from '@ant-design/icons';
 import { getSettings, saveSettings } from '../services/api';
 
@@ -15,7 +15,7 @@ export default function PaymentSettings() {
             try {
                 const settingsData = await getSettings();
                 form.setFieldsValue({
-                    paymentRetentionDays: settingsData.paymentRetentionDays || '0',
+                    paymentRetentionDays: settingsData.paymentRetentionDays !== undefined ? Number(settingsData.paymentRetentionDays) : 0,
                     paymentDisplayOption: settingsData.paymentDisplayOption || 'both'
                 });
             } catch (error) {
@@ -29,7 +29,7 @@ export default function PaymentSettings() {
         setLoading(true);
         try {
             await saveSettings({
-                paymentRetentionDays: values.paymentRetentionDays,
+                paymentRetentionDays: Number(values.paymentRetentionDays),
                 paymentDisplayOption: values.paymentDisplayOption
             });
             message.success('Payment settings saved successfully');
@@ -50,14 +50,14 @@ export default function PaymentSettings() {
                 <Form.Item 
                     name="paymentRetentionDays" 
                     label="Automatic Deletion (Retention Rules)" 
-                    extra="Payment records older than this duration will be automatically deleted."
+                    extra="Payment records older than this duration will be automatically deleted. Enter 0 to keep indefinitely."
                 >
-                    <Select>
-                        <Option value="0">Never delete (Keep indefinitely)</Option>
-                        <Option value="30">Delete after 30 days</Option>
-                        <Option value="60">Delete after 60 days</Option>
-                        <Option value="90">Delete after 90 days</Option>
-                    </Select>
+                    <InputNumber 
+                        min={0} 
+                        style={{ width: '100%' }} 
+                        addonAfter="days"
+                        placeholder="e.g. 30 (0 for indefinitely)"
+                    />
                 </Form.Item>
 
                 <Form.Item 

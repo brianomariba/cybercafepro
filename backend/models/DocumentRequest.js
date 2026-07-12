@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const DocumentRequestSchema = new mongoose.Schema({
     orderId: { type: String, required: true, unique: true },
-    customerName: { type: String, required: true },
-    customerPhone: { type: String, required: true },
+    customerName: { type: String },
+    customerPhone: { type: String },
     email: { type: String },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     serviceType: { type: String, required: true },

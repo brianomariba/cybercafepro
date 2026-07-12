@@ -1060,13 +1060,7 @@ function CancelledJobsAudit({ printers, refreshTrigger }) {
                     <br />This happens when a user directly cancels a job from the printer physical display mid-printing, or a paper jam aborts the job <em>after</em> the computer sent it successfully. 
                     Calculated automatically by finding periods where <strong>Tracked Spooler Prints &gt; Physical Hardware Sheet Δ</strong>.
                 </Text>
-            </Card>
-        </div>
-    );
-}
-// ==================== END CANCELLED JOBS TAB ====================
-
-// ==================== CONSUMABLE PRINT REPORTS ====================
+           // ==================== CONSUMABLE PRINT REPORTS ====================
 function ConsumablePrintReports({ printers, refreshTrigger }) {
     const [loading, setLoading] = useState(false);
     const [dateRange, setDateRange] = useState([dayjs().startOf('month'), dayjs().endOf('month')]);
@@ -1101,46 +1095,58 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
             }
 
             // 3. Process Data
-            const pMap = {}; // { printerName: { printed, photocopied, cancelled } }
-            const aMap = {}; // { agentName: { printed, photocopied } }
-            const paperMap = {}; // { paperType: count }
+            const pMap = {}; // { printerName: { printedBW, printedColor, photocopiedBW, photocopiedColor, cancelled } }
+            const aMap = {}; // { agentName: { printedBW, printedColor, photocopiedBW, photocopiedColor } }
+            const paperMap = {}; // { paperType: { bw, color, total } }
 
             // Initialize from connected printers
             (printers || []).forEach(client => {
                 (client.printers || []).forEach(p => {
-                    if (p.name) pMap[p.name] = { printed: 0, photocopied: 0, cancelled: 0 };
+                    if (p.name) pMap[p.name] = { printedBW: 0, printedColor: 0, photocopiedBW: 0, photocopiedColor: 0, cancelled: 0 };
                 });
             });
 
             // Process Print Jobs (Printer Prints, Paper Types)
             allPrintJobs.forEach(job => {
                 const pName = job.printerName || 'Unknown';
-                if (!pMap[pName]) pMap[pName] = { printed: 0, photocopied: 0, cancelled: 0 };
+                if (!pMap[pName]) pMap[pName] = { printedBW: 0, printedColor: 0, photocopiedBW: 0, photocopiedColor: 0, cancelled: 0 };
+                
+                const isColor = job.printType === 'color' || job.color === true;
+                const pages = job.pages || 0;
                 
                 if (job.status === 'Cancelled' || job.status === 'Error') {
-                    pMap[pName].cancelled += job.pages || 0;
+                    pMap[pName].cancelled += pages;
                 } else {
-                    pMap[pName].printed += job.pages || 0;
+                    if (isColor) pMap[pName].printedColor += pages;
+                    else pMap[pName].printedBW += pages;
                 }
 
                 const paperType = job.mediaType || job.paperType || 'Plain Paper';
-                paperMap[paperType] = (paperMap[paperType] || 0) + (job.pages || 0);
+                if (!paperMap[paperType]) paperMap[paperType] = { bw: 0, color: 0, total: 0 };
+                paperMap[paperType].total += pages;
+                if (isColor) paperMap[paperType].color += pages;
+                else paperMap[paperType].bw += pages;
             });
 
             // Process Activity Records (Agent Prints & Photocopies)
             records.forEach(r => {
                 const agent = r.agentUser || 'Unknown';
-                if (!aMap[agent]) aMap[agent] = { printed: 0, photocopied: 0 };
+                if (!aMap[agent]) aMap[agent] = { printedBW: 0, printedColor: 0, photocopiedBW: 0, photocopiedColor: 0 };
+                
+                const isColor = r.serviceName && r.serviceName.toLowerCase().includes('color');
+                const qty = r.quantity || 0;
                 
                 if (r.recordType === 'printing' || (r.serviceName && r.serviceName.toLowerCase().includes('print'))) {
-                    aMap[agent].printed += r.quantity || 0;
+                    if (isColor) aMap[agent].printedColor += qty;
+                    else aMap[agent].printedBW += qty;
                 } else if (r.recordType === 'photocopy' || (r.serviceName && r.serviceName.toLowerCase().includes('copy'))) {
-                    aMap[agent].photocopied += r.quantity || 0;
+                    if (isColor) aMap[agent].photocopiedColor += qty;
+                    else aMap[agent].photocopiedBW += qty;
                     
-                    // Add to printer photocopy count if not handled by hardware counters
                     const pName = r.station || 'Unknown';
-                    if (!pMap[pName]) pMap[pName] = { printed: 0, photocopied: 0, cancelled: 0 };
-                    pMap[pName].photocopied += r.quantity || 0;
+                    if (!pMap[pName]) pMap[pName] = { printedBW: 0, printedColor: 0, photocopiedBW: 0, photocopiedColor: 0, cancelled: 0 };
+                    if (isColor) pMap[pName].photocopiedColor += qty;
+                    else pMap[pName].photocopiedBW += qty;
                 }
             });
 
@@ -1155,29 +1161,23 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
                         return end.isAfter(dateRange[0]) && start.isBefore(dateRange[1]);
                     });
                     
-                    let hardwareCopied = 0;
-                    let hwCancelled = 0;
+                    let hardwareCopiedBW = 0, hardwareCopiedColor = 0;
                     filtered.forEach(interval => {
-                        const hw = interval.counterDiff || 0;
-                        const spool = interval.printPages || 0;
-                        
-                        if (spool > hw) {
-                            hwCancelled += (spool - hw);
-                        } else if (hw > spool) {
-                            hardwareCopied += (hw - spool);
-                        }
+                        hardwareCopiedBW += (interval.photocopiesBW || 0);
+                        hardwareCopiedColor += (interval.photocopiesColor || 0);
                     });
                     
-                    // Hardware is more accurate. If we found hardware counts, override the agent ones.
-                    if (hardwareCopied > 0) pMap[pName].photocopied = hardwareCopied;
-                    if (hwCancelled > 0) pMap[pName].cancelled = hwCancelled;
+                    if (hardwareCopiedBW > 0 || hardwareCopiedColor > 0) {
+                        pMap[pName].photocopiedBW = hardwareCopiedBW;
+                        pMap[pName].photocopiedColor = hardwareCopiedColor;
+                    }
                 }
             }
 
             // Convert to arrays
-            setPrinterData(Object.keys(pMap).map(name => ({ name, ...pMap[name] })).filter(p => p.printed > 0 || p.photocopied > 0 || p.cancelled > 0).sort((a,b) => b.printed - a.printed));
-            setAgentData(Object.keys(aMap).map(name => ({ name, ...aMap[name] })).sort((a,b) => b.printed - a.printed));
-            setPaperData(Object.keys(paperMap).map(name => ({ name, count: paperMap[name] })).sort((a,b) => b.count - a.count));
+            setPrinterData(Object.keys(pMap).map(name => ({ name, ...pMap[name] })).filter(p => p.printedBW > 0 || p.printedColor > 0 || p.photocopiedBW > 0 || p.photocopiedColor > 0 || p.cancelled > 0).sort((a,b) => (b.printedBW+b.printedColor) - (a.printedBW+a.printedColor)));
+            setAgentData(Object.keys(aMap).map(name => ({ name, ...aMap[name] })).sort((a,b) => (b.printedBW+b.printedColor) - (a.printedBW+a.printedColor)));
+            setPaperData(Object.keys(paperMap).map(name => ({ name, ...paperMap[name] })).sort((a,b) => b.total - a.total));
 
         } catch (error) {
             console.error("Error fetching consumables", error);
@@ -1196,16 +1196,16 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
     const handleDownloadCSV = () => {
         let csv = 'Consumable Print Reports\n\n';
         csv += 'Printer Breakdown\n';
-        csv += 'Printer,Printed,Photocopied,Cancelled\n';
-        printerData.forEach(p => csv += `"${p.name}",${p.printed},${p.photocopied},${p.cancelled}\n`);
+        csv += 'Printer,B/W Prints,Color Prints,B/W Copies,Color Copies,Cancelled\n';
+        printerData.forEach(p => csv += `"${p.name}",${p.printedBW},${p.printedColor},${p.photocopiedBW},${p.photocopiedColor},${p.cancelled}\n`);
         
         csv += '\nAgent Breakdown\n';
-        csv += 'Agent,Printed,Photocopied\n';
-        agentData.forEach(a => csv += `"${a.name}",${a.printed},${a.photocopied}\n`);
+        csv += 'Agent,B/W Prints,Color Prints,B/W Copies,Color Copies\n';
+        agentData.forEach(a => csv += `"${a.name}",${a.printedBW},${a.printedColor},${a.photocopiedBW},${a.photocopiedColor}\n`);
         
         csv += '\nPaper Types Breakdown\n';
-        csv += 'Paper Type,Count\n';
-        paperData.forEach(p => csv += `"${p.name}",${p.count}\n`);
+        csv += 'Paper Type,B/W Pages,Color Pages,Total\n';
+        paperData.forEach(p => csv += `"${p.name}",${p.bw},${p.color},${p.total}\n`);
         
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -1216,6 +1216,30 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
         link.click();
         document.body.removeChild(link);
     };
+
+    const printerColumns = [
+        { title: 'Printer', dataIndex: 'name', key: 'name' },
+        { title: 'B/W Prints', dataIndex: 'printedBW', key: 'printedBW', render: v => v > 0 ? v : '-' },
+        { title: 'Color Prints', dataIndex: 'printedColor', key: 'printedColor', render: v => v > 0 ? <Text style={{color:'#e040fb'}}>{v}</Text> : '-' },
+        { title: 'B/W Copies', dataIndex: 'photocopiedBW', key: 'photocopiedBW', render: v => v > 0 ? v : '-' },
+        { title: 'Color Copies', dataIndex: 'photocopiedColor', key: 'photocopiedColor', render: v => v > 0 ? <Text style={{color:'#e040fb'}}>{v}</Text> : '-' },
+        { title: 'Cancelled', dataIndex: 'cancelled', key: 'cancelled', render: v => v > 0 ? <Text type="danger">{v}</Text> : '-' }
+    ];
+
+    const paperColumns = [
+        { title: 'Paper Type', dataIndex: 'name', key: 'name' },
+        { title: 'B/W Pages', dataIndex: 'bw', key: 'bw', render: v => v > 0 ? v : '-' },
+        { title: 'Color Pages', dataIndex: 'color', key: 'color', render: v => v > 0 ? <Text style={{color:'#e040fb'}}>{v}</Text> : '-' },
+        { title: 'Total Pages', dataIndex: 'total', key: 'total', render: v => <strong>{v}</strong> }
+    ];
+
+    const agentColumns = [
+        { title: 'Agent', dataIndex: 'name', key: 'name' },
+        { title: 'B/W Prints', dataIndex: 'printedBW', key: 'printedBW', render: v => v > 0 ? v : '-' },
+        { title: 'Color Prints', dataIndex: 'printedColor', key: 'printedColor', render: v => v > 0 ? <Text style={{color:'#e040fb'}}>{v}</Text> : '-' },
+        { title: 'B/W Copies', dataIndex: 'photocopiedBW', key: 'photocopiedBW', render: v => v > 0 ? v : '-' },
+        { title: 'Color Copies', dataIndex: 'photocopiedColor', key: 'photocopiedColor', render: v => v > 0 ? <Text style={{color:'#e040fb'}}>{v}</Text> : '-' }
+    ];
 
     return (
         <div className="consumables-report-container">
@@ -1238,7 +1262,9 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
                     .no-print { display: none !important; }
                     .ant-layout-sider { display: none !important; }
                     .ant-layout-header { display: none !important; }
-                    h2, h3, h4 { color: black !important; }
+                    h2, h3, h4, .ant-typography { color: black !important; }
+                    .ant-table-thead > tr > th { background: #f0f0f0 !important; color: black !important; border-bottom: 1px solid #ccc !important; }
+                    .ant-table-tbody > tr > td { color: black !important; border-bottom: 1px solid #eee !important; }
                 }
             `}</style>
             
@@ -1263,41 +1289,29 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
             </div>
 
             <div style={{ fontFamily: 'Georgia, serif', fontSize: 16, color: '#e0e0e0', background: 'rgba(255,255,255,0.02)', padding: 40, borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }} className="print-content-area">
-                <Typography.Title level={2} style={{ fontFamily: 'Georgia, serif', marginBottom: 24 }} className="print-heading">Consumable Print Reports</Typography.Title>
-                <div style={{ marginBottom: 32 }}>The administrator should immediately understand:</div>
+                <Typography.Title level={2} style={{ fontFamily: 'Georgia, serif', marginBottom: 24, color: 'inherit' }} className="print-heading">Consumable Print Reports</Typography.Title>
                 
-                {printerData.length > 0 && printerData.map(p => (
-                    <div key={p.name} style={{ marginBottom: 24 }}>
-                        <div>{p.name}</div>
-                        <ul style={{ marginTop: 8, paddingLeft: 24, listStyleType: 'disc' }}>
-                            <li>Printed {p.printed} pages</li>
-                            <li>Photocopied {p.photocopied} pages</li>
-                            <li>Cancelled {p.cancelled} pages</li>
-                        </ul>
-                    </div>
-                ))}
+                <div style={{ marginBottom: 32 }}>
+                    <Typography.Title level={4} style={{ color: 'inherit', marginBottom: 16 }}>Printer Breakdown</Typography.Title>
+                    <Table dataSource={printerData} columns={printerColumns} rowKey="name" pagination={false} size="small" bordered />
+                </div>
+
+                <div style={{ marginBottom: 32 }}>
+                    <Typography.Title level={4} style={{ color: 'inherit', marginBottom: 16 }}>Paper Types Breakdown</Typography.Title>
+                    <Table dataSource={paperData} columns={paperColumns} rowKey="name" pagination={false} size="small" bordered />
+                </div>
                 
-                {agentData.length > 0 && agentData.map(a => (
-                    <div key={a.name} style={{ marginBottom: 24 }}>
-                        <div>Agent {a.name}</div>
-                        <ul style={{ marginTop: 8, paddingLeft: 24, listStyleType: 'disc' }}>
-                            <li>Printed {a.printed} pages</li>
-                            <li>Photocopied {a.photocopied} pages</li>
-                        </ul>
+                {agentData.length > 0 && (
+                    <div style={{ marginBottom: 32 }}>
+                        <Typography.Title level={4} style={{ color: 'inherit', marginBottom: 16 }}>Agent Breakdown</Typography.Title>
+                        <Table dataSource={agentData} columns={agentColumns} rowKey="name" pagination={false} size="small" bordered />
                     </div>
-                ))}
-
-                <div style={{ marginTop: 40, marginBottom: 16 }}>Paper Types</div>
-                <div style={{ marginBottom: 8 }}>Separate usage by:</div>
-                <ul style={{ paddingLeft: 24, marginBottom: 32, listStyleType: 'disc' }}>
-                    {paperData.length > 0 ? paperData.map(p => (
-                        <li key={p.name}>{p.name} ({p.count} pages)</li>
-                    )) : <li>No paper data</li>}
-                </ul>
-
-                <div style={{ marginTop: 40 }}>The purpose is to know paper consumption over time.</div>
-                <div>Reports should be viewable and downloadable where applicable.</div>
+                )}
             </div>
+        </div>
+    );
+}
+// ==================== END CONSUMABLE PRINT REPORTS ====================div>
         </div>
     );
 }

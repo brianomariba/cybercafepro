@@ -388,7 +388,16 @@ module.exports = function(app, io) {
     app.get('/api/v1/mpesa/transactions', async (req, res) => {
         try {
             const limit = parseInt(req.query.limit) || 50;
-            const tillFilter = req.query.till || process.env.MPESA_TILL_NUMBER;
+            let tillFilter = req.query.till || process.env.MPESA_TILL_NUMBER;
+            
+            const agentUsername = req.query.agentUsername;
+            if (agentUsername) {
+                const assignedTill = await Till.findOne({ agents: agentUsername, isActive: true });
+                if (assignedTill) {
+                    tillFilter = assignedTill.tillNumber;
+                    console.log(`[M-Pesa] Fetching history for agent ${agentUsername} on assigned till ${tillFilter}`);
+                }
+            }
             
             const query = { type: 'mpesa' };
             if (tillFilter) {

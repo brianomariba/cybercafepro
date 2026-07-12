@@ -28,28 +28,41 @@ function Templates() {
     const handleCreate = async (values) => {
         setUploading(true);
         try {
-            const formData = new FormData();
-            formData.append('title', values.title);
-            formData.append('description', values.description);
-            formData.append('category', values.category);
-            formData.append('type', values.type);
-            if (values.featured) formData.append('featured', 'true');
-
-            // Add files if selected
-            if (fileList.length > 0) {
-                fileList.forEach(f => {
+            if (values.batchMode && fileList.length > 0) {
+                for (const f of fileList) {
+                    const formData = new FormData();
+                    const fileName = f.name ? f.name.replace(/\.[^/.]+$/, "") : values.title;
+                    formData.append('title', fileName || values.title);
+                    formData.append('description', values.description || '');
+                    formData.append('category', values.category);
+                    formData.append('type', values.type);
+                    if (values.featured) formData.append('featured', 'true');
                     formData.append('files', f.originFileObj);
-                });
+                    await createTemplate(formData);
+                }
+            } else {
+                const formData = new FormData();
+                formData.append('title', values.title);
+                formData.append('description', values.description || '');
+                formData.append('category', values.category);
+                formData.append('type', values.type);
+                if (values.featured) formData.append('featured', 'true');
+
+                if (fileList.length > 0) {
+                    fileList.forEach(f => {
+                        formData.append('files', f.originFileObj);
+                    });
+                }
+                await createTemplate(formData);
             }
 
-            await createTemplate(formData);
-            message.success('Template created successfully');
+            message.success(values.batchMode ? 'Templates batch created successfully' : 'Template created successfully');
             setModalVisible(false);
             form.resetFields();
             setFileList([]);
             loadData();
         } catch (e) {
-            message.error('Failed to create template');
+            message.error('Failed to create template(s)');
         } finally {
             setUploading(false);
         }
@@ -172,7 +185,13 @@ function Templates() {
                             { value: true, label: 'Yes' }
                         ]} defaultValue={false} />
                     </Form.Item>
-                    <Form.Item label="Upload File (PDF, Word, Excel, etc.)">
+                    <Form.Item name="batchMode" label="Upload Mode" tooltip="If batch mode is Yes, each selected file will be created as a separate entry using its filename as the title.">
+                        <Select options={[
+                            { value: false, label: 'Single Entry (Group all files)' },
+                            { value: true, label: 'Batch Mode (One entry per file)' }
+                        ]} defaultValue={false} />
+                    </Form.Item>
+                    <Form.Item label="Upload File(s) (PDF, Word, Excel, etc.)">
                         <Upload
                             beforeUpload={() => false}
                             fileList={fileList}
@@ -180,7 +199,7 @@ function Templates() {
                             multiple={true}
                             accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
                         >
-                            <Button icon={<UploadOutlined />}>Select File</Button>
+                            <Button icon={<UploadOutlined />}>Select Files</Button>
                         </Upload>
                     </Form.Item>
                     <Button type="primary" htmlType="submit" block loading={uploading}>Create Template</Button>

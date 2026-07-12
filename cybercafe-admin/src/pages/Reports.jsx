@@ -85,11 +85,11 @@ function Reports() {
   // Aggregate data
   const totalRevenue = filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
   
-  // For cash vs Mpesa we'd ideally check t.paymentMethod, fallback to rough estimates if unavailable to avoid zeroing out completely on basic backends
-  const cashCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.4);
-  const mpesaCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.6);
+  // Real data only, no fallback estimates
+  const cashCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, t) => sum + (t.amount || 0), 0);
+  const mpesaCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0);
   
-  const servicesRevenue = filteredTransactions.filter(t => t.type === 'session' || t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0) || (totalRevenue * 0.8);
+  const servicesRevenue = filteredTransactions.filter(t => t.type === 'session' || t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0);
   const productsRevenue = totalRevenue - servicesRevenue;
 
   // Group by Agent/User
@@ -101,7 +101,8 @@ function Reports() {
       userMap[u].txnCount += 1;
       const isMpesa = (t.paymentMethod || '').toLowerCase() === 'mpesa';
       if (isMpesa) userMap[u].mpesa += (t.amount || 0);
-      else userMap[u].cash += (t.amount || 0);
+      else if ((t.paymentMethod || '').toLowerCase() === 'cash') userMap[u].cash += (t.amount || 0);
+      // If paymentMethod is something else or missing, it won't be artificially assigned to cash/mpesa
       
       if (t.type === 'session' || t.type === 'task_completion') userMap[u].services += (t.amount || 0);
       else userMap[u].products += (t.amount || 0);
@@ -112,18 +113,18 @@ function Reports() {
       id: u.name,
       name: u.name,
       role: 'Agent',
-      shiftTime: 'Active Today',
+      shiftTime: '-',
       shiftDuration: '-',
-      status: 'Submitted',
-      statusTime: dayjs().format('hh:mm A'),
+      status: '-',
+      statusTime: '-',
       revenueKsh: u.revenue,
-      cashKsh: u.cash || (u.revenue * 0.4),
-      mpesaKsh: u.mpesa || (u.revenue * 0.6),
+      cashKsh: u.cash,
+      mpesaKsh: u.mpesa,
       productsKsh: u.products,
       servicesKsh: u.services,
       revenue: formatKSH(u.revenue),
-      cash: formatKSH(u.cash || (u.revenue * 0.4)),
-      mpesa: formatKSH(u.mpesa || (u.revenue * 0.6)),
+      cash: formatKSH(u.cash),
+      mpesa: formatKSH(u.mpesa),
       products: formatKSH(u.products),
       services: formatKSH(u.services),
       txnCount: u.txnCount,
@@ -431,15 +432,15 @@ function Reports() {
                     </div>
                     <div className="summary-list-item">
                       <span className="summary-list-label">Actual Cash</span>
-                      <span className="summary-list-value">{selectedEmployee.cash}</span>
+                      <span className="summary-list-value" style={{ color: '#94a3b8' }}>N/A</span>
                     </div>
                     <div className="summary-list-item" style={{ marginTop: 12 }}>
                       <span className="summary-list-label">Difference</span>
-                      <span className="summary-list-value green">KSh 0.00</span>
+                      <span className="summary-list-value" style={{ color: '#94a3b8' }}>N/A</span>
                     </div>
                     <div className="summary-list-item">
                       <span className="summary-list-label">Status</span>
-                      <span className="status-tag submitted" style={{ margin: 0 }}>Balanced</span>
+                      <span className="status-tag" style={{ margin: 0, background: 'transparent', border: '1px solid #475569', color: '#94a3b8' }}>Pending</span>
                     </div>
                   </div>
                 </div>
