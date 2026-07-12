@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Switch, Space, Typography, Popconfirm, message, Tag } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ShopOutlined, UserOutlined } from '@ant-design/icons';
-import { getTills, createTill, updateTill, deleteTill, getAgentUsers } from '../services/api';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ShopOutlined, UserOutlined, ApiOutlined } from '@ant-design/icons';
+import { getTills, createTill, updateTill, deleteTill, getAgentUsers, registerC2BUrls } from '../services/api';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -137,8 +137,28 @@ export default function TillsSettings() {
         }
     ];
 
+    const handleRegisterC2B = async () => {
+        const hide = message.loading('Registering C2B URLs with Safaricom...', 0);
+        try {
+            await registerC2BUrls();
+            hide();
+            message.success('C2B Webhook URLs successfully registered with Safaricom!');
+        } catch (error) {
+            hide();
+            message.error(error.response?.data?.error || 'Failed to register C2B URLs');
+        }
+    };
+
     return (
-        <Card title="Child Tills Management" extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>Add Till</Button>}>
+        <Card 
+            title="Child Tills Management" 
+            extra={
+                <Space>
+                    <Button type="default" icon={<ApiOutlined />} onClick={handleRegisterC2B}>Register C2B URLs</Button>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>Add Till</Button>
+                </Space>
+            }
+        >
             <Table 
                 columns={columns} 
                 dataSource={tills} 

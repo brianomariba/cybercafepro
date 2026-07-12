@@ -139,6 +139,13 @@ export const deletePortalUser = async (username) => {
     return response.data;
 };
 
+// ==================== M-PESA C2B ====================
+
+export const registerC2BUrls = async () => {
+    const response = await api.post('/c2b/register');
+    return response.data;
+};
+
 // ==================== CLEANUP ====================
 
 export const cleanupDemoUsers = async () => {
@@ -842,5 +849,8 @@ export default {
     getTills,
     createTill,
     updateTill,
-    deleteTill
+    deleteTill,
+
+    // M-Pesa C2B
+    registerC2BUrls
 };
