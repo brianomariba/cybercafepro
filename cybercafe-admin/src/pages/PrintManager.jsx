@@ -1316,10 +1316,6 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
         </div>
     );
 }
-// ==================== END CONSUMABLE PRINT REPORTS ====================div>
-        </div>
-    );
-}
 // ==================== END CONSUMABLE PRINT REPORTS ====================
 
 
