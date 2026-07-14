@@ -73,6 +73,7 @@ const PageCounterReading = require('./models/PageCounterReading');
 const TrackableService = require('./models/TrackableService');
 const ActivityRecord = require('./models/ActivityRecord');
 const Till = require('./models/Till');
+const whatsapp = require('./whatsapp');
 
 const app = express();
 const server = http.createServer(app);
@@ -4023,6 +4024,37 @@ app.post('/api/v1/agent/activity-records', async (req, res) => {
             count: saved.length,
             total: docs.reduce((s, r) => s + r.totalAmount, 0)
         });
+
+        // Notify via WhatsApp if enabled
+        try {
+            const settingDoc = await Settings.findOne({ key: 'whatsappSettings' });
+            if (settingDoc && settingDoc.value && settingDoc.value.enabled && settingDoc.value.phone) {
+                const totalAmount = docs.reduce((s, r) => s + r.totalAmount, 0);
+                let message = `*Agent Submission Alert*\n\n`;
+                message += `*Agent:* ${agentUser || 'Unknown'}\n`;
+                message += `*Date:* ${recordDate}\n`;
+                message += `*Station:* ${hostname || 'Unknown'}\n`;
+                message += `*Total Revenue:* KSH ${totalAmount.toLocaleString()}\n\n`;
+                message += `*Records:*\n`;
+                
+                const serviceTotals = {};
+                docs.forEach(r => {
+                    if (!serviceTotals[r.serviceName]) serviceTotals[r.serviceName] = { qty: 0, amount: 0 };
+                    serviceTotals[r.serviceName].qty += r.quantity;
+                    serviceTotals[r.serviceName].amount += r.totalAmount;
+                });
+                
+                Object.keys(serviceTotals).forEach(srv => {
+                    message += `- ${srv}: ${serviceTotals[srv].qty} (KSH ${serviceTotals[srv].amount.toLocaleString()})\n`;
+                });
+                
+                message += `\n_HawkNine Automated Alert_`;
+                await whatsapp.sendMessage(settingDoc.value.phone, message);
+            }
+        } catch (waErr) {
+            console.error('Failed to send WhatsApp alert for agent submission:', waErr);
+        }
+
         res.json({ success: true, count: saved.length, batchId });
     } catch (error) {
         console.error('Submit activity records error:', error);
@@ -8436,7 +8468,7 @@ app.post('/api/v1/agent/activity-records', async (req, res) => {
             agentUser: agentUser,
             clientId: clientId || '',
             hostname: hostname || '',
-            date: r.date || date || new Date().toISOString().split('T')[0],
+            date: r.date || recordDate,
             notes: r.notes || '',
             customerName: r.customerName || '',
             paymentMethod: r.paymentMethod || 'cash',
@@ -8449,9 +8481,38 @@ app.post('/api/v1/agent/activity-records', async (req, res) => {
 
         // Notify admin dashboards
         io.emit('activity-records-updated', {
-            agentUser, count: inserted.length, date: date || new Date().toISOString().split('T')[0],
+            agentUser, count: inserted.length, date: recordDate,
             totalAmount: docs.reduce((s, r) => s + r.totalAmount, 0)
         });
+
+        // Notify via WhatsApp if enabled
+        try {
+            const settingDoc = await Settings.findOne({ key: 'whatsappSettings' });
+            if (settingDoc && settingDoc.value && settingDoc.value.enabled && settingDoc.value.phone) {
+                const totalAmount = docs.reduce((s, r) => s + r.totalAmount, 0);
+                let message = `*Agent Submission Alert*\n\n`;
+                message += `*Agent:* ${agentUser || 'Unknown'}\n`;
+                message += `*Date:* ${recordDate}\n`;
+                message += `*Total Revenue:* KSH ${totalAmount.toLocaleString()}\n\n`;
+                message += `*Records:*\n`;
+                
+                const serviceTotals = {};
+                docs.forEach(r => {
+                    if (!serviceTotals[r.serviceName]) serviceTotals[r.serviceName] = { qty: 0, amount: 0 };
+                    serviceTotals[r.serviceName].qty += r.quantity;
+                    serviceTotals[r.serviceName].amount += r.totalAmount;
+                });
+                
+                Object.keys(serviceTotals).forEach(srv => {
+                    message += `- ${srv}: ${serviceTotals[srv].qty} (KSH ${serviceTotals[srv].amount.toLocaleString()})\n`;
+                });
+                
+                message += `\n_HawkNine Automated Alert_`;
+                await whatsapp.sendMessage(settingDoc.value.phone, message);
+            }
+        } catch (waErr) {
+            console.error('Failed to send WhatsApp alert for agent submission:', waErr);
+        }
 
         res.json({ success: true, count: inserted.length, batchId });
     } catch (error) {
@@ -8509,7 +8570,7 @@ app.delete('/api/v1/admin/activity-records', requireAdminAuth, async (req, res) 
 require('./mpesa-routes')(app, io);
 
 // ==================== WHATSAPP INTEGRATION ====================
-const whatsapp = require('./whatsapp');
+// whatsapp required at top
 
 // Start WhatsApp Service
 whatsapp.initWhatsApp();
