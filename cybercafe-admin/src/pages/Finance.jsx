@@ -202,6 +202,40 @@ function Finance() {
 
     const transactionCount = transactions.length + printJobs.length + activityRecords.length;
 
+    const pendingPayments = useMemo(() => {
+        return transactions.filter(t => (t.status || '').toLowerCase() === 'pending').reduce((sum, t) => sum + (t.amount || 0), 0);
+    }, [transactions]);
+
+    const refunds = useMemo(() => {
+        return transactions.filter(t => (t.status || '').toLowerCase() === 'refunded').reduce((sum, t) => sum + (t.amount || 0), 0);
+    }, [transactions]);
+
+    const paymentMethodStats = useMemo(() => {
+        const stats = { Cash: 0, 'M-Pesa': 0, Card: 0 };
+        transactions.forEach(t => {
+            const pm = (t.paymentMethod || '').toLowerCase();
+            if (pm.includes('mpesa') || pm.includes('m-pesa')) stats['M-Pesa'] += t.amount || 0;
+            else if (pm.includes('card')) stats.Card += t.amount || 0;
+            else stats.Cash += t.amount || 0; // Default to cash
+        });
+        const total = stats.Cash + stats['M-Pesa'] + stats.Card;
+        if (total === 0) return {
+            data: [{ type: 'No Data', value: 100 }],
+            cashPct: 0, mpesaPct: 0, cardPct: 0
+        };
+        
+        const data = [];
+        const cashPct = Number(((stats.Cash / total) * 100).toFixed(1));
+        const mpesaPct = Number(((stats['M-Pesa'] / total) * 100).toFixed(1));
+        const cardPct = Number(((stats.Card / total) * 100).toFixed(1));
+        
+        if (cashPct > 0) data.push({ type: 'Cash', value: cashPct });
+        if (mpesaPct > 0) data.push({ type: 'M-Pesa', value: mpesaPct });
+        if (cardPct > 0) data.push({ type: 'Card', value: cardPct });
+        
+        return { data, cashPct, mpesaPct, cardPct };
+    }, [transactions]);
+
     // Revenue by computer
     const computerRevenue = useMemo(() => {
         const map = {};
@@ -676,14 +710,14 @@ function Finance() {
                 {/* 1. Top Statistics Row (8 Mini Cards) */}
                 <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
                     {[
-                        { title: 'Total Revenue', value: totalRevenue, prefix: <DollarOutlined style={{ color: '#00B4D8' }} />, trend: '+13.0%', color: '#00C853' },
-                        { title: 'Total Profit', value: Math.max(0, totalRevenue - totalExpenses), prefix: <RiseOutlined style={{ color: '#00C853' }} />, trend: '+15.6%', color: '#00C853' },
-                        { title: 'Total Expenses', value: totalExpenses, prefix: <ArrowDownOutlined style={{ color: '#e040fb' }} />, trend: '-8.2%', color: '#ef4444' },
-                        { title: 'Transactions', value: transactionCount, prefix: <FileTextOutlined style={{ color: '#00C853' }} />, trend: '+11.4%', color: '#00C853', isNumber: true },
-                        { title: 'Average Transaction', value: transactionCount > 0 ? (totalRevenue / transactionCount) : 0, prefix: <PieChartOutlined style={{ color: '#00B4D8' }} />, trend: '+2.1%', color: '#00C853' },
-                        { title: 'Pending Payments', value: 750, prefix: <ClockCircleOutlined style={{ color: '#FFB703' }} />, trend: '-0%', color: '#FFB703' },
-                        { title: 'Refunds', value: 120, prefix: <ReloadOutlined style={{ color: '#ef4444' }} />, trend: '-5.3%', color: '#ef4444' },
-                        { title: 'Total Records', value: 481, prefix: <ScanOutlined style={{ color: '#7b2cbf' }} />, trend: '+9.7%', color: '#00C853', isNumber: true },
+                        { title: 'Total Revenue', value: totalRevenue, prefix: <DollarOutlined style={{ color: '#00B4D8' }} />, color: '#00C853' },
+                        { title: 'Total Profit', value: Math.max(0, totalRevenue - totalExpenses), prefix: <RiseOutlined style={{ color: '#00C853' }} />, color: '#00C853' },
+                        { title: 'Total Expenses', value: totalExpenses, prefix: <ArrowDownOutlined style={{ color: '#e040fb' }} />, color: '#ef4444' },
+                        { title: 'Transactions', value: transactionCount, prefix: <FileTextOutlined style={{ color: '#00C853' }} />, color: '#00C853', isNumber: true },
+                        { title: 'Average Transaction', value: transactionCount > 0 ? (totalRevenue / transactionCount) : 0, prefix: <PieChartOutlined style={{ color: '#00B4D8' }} />, color: '#00C853' },
+                        { title: 'Pending Payments', value: pendingPayments, prefix: <ClockCircleOutlined style={{ color: '#FFB703' }} />, color: '#FFB703' },
+                        { title: 'Refunds', value: refunds, prefix: <ReloadOutlined style={{ color: '#ef4444' }} />, color: '#ef4444' },
+                        { title: 'Total Records', value: transactionCount, prefix: <ScanOutlined style={{ color: '#7b2cbf' }} />, color: '#00C853', isNumber: true },
                     ].map((stat, i) => (
                         <Col span={3} key={i}>
                             <Card bodyStyle={{ padding: '16px' }} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8 }}>
@@ -691,12 +725,8 @@ function Finance() {
                                     {stat.prefix}
                                     <Text style={{ color: '#94a3b8', fontSize: 12 }}>{stat.title}</Text>
                                 </div>
-                                <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 8 }}>
+                                <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 0 }}>
                                     {stat.isNumber ? stat.value.toLocaleString() : formatKSH(stat.value)}
-                                </div>
-                                <div style={{ fontSize: 10, color: stat.color }}>
-                                    <ArrowUpOutlined style={{ marginRight: 4 }} />
-                                    {stat.trend} <span style={{ color: '#64748b' }}>vs {dateLabel}</span>
                                 </div>
                             </Card>
                         </Col>
@@ -758,22 +788,23 @@ function Finance() {
                         <Card title={<span style={{ color: '#fff' }}>Payment Methods</span>} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, height: '100%' }} bodyStyle={{ padding: 16 }}>
                             <div style={{ height: 180 }}>
                                 <Pie
-                                    data={[
-                                        { type: 'Cash', value: 70 },
-                                        { type: 'M-Pesa', value: 25 },
-                                        { type: 'Card', value: 5 }
-                                    ]}
+                                    data={paymentMethodStats.data}
                                     angleField="value"
                                     colorField="type"
                                     innerRadius={0.7}
-                                    color={['#00B4D8', '#7b2cbf', '#e040fb']}
+                                    color={({ type }) => {
+                                        if (type === 'Cash') return '#00B4D8';
+                                        if (type === 'M-Pesa') return '#7b2cbf';
+                                        if (type === 'Card') return '#e040fb';
+                                        return '#334155';
+                                    }}
                                     legend={false}
                                 />
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-around', marginTop: 12 }}>
-                                <div style={{ textAlign: 'center' }}><Badge color="#00B4D8" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>Cash (70%)</Text></div>
-                                <div style={{ textAlign: 'center' }}><Badge color="#7b2cbf" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>M-Pesa (25%)</Text></div>
-                                <div style={{ textAlign: 'center' }}><Badge color="#e040fb" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>Card (5%)</Text></div>
+                                <div style={{ textAlign: 'center' }}><Badge color="#00B4D8" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>Cash ({paymentMethodStats.cashPct}%)</Text></div>
+                                <div style={{ textAlign: 'center' }}><Badge color="#7b2cbf" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>M-Pesa ({paymentMethodStats.mpesaPct}%)</Text></div>
+                                <div style={{ textAlign: 'center' }}><Badge color="#e040fb" /><br /><Text style={{ color: '#94a3b8', fontSize: 10 }}>Card ({paymentMethodStats.cardPct}%)</Text></div>
                             </div>
                         </Card>
                     </Col>
