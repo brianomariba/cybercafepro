@@ -15,7 +15,9 @@ export default function PaymentSettings() {
             try {
                 const settingsData = await getSettings();
                 form.setFieldsValue({
-                    paymentRetentionDays: settingsData.paymentRetentionDays !== undefined ? Number(settingsData.paymentRetentionDays) : 0,
+                    paymentRetentionValue: settingsData.paymentRetentionValue !== undefined ? Number(settingsData.paymentRetentionValue) : 
+                        (settingsData.paymentRetentionDays !== undefined ? Number(settingsData.paymentRetentionDays) : 0),
+                    paymentRetentionUnit: settingsData.paymentRetentionUnit || 'days',
                     paymentDisplayOption: settingsData.paymentDisplayOption || 'both'
                 });
             } catch (error) {
@@ -29,7 +31,8 @@ export default function PaymentSettings() {
         setLoading(true);
         try {
             await saveSettings({
-                paymentRetentionDays: Number(values.paymentRetentionDays),
+                paymentRetentionValue: Number(values.paymentRetentionValue),
+                paymentRetentionUnit: values.paymentRetentionUnit,
                 paymentDisplayOption: values.paymentDisplayOption
             });
             message.success('Payment settings saved successfully');
@@ -48,16 +51,26 @@ export default function PaymentSettings() {
         }>
             <Form form={form} layout="vertical" onFinish={handleSave}>
                 <Form.Item 
-                    name="paymentRetentionDays" 
                     label="Automatic Deletion (Retention Rules)" 
                     extra="Payment records older than this duration will be automatically deleted. Enter 0 to keep indefinitely."
                 >
-                    <InputNumber 
-                        min={0} 
-                        style={{ width: '100%' }} 
-                        addonAfter="days"
-                        placeholder="e.g. 30 (0 for indefinitely)"
-                    />
+                    <Space.Compact style={{ width: '100%' }}>
+                        <Form.Item name="paymentRetentionValue" noStyle>
+                            <InputNumber 
+                                min={0} 
+                                style={{ width: '70%' }} 
+                                placeholder="e.g. 30 (0 for indefinitely)"
+                            />
+                        </Form.Item>
+                        <Form.Item name="paymentRetentionUnit" noStyle>
+                            <Select style={{ width: '30%' }}>
+                                <Option value="minutes">Minutes</Option>
+                                <Option value="hours">Hours</Option>
+                                <Option value="days">Days</Option>
+                                <Option value="weeks">Weeks</Option>
+                            </Select>
+                        </Form.Item>
+                    </Space.Compact>
                 </Form.Item>
 
                 <Form.Item 

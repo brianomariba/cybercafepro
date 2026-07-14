@@ -8762,13 +8762,35 @@ const runPaymentRetentionJob = async () => {
         const Transaction = require('./models/Transaction');
         const MpesaTransaction = require('./models/MpesaTransaction');
         
-        const retentionSetting = await Settings.findOne({ key: 'paymentRetentionDays' });
-        if (retentionSetting && retentionSetting.value && Number(retentionSetting.value) > 0) {
-            const days = Number(retentionSetting.value);
+        const valueSetting = await Settings.findOne({ key: 'paymentRetentionValue' });
+        const unitSetting = await Settings.findOne({ key: 'paymentRetentionUnit' });
+        
+        let value = 0;
+        let unit = 'days';
+
+        if (valueSetting && valueSetting.value !== undefined) {
+            value = Number(valueSetting.value);
+            unit = unitSetting ? unitSetting.value : 'days';
+        } else {
+            // Fallback to old setting
+            const legacySetting = await Settings.findOne({ key: 'paymentRetentionDays' });
+            if (legacySetting && legacySetting.value !== undefined) {
+                value = Number(legacySetting.value);
+            }
+        }
+
+        if (value > 0) {
             const cutoffDate = new Date();
-            cutoffDate.setDate(cutoffDate.getDate() - days);
             
-            console.log(`[PAYMENT-RETENTION] Running cleanup for records older than ${days} days (${cutoffDate})`);
+            if (unit === 'minutes') {
+                cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
+            } else if (unit === 'hours') {
+                cutoffDate.setHours(cutoffDate.getHours() - value);
+            } else if (unit === 'days') {
+                cutoffDate.setDate(cutoffDate.getDate() - value);
+            } else if (unit === 'weeks') {
+                cutoffDate.setDate(cutoffDate.getDate() - (value * 7));
+            }
             
             // Delete from Transaction where paymentMethod = 'mpesa'
             const txnResult = await Transaction.deleteMany({
@@ -8781,7 +8803,8 @@ const runPaymentRetentionJob = async () => {
             });
             
             if (txnResult.deletedCount > 0 || mpesaResult.deletedCount > 0) {
-                console.log(`[PAYMENT-RETENTION] Deleted ${txnResult.deletedCount} Transactions and ${mpesaResult.deletedCount} MpesaTransactions.`);
+                console.log(`[PAYMENT-RETENTION] Deleted ${txnResult.deletedCount} Transactions and ${mpesaResult.deletedCount} MpesaTransactions older than ${value} ${unit}.`);
+                io.emit('mpesa-retention-cleanup', { timestamp: new Date() }); // optionally notify agents to refresh
             }
         }
     } catch (error) {
@@ -8791,8 +8814,8 @@ const runPaymentRetentionJob = async () => {
 
 // Run on startup
 setTimeout(runPaymentRetentionJob, 5000);
-// Run every 24 hours
-setInterval(runPaymentRetentionJob, 24 * 60 * 60 * 1000);
+// Run every minute
+setInterval(runPaymentRetentionJob, 60 * 1000);
 
 // ==================== SERVER START ====================
 
