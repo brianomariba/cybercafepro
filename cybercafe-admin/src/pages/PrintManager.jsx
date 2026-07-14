@@ -773,35 +773,59 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
         },
     ];
 
-    const renderSimpleAudit = (title, machineVal, submittedVal) => {
-        let diffText = '';
-        const diff = machineVal - submittedVal;
-        if (diff > 0) {
-            diffText = `${diff} Pages Underreported`;
-        } else if (diff < 0) {
-            diffText = `${Math.abs(diff)} Pages Overreported`;
-        } else {
-            diffText = `0 Pages Difference (Matched)`;
+    const auditData = [
+        {
+            key: '1',
+            service: 'Printing',
+            machine: machinePrints.total,
+            employee: submittedPrints,
+        },
+        {
+            key: '2',
+            service: 'Photocopying',
+            machine: machinePhotocopies,
+            employee: submittedPhotocopies,
         }
+    ];
 
-        return (
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: 16, marginBottom: 32, paddingLeft: 16 }}>
-                <Title level={4} style={{ fontFamily: 'Georgia, serif', marginBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: 8 }}>{title}</Title>
-                <div style={{ marginBottom: 16 }}>
-                    <div>Employee Report</div>
-                    <div>{submittedVal} Pages</div>
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                    <div>Machine Counter</div>
-                    <div>{machineVal} Pages</div>
-                </div>
-                <div>
-                    <div>Difference</div>
-                    <div>{diffText}</div>
-                </div>
-            </div>
-        );
-    };
+    const auditColumns = [
+        {
+            title: 'Service',
+            dataIndex: 'service',
+            key: 'service',
+            render: (text) => <strong>{text}</strong>
+        },
+        {
+            title: 'Machine Recorded Pages',
+            dataIndex: 'machine',
+            key: 'machine',
+            render: (val) => <Text>{val.toLocaleString()}</Text>
+        },
+        {
+            title: 'Employee Recorded Pages',
+            dataIndex: 'employee',
+            key: 'employee',
+            render: (val) => <Text>{val.toLocaleString()}</Text>
+        },
+        {
+            title: 'Difference',
+            key: 'difference',
+            render: (_, record) => {
+                const diff = record.machine - record.employee;
+                return <Text strong>{Math.abs(diff).toLocaleString()}</Text>;
+            }
+        },
+        {
+            title: 'Status',
+            key: 'status',
+            render: (_, record) => {
+                const diff = record.machine - record.employee;
+                if (diff > 0) return <Tag color="warning">Underreported (Shortage)</Tag>;
+                if (diff < 0) return <Tag color="error">Overreported (Excess)</Tag>;
+                return <Tag color="success">Matched</Tag>;
+            }
+        }
+    ];
 
     return (
         <div>
@@ -824,18 +848,13 @@ function PhotocopyAudit({ printers, refreshTrigger }) {
             <div style={{ background: 'rgba(255,255,255,0.02)', padding: 32, borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }}>
                 <Title level={2} style={{ fontFamily: 'Georgia, serif', marginBottom: 24 }}>Print Audit Comparison</Title>
                 
-                <div style={{ marginBottom: 32, fontSize: 16, fontFamily: 'Georgia, serif' }}>
-                    The system should compare:
-                    <br /><br />
-                    Employee Recorded Pages
-                    <br />
-                    vs
-                    <br />
-                    Machine Recorded Pages
-                </div>
-
-                {renderSimpleAudit('Printing', machinePrints.total, submittedPrints)}
-                {renderSimpleAudit('Photocopying', machinePhotocopies, submittedPhotocopies)}
+                <Table 
+                    dataSource={auditData} 
+                    columns={auditColumns} 
+                    pagination={false} 
+                    bordered
+                    size="middle"
+                />
             </div>
 
             {/* ---- AGENT BREAKDOWN ---- */}
