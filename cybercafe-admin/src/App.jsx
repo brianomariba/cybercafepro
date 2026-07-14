@@ -424,10 +424,16 @@ function App() {
   const updateSystemStatus = async () => {
     try {
       const stats = await getStats();
-      if (stats && stats.computers) {
+      if (stats && stats.shops) {
+        let totalOnline = 0;
+        let totalActive = 0;
+        stats.shops.forEach(shop => {
+          totalOnline += shop.computers?.online || 0;
+          totalActive += shop.sessions?.active || 0;
+        });
         setSystemStats({
-          online: stats.computers.online || 0,
-          active: stats.computers.activeSessions || 0
+          online: totalOnline,
+          active: totalActive
         });
       }
     } catch (error) {
