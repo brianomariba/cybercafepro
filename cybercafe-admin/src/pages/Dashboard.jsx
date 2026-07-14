@@ -50,14 +50,39 @@ function Dashboard() {
         xField: 'type',
         yField: 'value',
         color,
-        columnWidthRatio: 0.6,
-        xAxis: { label: { style: { fill: '#9ca3af', fontSize: 10 } }, grid: null, line: null },
-        yAxis: { label: { style: { fill: '#9ca3af', fontSize: 10 } }, grid: { line: { style: { stroke: 'rgba(255,255,255,0.05)' } } } },
-        label: {
-            position: 'top',
-            style: { fill: '#ffffff', opacity: 0.8, fontSize: 10 },
+        columnWidthRatio: 0.4,
+        theme: 'dark',
+        style: {
+            radiusTopLeft: 6,
+            radiusTopRight: 6,
         },
-        tooltip: false,
+        axis: {
+            x: {
+                labelFill: '#d1d5db',
+                labelFontSize: 11,
+                tick: false,
+            },
+            y: {
+                labelFill: '#9ca3af',
+                gridLineDash: [4, 4],
+                gridStroke: 'rgba(255, 255, 255, 0.1)',
+            }
+        },
+        label: {
+            content: (d) => d.value > 0 ? `KSH ${d.value.toLocaleString()}` : '',
+            position: 'top',
+            style: { fill: '#ffffff', fontSize: 11, fontWeight: 600, dy: -5 },
+        },
+        tooltip: {
+            title: (d) => d.type,
+            items: [{ field: 'value', name: 'Revenue' }],
+        },
+        animation: {
+            appear: {
+                animation: 'scale-in-y',
+                duration: 800,
+            },
+        },
         height: 200,
         appendPadding: [10, 0, 0, 0]
     });

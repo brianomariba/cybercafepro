@@ -2029,7 +2029,7 @@
     </div>
 
     <script>
-        const { ipcRenderer } = require('electron');
+        const { ipcRenderer, webUtils } = require('electron');
 
         // State
         let currentUser = null;
@@ -2557,7 +2557,7 @@
 
             for (let i = 0; i < totalFiles; i++) {
                 const file = fileInput.files[i];
-                const filePath = file.path; // Electron with nodeIntegration: true provides file.path
+                const filePath = file.path || (webUtils ? webUtils.getPathForFile(file) : ''); 
                 const fileTitle = totalFiles > 1 ? `${title} (${file.name})` : title;
 
                 btn.textContent = `Uploading ${i + 1} of ${totalFiles}...`;
