@@ -17,7 +17,7 @@ import { Pie } from '@ant-design/charts';
 import dayjs from 'dayjs';
 import './Reports.css';
 
-import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getTasks } from '../services/api';
+import { getTransactions, getTransactionSummary, getSessions, getComputers, getPrintJobs, getTasks, getActivityRecords } from '../services/api';
 
 const { TabPane } = Tabs;
 
@@ -33,15 +33,17 @@ function Reports() {
   const [sessions, setSessions] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [printJobs, setPrintJobs] = useState([]);
+  const [activityRecords, setActivityRecords] = useState([]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-        const [txnData, sessionData, printData, taskData] = await Promise.all([
+        const [txnData, sessionData, printData, taskData, activityData] = await Promise.all([
             getTransactions({ limit: 500 }).catch(() => []),
             getSessions({ limit: 500 }).catch(() => []),
             getPrintJobs({ limit: 500 }).catch(() => []),
             getTasks().catch(() => []),
+            getActivityRecords({ limit: 500 }).catch(() => [])
         ]);
 
         const ensureArray = (data) => {
@@ -58,6 +60,7 @@ function Reports() {
         setSessions(ensureArray(sessionData));
         setPrintJobs(ensureArray(printData));
         setTasks(ensureArray(taskData));
+        setActivityRecords(ensureArray(activityData));
     } catch (error) {
         console.error('Failed to fetch report data:', error);
         message.error('Failed to load real data, using empty sets');
@@ -81,15 +84,26 @@ function Reports() {
   const filteredTransactions = filterByDate(transactions);
   const filteredSessions = filterByDate(sessions, 'receivedAt');
   const filteredTasks = filterByDate(tasks);
+  const filteredActivityRecords = filterByDate(activityRecords, 'submittedAt');
   
   // Aggregate data
-  const totalRevenue = filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalRevenue = 
+    filteredTransactions.reduce((sum, t) => sum + (t.amount || 0), 0) +
+    filteredActivityRecords.reduce((sum, a) => sum + (a.totalAmount || 0), 0);
   
   // Real data only, no fallback estimates
-  const cashCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, t) => sum + (t.amount || 0), 0);
-  const mpesaCollected = filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashCollected = 
+    filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, t) => sum + (t.amount || 0), 0) +
+    filteredActivityRecords.filter(a => (a.paymentMethod || '').toLowerCase() === 'cash').reduce((sum, a) => sum + (a.totalAmount || 0), 0);
+    
+  const mpesaCollected = 
+    filteredTransactions.filter(t => (t.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, t) => sum + (t.amount || 0), 0) +
+    filteredActivityRecords.filter(a => (a.paymentMethod || '').toLowerCase() === 'mpesa').reduce((sum, a) => sum + (a.totalAmount || 0), 0);
   
-  const servicesRevenue = filteredTransactions.filter(t => t.type === 'session' || t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0);
+  const servicesRevenue = 
+    filteredTransactions.filter(t => t.type === 'session' || t.type === 'task_completion').reduce((sum, t) => sum + (t.amount || 0), 0) +
+    filteredActivityRecords.reduce((sum, a) => sum + (a.totalAmount || 0), 0);
+    
   const productsRevenue = totalRevenue - servicesRevenue;
 
   // Group by Agent/User
@@ -106,6 +120,18 @@ function Reports() {
       
       if (t.type === 'session' || t.type === 'task_completion') userMap[u].services += (t.amount || 0);
       else userMap[u].products += (t.amount || 0);
+  });
+  
+  filteredActivityRecords.forEach(a => {
+      const u = a.agentUser || 'System';
+      if (!userMap[u]) userMap[u] = { name: u, revenue: 0, cash: 0, mpesa: 0, products: 0, services: 0, txnCount: 0 };
+      userMap[u].revenue += (a.totalAmount || 0);
+      userMap[u].txnCount += 1;
+      const isMpesa = (a.paymentMethod || '').toLowerCase() === 'mpesa';
+      if (isMpesa) userMap[u].mpesa += (a.totalAmount || 0);
+      else if ((a.paymentMethod || '').toLowerCase() === 'cash') userMap[u].cash += (a.totalAmount || 0);
+      
+      userMap[u].services += (a.totalAmount || 0);
   });
 
   const employeesData = Object.values(userMap).map((u, i) => ({
