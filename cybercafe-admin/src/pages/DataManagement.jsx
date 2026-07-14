@@ -26,8 +26,12 @@ import {
   clearAllFinanceData,
   clearAllReportsData,
   deleteAllLandingDocumentData,
-  getDatabaseStats
+  getDatabaseStats,
+  createBackup,
+  restoreBackup
 } from '../services/api';
+
+import { Upload } from 'antd';
 
 const { TabPane } = Tabs;
 
@@ -37,6 +41,10 @@ function DataManagement() {
   const [cleaningFinance, setCleaningFinance] = useState(false);
   const [cleaningReports, setCleaningReports] = useState(false);
   const [dbStats, setDbStats] = useState(null);
+
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [lastBackupDate, setLastBackupDate] = useState(null);
 
   const fetchDbStats = async () => {
     try {
@@ -152,6 +160,41 @@ function DataManagement() {
     message.warning('System reset initiated. (Not implemented in demo)');
   };
 
+  const handleCreateBackup = async () => {
+    setIsBackingUp(true);
+    try {
+      const data = await createBackup();
+      const url = window.URL.createObjectURL(new Blob([data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `hawknine-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setLastBackupDate(new Date().toLocaleString());
+      message.success('Backup created successfully');
+    } catch (error) {
+      message.error('Failed to create backup');
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleRestoreBackup = async (options) => {
+    const { file, onSuccess, onError } = options;
+    setIsRestoring(true);
+    try {
+      await restoreBackup(file);
+      message.success('Database restored successfully');
+      onSuccess('ok');
+    } catch (error) {
+      message.error(error.response?.data?.error || 'Failed to restore backup');
+      onError(error);
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   return (
     <div className="data-management-container">
       {/* Header */}
@@ -172,7 +215,7 @@ function DataManagement() {
             <div className="dm-stat-icon"><SafetyCertificateOutlined /></div>
             <div className="dm-stat-info">
               <span className="dm-stat-label">Last Backup</span>
-              <span className="dm-stat-value">Today, 02:15 AM</span>
+              <span className="dm-stat-value">{lastBackupDate || 'None yet'}</span>
             </div>
           </div>
           <div className="dm-stat-card">
@@ -280,18 +323,23 @@ function DataManagement() {
               <div className="dm-backup-info">
                 <div className="dm-backup-info-item">
                   <h4>Last Backup</h4>
-                  <p>Today, 02:15 AM</p>
+                  <p>{lastBackupDate || 'Not recorded in this session'}</p>
                 </div>
                 <div className="dm-backup-info-item">
-                  <h4>Backup Size</h4>
-                  <p className="size">248 MB</p>
+                  <h4>Backup Status</h4>
+                  <p className="size" style={{ color: isBackingUp ? '#f97316' : '#22c55e' }}>
+                    {isBackingUp ? 'Processing...' : (lastBackupDate ? 'Ready' : 'Pending')}
+                  </p>
                 </div>
               </div>
 
               <div className="dm-backup-actions">
-                <Button type="primary" icon={<CloudDownloadOutlined />}>Create Backup</Button>
-                <Button icon={<CloudDownloadOutlined />}>Download</Button>
-                <Button icon={<ReloadOutlined />}>Restore</Button>
+                <Button type="primary" icon={<CloudDownloadOutlined />} onClick={handleCreateBackup} loading={isBackingUp}>
+                  Create Backup
+                </Button>
+                <Upload customRequest={handleRestoreBackup} showUploadList={false} accept=".json">
+                  <Button icon={<ReloadOutlined />} loading={isRestoring}>Restore</Button>
+                </Upload>
               </div>
             </div>
 
