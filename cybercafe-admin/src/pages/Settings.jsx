@@ -1168,6 +1168,17 @@ function Settings() {
                                                                 </Select>
                                                             </div>
                                                             
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Precise Picker:</span>
+                                                                <TimePicker
+                                                                    format="HH:mm"
+                                                                    placeholder="Custom..."
+                                                                    value={whatsappSettings.time ? dayjs(whatsappSettings.time, 'HH:mm') : null}
+                                                                    onChange={(time) => setWhatsappSettings(s => ({ ...s, time: time?.format('HH:mm') || '18:00' }))}
+                                                                    style={{ width: '120px' }}
+                                                                    disabled={!whatsappSettings.enabled}
+                                                                />
+                                                            </div>
 
                                                             <div style={{ marginLeft: 'auto' }}>
                                                                 <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>
