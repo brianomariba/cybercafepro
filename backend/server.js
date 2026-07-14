@@ -1457,13 +1457,58 @@ app.post('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
 });
 
 /**
+ * Helper to compute session statistics for a list of users
+ */
+const aggregateUserStats = async (users) => {
+    if (!users || users.length === 0) return [];
+
+    const usernames = users.map(u => u.username);
+    
+    try {
+        const stats = await Session.aggregate([
+            { $match: { user: { $in: usernames } } },
+            { $sort: { receivedAt: -1 } },
+            { $group: {
+                _id: '$user',
+                totalSessions: { $sum: 1 },
+                totalHours: { $sum: { $divide: [{ $ifNull: ['$durationMinutes', 0] }, 60] } },
+                lastLogin: { $first: '$receivedAt' }
+            }}
+        ]);
+
+        const statsMap = {};
+        stats.forEach(s => {
+            statsMap[s._id] = {
+                totalSessions: s.totalSessions,
+                totalHours: Math.round(s.totalHours),
+                lastLogin: s.lastLogin
+            };
+        });
+
+        return users.map(u => {
+            const obj = u.toObject ? u.toObject() : u;
+            return {
+                ...obj,
+                totalSessions: statsMap[u.username]?.totalSessions || 0,
+                totalHours: statsMap[u.username]?.totalHours || 0,
+                lastLogin: statsMap[u.username]?.lastLogin || obj.lastLogin
+            };
+        });
+    } catch (err) {
+        console.error('Error aggregating user stats:', err);
+        return users;
+    }
+};
+
+/**
  * GET /api/v1/auth/agent/users
  * List all agent users (admin only)
  */
 app.get('/api/v1/auth/agent/users', requireAdminAuth, async (req, res) => {
     try {
         const users = await User.find({ type: 'agent' }).select('-passwordHash').sort({ createdAt: -1 });
-        res.json(users);
+        const usersWithStats = await aggregateUserStats(users);
+        res.json(usersWithStats);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch users' });
     }
@@ -1550,7 +1595,8 @@ app.delete('/api/v1/auth/agent/users/:username', requireAdminAuth, async (req, r
 app.get('/api/v1/auth/admin/staff', requireSuperAdminAuth, async (req, res) => {
     try {
         const admins = await User.find({ type: 'admin' }).select('-passwordHash').sort({ createdAt: -1 });
-        res.json(admins);
+        const adminsWithStats = await aggregateUserStats(admins);
+        res.json(adminsWithStats);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch staff' });
     }
@@ -1661,7 +1707,8 @@ app.delete('/api/v1/auth/admin/staff/:username', requireSuperAdminAuth, async (r
 app.get('/api/v1/auth/portal/users', requireAdminAuth, async (req, res) => {
     try {
         const users = await User.find({ type: 'portal' }).select('-passwordHash').sort({ createdAt: -1 });
-        res.json(users);
+        const usersWithStats = await aggregateUserStats(users);
+        res.json(usersWithStats);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch portal users' });
     }

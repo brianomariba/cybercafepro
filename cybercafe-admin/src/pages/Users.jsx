@@ -271,26 +271,19 @@ function Users() {
         {
             title: 'Sessions',
             key: 'sessions',
-            render: (_, record) => {
-                const stats = getUserStats(record.username);
-                return <Text>{stats.totalSessions}</Text>;
-            },
-            sorter: (a, b) => getUserStats(a.username).totalSessions - getUserStats(b.username).totalSessions,
+            render: (_, record) => <Text>{record.totalSessions || 0}</Text>,
+            sorter: (a, b) => (a.totalSessions || 0) - (b.totalSessions || 0),
         },
         {
             title: 'Hours',
             key: 'hours',
-            render: (_, record) => {
-                const stats = getUserStats(record.username);
-                return <Text>{stats.totalHours}h</Text>;
-            },
+            render: (_, record) => <Text>{record.totalHours || 0}h</Text>,
         },
         {
-            title: 'Last Session',
+            title: 'Last Seen',
             key: 'lastSession',
             render: (_, record) => {
-                const stats = getUserStats(record.username);
-                return <Text type="secondary">{stats.lastSessionDate}</Text>;
+                return <Text type="secondary">{record.lastLogin ? dayjs(record.lastLogin).format('MMM DD, YYYY') : 'Never'}</Text>;
             },
         },
         {
