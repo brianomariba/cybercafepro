@@ -645,6 +645,16 @@ export const removeSinglePrinter = async (clientId, printerName) => (await api.d
 export const clearAllFinanceData = async () => (await api.delete('/admin/finance-data')).data;
 export const clearAllReportsData = async () => (await api.delete('/admin/reports-data')).data;
 
+// ==================== BACKUP & RESTORE ====================
+export const createBackup = async () => (await api.get('/admin/backup', { responseType: 'blob' })).data;
+export const restoreBackup = async (file) => {
+    const formData = new FormData();
+    formData.append('backup', file);
+    return (await api.post('/admin/restore', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    })).data;
+};
+
 // ==================== PAGE COUNTER READINGS (Photocopy Tracking) ====================
 export const createPageCounterReading = async (data) => (await api.post('/admin/page-counter-readings', data)).data;
 export const getPageCounterReadings = async (params = {}) => (await api.get('/admin/page-counter-readings', { params })).data;

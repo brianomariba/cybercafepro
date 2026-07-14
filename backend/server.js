@@ -2049,7 +2049,13 @@ app.post('/api/v1/admin/change-password', requireAdminAuth, async (req, res) => 
         // For super admin, check against env config
         if (username.toLowerCase() === ADMIN_CONFIG.username.toLowerCase()) {
             // Verify current password
-            if (!verifyPassword(currentPassword, ADMIN_CONFIG.passwordHash)) {
+            let currentHash = ADMIN_CONFIG.passwordHash;
+            const superAdminHashSettings = await Settings.findOne({ key: 'super_admin_password_hash' });
+            if (superAdminHashSettings && superAdminHashSettings.value) {
+                currentHash = superAdminHashSettings.value;
+            }
+
+            if (!verifyPassword(currentPassword, currentHash)) {
                 return res.status(401).json({ error: 'Current password is incorrect' });
             }
 

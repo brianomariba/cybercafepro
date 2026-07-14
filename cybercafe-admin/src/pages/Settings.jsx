@@ -40,7 +40,7 @@ import dayjs from 'dayjs';
 import TillsSettings from './TillsSettings';
 import PaymentSettings from './PaymentSettings';
 import DataManagement from './DataManagement';
-import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp, getRecoverySettings, saveRecoverySettings } from '../services/api';
+import { getServices, createService, updateService, deleteService as deleteServiceApi, getComputers, getSettings, saveSettings, changeAdminPassword, getServiceCategories, createServiceCategory, updateServiceCategory, deleteServiceCategory, getPortalAuthSettings, updatePortalAuthSettings, deleteAllPrinterData, deleteAllBrowserData, deleteAllLandingDocumentData, clearAllFinanceData, clearAllReportsData, getWhatsAppReportSettings, saveWhatsAppReportSettings, sendTestWhatsAppReport, getWhatsAppStatus, getWhatsAppQR, logoutWhatsApp, restartWhatsApp, getRecoverySettings, saveRecoverySettings, createBackup, restoreBackup } from '../services/api';
 
 const { Text, Title } = Typography;
 
@@ -73,6 +73,9 @@ function Settings() {
     const [savingSettings, setSavingSettings] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' });
     const [changingPassword, setChangingPassword] = useState(false);
+    const [isBackingUp, setIsBackingUp] = useState(false);
+    const [isRestoring, setIsRestoring] = useState(false);
+    const [lastBackupDate, setLastBackupDate] = useState(null);
     const [form] = Form.useForm();
 
     // Category management states
@@ -228,6 +231,41 @@ function Settings() {
             message.error(error.response?.data?.error || 'Failed to change password');
         } finally {
             setChangingPassword(false);
+        }
+    };
+
+    const handleCreateBackup = async () => {
+        setIsBackingUp(true);
+        try {
+            const data = await createBackup();
+            const url = window.URL.createObjectURL(new Blob([data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `hawknine-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setLastBackupDate(new Date().toLocaleString());
+            message.success('Backup created successfully');
+        } catch (error) {
+            message.error('Failed to create backup');
+        } finally {
+            setIsBackingUp(false);
+        }
+    };
+
+    const handleRestoreBackup = async (options) => {
+        const { file, onSuccess, onError } = options;
+        setIsRestoring(true);
+        try {
+            await restoreBackup(file);
+            message.success('Database restored successfully');
+            onSuccess('ok');
+        } catch (error) {
+            message.error(error.response?.data?.error || 'Failed to restore backup');
+            onError(error);
+        } finally {
+            setIsRestoring(false);
         }
     };
 
@@ -1407,19 +1445,19 @@ function Settings() {
                                 <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
                                     Export all data including users, transactions, and settings
                                 </Text>
-                                <Button type="primary" icon={<DatabaseOutlined />}>
+                                <Button type="primary" icon={<DatabaseOutlined />} onClick={handleCreateBackup} loading={isBackingUp}>
                                     Create Backup Now
                                 </Button>
                                 <div style={{ marginTop: 16 }}>
-                                    <Text type="secondary" style={{ fontSize: 12 }}>Last backup: December 12, 2024 at 11:30 PM</Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>Last backup: {lastBackupDate || 'None recorded in this session'}</Text>
                                 </div>
                             </div>
                         </Col>
                         <Col xs={24} md={12}>
                             <div style={{ padding: 24, background: 'rgba(123, 44, 191, 0.1)', borderRadius: 16, textAlign: 'center' }}>
-                                <Upload.Dragger style={{ background: 'transparent', border: 'none' }}>
-                                    <DatabaseOutlined style={{ fontSize: 48, color: '#7b2cbf', marginBottom: 16 }} />
-                                    <Title level={4}>Restore Backup</Title>
+                                <Upload.Dragger customRequest={handleRestoreBackup} showUploadList={false} accept=".json" style={{ background: 'transparent', border: 'none' }}>
+                                    <DatabaseOutlined style={isRestoring ? { fontSize: 48, color: '#7b2cbf', marginBottom: 16, animation: 'spin 1s linear infinite' } : { fontSize: 48, color: '#7b2cbf', marginBottom: 16 }} />
+                                    <Title level={4}>{isRestoring ? 'Restoring...' : 'Restore Backup'}</Title>
                                     <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
                                         Click or drag backup file here to restore
                                     </Text>
