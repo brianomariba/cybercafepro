@@ -1113,11 +1113,11 @@ function ConsumablePrintReports({ printers, refreshTrigger }) {
 
             // Process Print Jobs (Printer Prints, Paper Types)
             allPrintJobs.forEach(job => {
-                const pName = job.printerName || 'Unknown';
+                const pName = job.printerName || job.printer || 'Unknown';
                 if (!pMap[pName]) pMap[pName] = { printedBW: 0, printedColor: 0, photocopiedBW: 0, photocopiedColor: 0, cancelled: 0 };
                 
                 const isColor = job.printType === 'color' || job.color === true;
-                const pages = job.pages || 0;
+                const pages = job.totalSheets || ((job.totalPages || job.pages || 1) * (job.copies || 1));
                 
                 if (job.status === 'Cancelled' || job.status === 'Error') {
                     pMap[pName].cancelled += pages;
