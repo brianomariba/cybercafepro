@@ -203,7 +203,51 @@ function Reports() {
       render: (status, record) => {
         const isSubmitted = status === 'Submitted';
         const isPending = status === 'Pending';
-        return (
+        const handleExportAll = () => {
+    let csv = 'Employee,Revenue (KSH),Cash (KSH),M-Pesa (KSH),Products (KSH),Services (KSH),Transactions\n';
+    employeesData.forEach(e => {
+        csv += `"${e.name}",${e.revenueKsh},${e.cashKsh},${e.mpesaKsh},${e.productsKsh},${e.servicesKsh},${e.txnCount}\n`;
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('hidden', '');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `All_Employees_Report_${selectedDate.format('YYYY-MM-DD')}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleDownloadReport = () => {
+    if (!selectedEmployee) return;
+    
+    let csv = `Employee,${selectedEmployee.name}\n`;
+    csv += `Date,${selectedDate.format('YYYY-MM-DD')}\n`;
+    csv += `Shift,${selectedEmployee.shiftTime}\n`;
+    csv += `Status,${selectedEmployee.status}\n\n`;
+    
+    csv += `Summary\n`;
+    csv += `Revenue,${selectedEmployee.revenueKsh}\n`;
+    csv += `Cash Collected,${selectedEmployee.cashKsh}\n`;
+    csv += `Mpesa Collected,${selectedEmployee.mpesaKsh}\n`;
+    csv += `Products Sold,${selectedEmployee.productsKsh}\n`;
+    csv += `Services Revenue,${selectedEmployee.servicesKsh}\n`;
+    csv += `Transactions,${selectedEmployee.txnCount}\n`;
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('hidden', '');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `${selectedEmployee.name}_Report_${selectedDate.format('YYYY-MM-DD')}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  return (
           <div>
             <span className={`status-tag ${isSubmitted ? 'submitted' : (isPending ? 'pending' : '')}`}>{status}</span>
             <div className={`status-time ${isPending ? 'pending-time' : ''}`}>{record.statusTime}</div>
@@ -305,7 +349,7 @@ function Reports() {
                 <Select.Option key={e.id} value={e.id}>{e.name}</Select.Option>
             ))}
           </Select>
-          <Button type="primary" icon={<DownloadOutlined />} className="btn-export" onClick={fetchData}>
+          <Button type="primary" icon={<DownloadOutlined />} className="btn-export" onClick={handleExportAll}>
             Refresh
           </Button>
         </div>
@@ -362,7 +406,7 @@ function Reports() {
                 Shift: {selectedEmployee.shiftTime} • Status Time: {selectedEmployee.statusTime}
               </div>
             </div>
-            <Button icon={<DownloadOutlined />} className="btn-download">
+            <Button icon={<DownloadOutlined />} className="btn-download" onClick={handleDownloadReport}>
               Download Report
             </Button>
           </div>
