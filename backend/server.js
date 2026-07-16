@@ -8814,7 +8814,7 @@ const runPaymentRetentionJob = async () => {
             
             // Delete from Transaction where paymentMethod = 'mpesa'
             const txnResult = await Transaction.deleteMany({
-                paymentMethod: 'mpesa',
+                type: 'mpesa',
                 createdAt: { $lt: cutoffDate }
             });
             
