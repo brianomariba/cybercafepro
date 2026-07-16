@@ -8698,18 +8698,46 @@ async function generateWhatsAppReportMessage(settings) {
     }
 
     if (settings.includeInventoryData !== false) {
-        reportMessage += `📦 *Inventory Status:*\n`;
-        if (inventoryItems && inventoryItems.length > 0) {
-            const lowStock = inventoryItems.filter(i => i.stock <= (i.lowStockThreshold || 5));
-            if (lowStock.length > 0) {
-                reportMessage += `⚠️ Low Stock Alerts:\n`;
-                lowStock.slice(0, 10).forEach(i => {
-                    reportMessage += `• ${i.name}: ${i.stock} left\n`;
-                });
-                if (lowStock.length > 10) reportMessage += `• ...and ${lowStock.length - 10} more\n`;
-            } else {
-                reportMessage += `• All stock levels are healthy.\n`;
+        const inventorySales = transactions.filter(t => t.itemId != null);
+        let totalItemsSold = 0;
+        let totalInventoryRevenue = 0;
+        const itemsSoldPerAgent = {};
+
+        inventorySales.forEach(t => {
+            const qty = t.quantity || 1;
+            totalItemsSold += qty;
+            totalInventoryRevenue += t.amount;
+            
+            const agent = t.seller || 'Unknown';
+            if (!itemsSoldPerAgent[agent]) {
+                itemsSoldPerAgent[agent] = { qty: 0, rev: 0 };
             }
+            itemsSoldPerAgent[agent].qty += qty;
+            itemsSoldPerAgent[agent].rev += t.amount;
+        });
+
+        reportMessage += `📦 *Inventory Status & Sales:*\n`;
+        
+        if (totalItemsSold > 0) {
+            reportMessage += `*Today's Inventory Sales:*\n`;
+            reportMessage += `• Total Items Sold: ${totalItemsSold}\n`;
+            reportMessage += `• Inventory Revenue: KSH ${totalInventoryRevenue}\n\n`;
+            
+            reportMessage += `*Sold by Agent:*\n`;
+            for (const [agent, data] of Object.entries(itemsSoldPerAgent)) {
+                reportMessage += `• ${agent}: ${data.qty} items (KSH ${data.rev})\n`;
+            }
+            reportMessage += `\n`;
+        } else {
+            reportMessage += `• No inventory sales today.\n\n`;
+        }
+
+        if (inventoryItems && inventoryItems.length > 0) {
+            reportMessage += `*Current Stock Levels:*\n`;
+            inventoryItems.forEach(i => {
+                const isLow = i.stock <= (i.lowStockThreshold || 5);
+                reportMessage += `• ${i.name}: ${i.stock} left ${isLow ? '⚠️(LOW)' : ''}\n`;
+            });
         } else {
             reportMessage += `• No active inventory items.\n`;
         }
