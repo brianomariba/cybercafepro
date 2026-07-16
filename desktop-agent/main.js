@@ -2786,6 +2786,13 @@ function setupSocket() {
         }
     });
 
+    socket.on('mpesa-retention-cleanup', (data) => {
+        console.log('[Socket] M-Pesa retention cleanup event received');
+        if (portalWindow && !portalWindow.isDestroyed()) {
+            portalWindow.webContents.send('mpesa-retention-cleanup', data);
+        }
+    });
+
     // Listen for user status changes (admin disable/enable)
     socket.on('user-status-changed', async (data) => {
         if (data.userType === 'agent' && !data.active) {
