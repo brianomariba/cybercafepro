@@ -209,20 +209,23 @@ function Reports() {
         csv += `"${e.name}",${e.revenueKsh},${e.cashKsh},${e.mpesaKsh},${e.productsKsh},${e.servicesKsh},${e.txnCount}\n`;
     });
     
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
+    const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
     const a = document.createElement('a');
-    a.setAttribute('hidden', '');
-    a.setAttribute('href', url);
-    a.setAttribute('download', `All_Employees_Report_${selectedDate.format('YYYY-MM-DD')}.csv`);
+    a.href = csvData;
+    a.download = `All_Employees_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    } catch(err) {
+        alert('Download Error: ' + err.message);
+        console.error(err);
+    }
   };
 
   const handleDownloadReport = () => {
     if (!selectedEmployee) return;
-    
+    try {
+
     let csv = `Employee,${selectedEmployee.name}\n`;
     csv += `Date,${selectedDate.format('YYYY-MM-DD')}\n`;
     csv += `Shift,${selectedEmployee.shiftTime}\n`;
@@ -236,12 +239,10 @@ function Reports() {
     csv += `Services Revenue,${selectedEmployee.servicesKsh}\n`;
     csv += `Transactions,${selectedEmployee.txnCount}\n`;
     
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
+    const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
     const a = document.createElement('a');
-    a.setAttribute('hidden', '');
-    a.setAttribute('href', url);
-    a.setAttribute('download', `${selectedEmployee.name}_Report_${selectedDate.format('YYYY-MM-DD')}.csv`);
+    a.href = csvData;
+    a.download = `${selectedEmployee.name}_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
