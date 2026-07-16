@@ -168,6 +168,55 @@ function Reports() {
     { title: 'Employees Worked', value: employeesWorked.toString(), subtext: 'Today', subtextClass: 'neutral', icon: <TeamOutlined />, iconClass: 'icon-blue' },
   ];
 
+  const handleExportAll = () => {
+    try {
+        let csv = 'Employee,Revenue (KSH),Cash (KSH),M-Pesa (KSH),Products (KSH),Services (KSH),Transactions\n';
+        employeesData.forEach(e => {
+            csv += `"${e.name}",${e.revenueKsh},${e.cashKsh},${e.mpesaKsh},${e.productsKsh},${e.servicesKsh},${e.txnCount}\n`;
+        });
+        
+        const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        const a = document.createElement('a');
+        a.href = csvData;
+        a.download = `All_Employees_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    } catch(err) {
+        alert('Download Error: ' + err.message);
+        console.error(err);
+    }
+  };
+
+  const handleDownloadReport = () => {
+    if (!selectedEmployee) return;
+    try {
+        let csv = `Employee,${selectedEmployee.name}\n`;
+        csv += `Date,${selectedDate.format('YYYY-MM-DD')}\n`;
+        csv += `Shift,${selectedEmployee.shiftTime}\n`;
+        csv += `Status,${selectedEmployee.status}\n\n`;
+        
+        csv += `Summary\n`;
+        csv += `Revenue,${selectedEmployee.revenueKsh}\n`;
+        csv += `Cash Collected,${selectedEmployee.cashKsh}\n`;
+        csv += `Mpesa Collected,${selectedEmployee.mpesaKsh}\n`;
+        csv += `Products Sold,${selectedEmployee.productsKsh}\n`;
+        csv += `Services Revenue,${selectedEmployee.servicesKsh}\n`;
+        csv += `Transactions,${selectedEmployee.txnCount}\n`;
+        
+        const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        const a = document.createElement('a');
+        a.href = csvData;
+        a.download = `${selectedEmployee.name}_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    } catch (err) {
+        alert('Download Error: ' + err.message);
+        console.error(err);
+    }
+  };
+
   const columns = [
     {
       title: 'EMPLOYEE',
@@ -203,52 +252,7 @@ function Reports() {
       render: (status, record) => {
         const isSubmitted = status === 'Submitted';
         const isPending = status === 'Pending';
-        const handleExportAll = () => {
-    let csv = 'Employee,Revenue (KSH),Cash (KSH),M-Pesa (KSH),Products (KSH),Services (KSH),Transactions\n';
-    employeesData.forEach(e => {
-        csv += `"${e.name}",${e.revenueKsh},${e.cashKsh},${e.mpesaKsh},${e.productsKsh},${e.servicesKsh},${e.txnCount}\n`;
-    });
-    
-    const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
-    const a = document.createElement('a');
-    a.href = csvData;
-    a.download = `All_Employees_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    } catch(err) {
-        alert('Download Error: ' + err.message);
-        console.error(err);
-    }
-  };
-
-  const handleDownloadReport = () => {
-    if (!selectedEmployee) return;
-    try {
-
-    let csv = `Employee,${selectedEmployee.name}\n`;
-    csv += `Date,${selectedDate.format('YYYY-MM-DD')}\n`;
-    csv += `Shift,${selectedEmployee.shiftTime}\n`;
-    csv += `Status,${selectedEmployee.status}\n\n`;
-    
-    csv += `Summary\n`;
-    csv += `Revenue,${selectedEmployee.revenueKsh}\n`;
-    csv += `Cash Collected,${selectedEmployee.cashKsh}\n`;
-    csv += `Mpesa Collected,${selectedEmployee.mpesaKsh}\n`;
-    csv += `Products Sold,${selectedEmployee.productsKsh}\n`;
-    csv += `Services Revenue,${selectedEmployee.servicesKsh}\n`;
-    csv += `Transactions,${selectedEmployee.txnCount}\n`;
-    
-    const csvData = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
-    const a = document.createElement('a');
-    a.href = csvData;
-    a.download = `${selectedEmployee.name}_Report_${selectedDate.format('YYYY-MM-DD')}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  };
-
-  return (
+        return (
           <div>
             <span className={`status-tag ${isSubmitted ? 'submitted' : (isPending ? 'pending' : '')}`}>{status}</span>
             <div className={`status-time ${isPending ? 'pending-time' : ''}`}>{record.statusTime}</div>
