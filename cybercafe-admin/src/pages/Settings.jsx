@@ -153,7 +153,7 @@ function Settings() {
                 getSettings().catch(() => ({})),
                 getServiceCategories().catch(() => []),
                 getPortalAuthSettings().catch(() => ({ otpEnabled: true, sessionDurationHours: 24 })),
-                getWhatsAppReportSettings().catch(() => ({ enabled: false, phone: '', time: '18:00', includeShopName: true, includeTotalRevenue: true, includeAgentSubmissions: true, includeRevenueBreakdown: true, includeMachineRevenue: true, includeStatusDiscrepancy: true })),
+                getWhatsAppReportSettings().catch(() => ({ enabled: false, phone: '', time: '18:00', includeShopName: true, includeTotalRevenue: true, includeAgentSubmissions: true, includeRevenueBreakdown: true, includeMachineRevenue: true, includeStatusDiscrepancy: true, includeInventoryData: true })),
                 getRecoverySettings().catch(() => ({ email: '' }))
             ]);
             setServices(servicesData || []);
@@ -1245,6 +1245,14 @@ function Settings() {
                                                         <strong>Discrepancy Status</strong>
                                                     </div>
                                                     <Switch checked={whatsappSettings.includeStatusDiscrepancy !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeStatusDiscrepancy: val }))} disabled={!whatsappSettings.enabled} />
+                                                </div>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <div className="settings-item" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                                    <div className="settings-label">
+                                                        <strong>Inventory Data</strong>
+                                                    </div>
+                                                    <Switch checked={whatsappSettings.includeInventoryData !== false} onChange={(val) => setWhatsappSettings(s => ({ ...s, includeInventoryData: val }))} disabled={!whatsappSettings.enabled} />
                                                 </div>
                                             </Col>
                                         </Row>
