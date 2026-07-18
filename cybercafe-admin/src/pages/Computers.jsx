@@ -581,39 +581,17 @@ function Computers() {
                                 Screenshot
                             </Button>
                             <Popconfirm
-                                title="Disconnect Computer?"
-                                description="This will disconnect the computer from the server. The agent will stop sending data until restarted."
+                                title="Disconnect & Remove Computer?"
+                                description="This will disconnect the computer immediately and permanently block it from reconnecting."
                                 onConfirm={async () => {
                                     try {
-                                        // Send quit=true to ensure agent terminates and doesn't auto-reconnect
-                                        await disconnectComputer(selectedComputer.clientId, true);
-                                        message.success(`Disconnect command sent to ${selectedComputer.hostname}`);
-                                        setActivityDrawerOpen(false);
-
-                                        // Persistently remove from list for this session
-                                        setHiddenComputers(prev => new Set(prev).add(selectedComputer.clientId));
-
-                                        // Optimistically update current list as well
-                                        setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
-                                    } catch (error) {
-                                        message.error('Failed to disconnect computer');
-                                    }
-                                }}
-                                okText="Disconnect"
-                                cancelText="Cancel"
-                                okButtonProps={{ danger: true }}
-                            >
-                                <Button danger icon={<DisconnectOutlined />}>
-                                    Disconnect
-                                </Button>
-                            </Popconfirm>
-                            <Popconfirm
-                                title="Delete Computer Permanently?"
-                                description="This will completely remove the computer from the database and block future connections."
-                                onConfirm={async () => {
-                                    try {
+                                        // 1. Send quit=true to terminate the agent immediately
+                                        await disconnectComputer(selectedComputer.clientId, true).catch(() => {});
+                                        
+                                        // 2. Permanently delete from database to prevent future connections
                                         await deleteComputer(selectedComputer.clientId);
-                                        message.success(`Computer ${selectedComputer.hostname} permanently removed`);
+                                        
+                                        message.success(`Computer ${selectedComputer.hostname} disconnected and permanently removed`);
                                         setActivityDrawerOpen(false);
 
                                         // Persistently remove from list for this session
@@ -622,15 +600,15 @@ function Computers() {
                                         // Optimistically update current list as well
                                         setComputers(prev => prev.filter(c => c.clientId !== selectedComputer.clientId));
                                     } catch (error) {
-                                        message.error('Failed to delete computer');
+                                        message.error('Failed to remove computer');
                                     }
                                 }}
-                                okText="Delete"
+                                okText="Remove"
                                 cancelText="Cancel"
                                 okButtonProps={{ danger: true }}
                             >
-                                <Button danger type="primary">
-                                    Delete
+                                <Button danger type="primary" icon={<DisconnectOutlined />}>
+                                    Disconnect & Remove
                                 </Button>
                             </Popconfirm>
                         </Space>
